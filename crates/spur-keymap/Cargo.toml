@@ -1,0 +1,15 @@
+[package]
+name = "spur-keymap"
+description = "Keymap and mode engine. Presets ship as extensions."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+spur-core.workspace = true
