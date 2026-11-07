@@ -1,0 +1,41 @@
+# Reusable: lint + test on one OS. Used by ci.yml (Linux on PRs; macOS + Windows on main or after approval).
+# One dev profile (no debuginfo) for clippy, unit tests and doctests: one target dir, one cache.
+name: test-os
+
+on:
+  workflow_call:
+    inputs:
+      os:
+        required: true
+        type: string
+      fmt:
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: lint + test (${{ inputs.os }})
+    runs-on: ${{ inputs.os }}
+    timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      CARGO_PROFILE_DEV_DEBUG: 0
+      RUSTFLAGS: -D warnings
+      RUST_BACKTRACE: short
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - if: inputs.fmt
+        run: cargo fmt --all --check
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo clippy --workspace --all-targets --locked
+      - run: cargo test --workspace --locked

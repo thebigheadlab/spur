@@ -1,0 +1,58 @@
+# Lean CI. Rust builds are expensive, so:
+# - PRs run one Linux job (fmt -> clippy -> test).
+# - macOS + Windows run on main. On a PR they wait for a maintainer to approve the
+#   `ci-full` environment (Actions > Review deployments). Approval is per run, so
+#   it is bound to the exact commit; non-maintainers cannot approve.
+# - Docs-only changes skip CI; superseded PR runs are cancelled.
+# - Cache is written only from main, so PRs never thrash it.
+# - No secrets are used; fork PRs get a read-only token.
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["**.md", "docs/**", "LICENSE-*", ".github/dependabot.yml"]
+  pull_request:
+    paths-ignore: ["**.md", "docs/**", "LICENSE-*", ".github/dependabot.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  linux:
+    name: lint + test (linux)
+    uses: ./.github/workflows/test-os.yml
+    with:
+      os: ubuntu-latest
+      fmt: true
+
+  # PR only: waits for a required reviewer on the `ci-full` environment.
+  # Disabled until the repo variable CI_FULL_ENABLED is "true" (set it after the
+  # environment has required reviewers, or it would run unapproved).
+  approve-full:
+    name: approve full OS matrix
+    if: github.event_name == 'pull_request' && vars.CI_FULL_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: ci-full
+    steps:
+      - run: echo "Full OS matrix approved for ${{ github.event.pull_request.head.sha }}"
+
+  cross-os:
+    name: test (${{ matrix.os }})
+    needs: approve-full
+    if: >-
+      always() &&
+      (github.event_name != 'pull_request' || needs.approve-full.result == 'success')
+    uses: ./.github/workflows/test-os.yml
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    with:
+      os: ${{ matrix.os }}
