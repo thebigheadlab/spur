@@ -30,6 +30,7 @@ enum Phase {
     Scroll,
     Jump,
     Typing,
+    Nav,
     Structural,
     Popup,
 }
@@ -130,7 +131,7 @@ impl App {
         s.push((Phase::Jump, Action::DocEnd));
         s.push((Phase::Jump, Action::DocStart));
         s.push((Phase::Jump, Action::GotoLine(self.editor.lines.len() / 2)));
-        s.push((Phase::Typing, Action::Move(Dir::End, false)));
+        s.push((Phase::Nav, Action::Move(Dir::Home, false)));
         for (i, ch) in "    let typed_value = compute(alpha, beta) + 42; // spike "
             .chars()
             .cycle()
@@ -138,6 +139,12 @@ impl App {
             .enumerate()
         {
             s.push((Phase::Typing, Action::Insert(ch.to_string())));
+            // No wrap or horizontal scroll in the spike: move to the next line
+            // every 40 chars so typed text stays inside the viewport.
+            if i % 40 == 39 {
+                s.push((Phase::Nav, Action::Move(Dir::Down, false)));
+                s.push((Phase::Nav, Action::Move(Dir::Home, false)));
+            }
             if i % 37 == 36 {
                 for _ in 0..3 {
                     s.push((Phase::Typing, Action::Backspace));
@@ -189,6 +196,7 @@ impl App {
             Phase::Scroll,
             Phase::Jump,
             Phase::Typing,
+            Phase::Nav,
             Phase::Structural,
             Phase::Popup,
         ] {

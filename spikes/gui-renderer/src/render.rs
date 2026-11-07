@@ -333,8 +333,24 @@ impl Renderer {
             .lines
             .get(&line)
             .and_then(|c| c.buf.hit(xr, self.line_h() * 0.5))
-            .map_or(0, |c| c.index)
-            .min(ed.lines[line].len());
+            .map_or(0, |c| c.index);
+        // The cached buffer shows the IME preedit spliced in at the cursor; map
+        // display offsets back to document offsets.
+        let col = match &ed.preedit {
+            Some((p, _)) if line == ed.cur.line && col > ed.cur.col => {
+                if col < ed.cur.col + p.len() {
+                    ed.cur.col
+                } else {
+                    col - p.len()
+                }
+            }
+            _ => col,
+        };
+        let text = &ed.lines[line];
+        let mut col = col.min(text.len());
+        while !text.is_char_boundary(col) {
+            col -= 1;
+        }
         Pos { line, col }
     }
 

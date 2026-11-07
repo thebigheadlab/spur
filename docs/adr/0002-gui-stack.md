@@ -51,7 +51,7 @@ from applying an input to the frame being presented and the GPU idle. Median of 
 | Metric | Result | #12 budget |
 |---|---|---|
 | Spawn to first frame | 116 ms (gpu init 67, first frame 26) | < 150 ms |
-| Keystroke to render, p50 / p99 | 3.9 / 5.7 ms | < 8 ms p99 |
+| Keystroke to render, p50 / p99 | 3.8 / 5.9 ms | < 8 ms p99 |
 | Smooth scroll frame, p50 / p99 | 3.9 / 5.8 ms | (16 ms at 60 Hz) |
 | Page jump (full viewport reshape), p99 | 7.6 ms | |
 | Idle memory | 135 MB (9.6 MB before GPU init) | < 80 MB |
