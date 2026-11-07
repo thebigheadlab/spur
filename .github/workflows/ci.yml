@@ -1,8 +1,10 @@
 # Lean CI. Rust builds are expensive, so:
-# - PRs run one Linux job (fmt -> clippy -> nextest) sharing one cache.
-# - macOS + Windows run on main, nightly, or a PR labelled `ci:full`.
+# - PRs run one Linux job (fmt -> clippy -> nextest).
+# - macOS + Windows run on main, or on a PR when a maintainer comments
+#   `/ci full` (see ci-full.yml).
 # - Docs-only changes skip CI; superseded runs are cancelled.
 # - Cache is written only from main, so PRs never thrash it.
+# - No secrets are used; fork PRs get a read-only token.
 name: CI
 
 on:
@@ -10,10 +12,7 @@ on:
     branches: [main]
     paths-ignore: ["**.md", "docs/**", "LICENSE-*", ".github/dependabot.yml"]
   pull_request:
-    types: [opened, synchronize, reopened, labeled]
     paths-ignore: ["**.md", "docs/**", "LICENSE-*", ".github/dependabot.yml"]
-  schedule:
-    - cron: "0 3 * * *"
   workflow_dispatch:
 
 permissions:
@@ -33,12 +32,12 @@ env:
 jobs:
   linux:
     name: lint + test (linux)
-    # Ignore label events other than ci:full so labelling doesn't rerun CI.
-    if: github.event.action != 'labeled' || github.event.label.name == 'ci:full'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - run: cargo fmt --all --check
       - uses: Swatinem/rust-cache@v2
         with:
@@ -52,21 +51,11 @@ jobs:
 
   cross-os:
     name: test (${{ matrix.os }})
-    if: >-
-      github.event_name != 'pull_request' ||
-      contains(github.event.pull_request.labels.*.name, 'ci:full')
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/test-os.yml
     strategy:
       fail-fast: false
       matrix:
         os: [macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest
-      - run: cargo nextest run --workspace --cargo-profile ci --locked --no-tests=warn
+    with:
+      os: ${{ matrix.os }}

@@ -14,4 +14,4 @@ Use placeholders like `<TOKEN>` or `user@example.com` in examples. CI (`hygiene`
 
 - Specs and tasks are GitHub issues; the epic is #1.
 - Before pushing: `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`.
-- Keep CI lean (Linux on PRs; full OS matrix on `main`/nightly/`ci:full`). See CONTRIBUTING.md.
+- Keep CI lean (Linux on PRs; full OS matrix on `main` or a maintainer's `/ci full` PR comment). See CONTRIBUTING.md.
