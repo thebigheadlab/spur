@@ -12,7 +12,7 @@ Only visible lines are shaped; shaped lines are cached per line and checked agai
 ```sh
 cargo run --release                   # interactive
 cargo run --release -- --bench        # scripted scroll/typing/popup run, prints JSON
-xvfb-run -a ./bench.sh 5              # 5 bench runs + spawn-to-first-frame + idle CPU (Linux)
+xvfb-run -a ./bench.sh 5              # 5 runs, medians in results/summary.txt, idle CPU (Linux)
 ```
 
 Flags: `--bench`, `--vsync`, `--system-fonts` (scan system fonts at startup), `--lines N`, `--idle-secs N`.

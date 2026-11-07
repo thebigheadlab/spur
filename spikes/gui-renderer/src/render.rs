@@ -63,6 +63,8 @@ pub struct FrameTiming {
     pub submit_ms: f64,
     pub gpu_wait_ms: f64,
     pub shaped_lines: usize,
+    /// False when no frame was presented (occluded, timeout, surface reconfigured).
+    pub presented: bool,
 }
 
 pub struct Renderer {
@@ -115,7 +117,8 @@ impl Renderer {
         }))
         .expect("adapter");
         let info = adapter.get_info();
-        let adapter_info = format!("{} ({:?}, {:?})", info.name, info.backend, info.device_type);
+        let mut adapter_info =
+            format!("{} ({:?}, {:?})", info.name, info.backend, info.device_type);
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             required_limits:
                 wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits()),
@@ -146,6 +149,11 @@ impl Renderer {
             color_space: wgpu::SurfaceColorSpace::Auto,
         };
         surface.configure(&device, &config);
+        // Record what the Auto* mode could resolve to on this surface.
+        adapter_info.push_str(&format!(
+            ", present {present_mode:?} of {:?}",
+            caps.present_modes
+        ));
 
         // Rect pipeline.
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -605,6 +613,11 @@ impl Renderer {
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f)
             | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+            // Occluded/minimised or timed out: skip, and wait for the next real event
+            // instead of spinning on redraws.
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                return ft;
+            }
             _ => {
                 self.surface.configure(&self.device, &self.config);
                 self.window.request_redraw();
@@ -656,6 +669,7 @@ impl Renderer {
         self.queue.submit(Some(enc.finish()));
         self.window.pre_present_notify();
         self.queue.present(frame);
+        ft.presented = true;
         ft.submit_ms = t2.elapsed().as_secs_f64() * 1e3;
         if self.wait_gpu {
             let t3 = Instant::now();
