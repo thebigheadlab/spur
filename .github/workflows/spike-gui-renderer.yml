@@ -46,6 +46,7 @@ jobs:
           else
             ./bench.sh 5 | tee bench.txt
           fi
+          for f in results/run*.json; do cat "$f"; done
           {
             echo "### $RUNNER_OS"; echo '```'; cat bench.txt; cat results/run5.json; echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
