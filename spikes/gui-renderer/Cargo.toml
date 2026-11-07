@@ -1,0 +1,23 @@
+[package]
+name = "spur-gui-spike"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Throwaway spike for #28: winit + wgpu + cosmic-text (via glyphon) editor renderer"
+
+# Standalone: not part of the main workspace.
+[workspace]
+
+[dependencies]
+winit = "0.30"
+wgpu = "30"
+glyphon = "0.12"
+pollster = "0.4"
+bytemuck = { version = "1", features = ["derive"] }
+memory-stats = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
