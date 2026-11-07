@@ -1,0 +1,51 @@
+# Public-repo hygiene: no secrets, credentials or personal emails.
+# Cheap (single Linux job, no Rust build), so it runs on every PR.
+name: hygiene
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  secrets:
+    name: secret + email scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GITLEAKS_VERSION: 8.18.4
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install gitleaks
+        run: |
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C /usr/local/bin gitleaks
+      - name: Scan full history for secrets
+        run: gitleaks detect --source . --redact --verbose --exit-code 1
+      - name: Check commit author emails
+        run: |
+          bad=$(git log --format='%ae%n%ce' | sort -u | grep -vE '(noreply\.github\.com|^noreply@anthropic\.com|^noreply@github\.com)$' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::Commits must use a noreply email (e.g. ID+login@users.noreply.github.com). Found:"
+            echo "$bad" | sed 's/\(.\).*@/\1***@/'
+            exit 1
+          fi
+      - name: Check tracked files for personal emails
+        run: |
+          hits=$(git grep -nIE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' -- . ':!LICENSE-*' ':!Cargo.lock' \
+            | grep -vE 'noreply|@users\.noreply\.github\.com|example\.(com|org)' || true)
+          if [ -n "$hits" ]; then
+            echo "::error::Email addresses found in tracked files:"
+            echo "$hits"
+            exit 1
+          fi

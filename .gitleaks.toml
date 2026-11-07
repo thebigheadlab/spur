@@ -1,0 +1,3 @@
+# Extends gitleaks' default rules. Add narrowly-scoped allowlists here only for proven false positives.
+[extend]
+useDefault = true
