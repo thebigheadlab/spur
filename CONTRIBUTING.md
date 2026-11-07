@@ -11,7 +11,7 @@ cargo test --workspace
 cargo deny check   # optional locally: cargo install cargo-deny
 ```
 
-CI runs the same checks on Linux, macOS and Windows.
+CI is kept lean: PRs run fmt, clippy and tests on Linux only. macOS and Windows run on `main`, nightly, or when a PR has the `ci:full` label (add it for platform-sensitive changes). `cargo-deny` runs only when dependencies change. Docs-only PRs skip CI.
 
 ## Ground rules
 

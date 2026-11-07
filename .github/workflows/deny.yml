@@ -1,0 +1,24 @@
+# Dependency audit: licenses, advisories, bans, sources.
+# Only runs when dependencies change, plus daily for new advisories.
+name: cargo-deny
+
+on:
+  push:
+    branches: [main]
+    paths: ["**/Cargo.toml", "Cargo.lock", "deny.toml"]
+  pull_request:
+    paths: ["**/Cargo.toml", "Cargo.lock", "deny.toml"]
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deny:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
