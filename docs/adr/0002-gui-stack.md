@@ -43,28 +43,35 @@ Rules that come with it:
 
 ## Prototype results
 
-10k-line file, 1280x800 window, toy syntax highlighting on, release build, vsync off. Times are
-from applying an input to the frame being presented and the GPU idle. Median of 5 runs.
+10k-line file, toy syntax highlighting on, release build, vsync off. Times are from applying an
+input to the frame being presented and the GPU idle. Medians of 5 runs, warm (first run after
+boot excluded). None of these machines has a real GPU; all ran on CI-class VMs or containers.
 
-**Linux, Mesa llvmpipe (software Vulkan, no GPU) under Xvfb:**
+| Metric | Linux (llvmpipe, Vulkan) | macOS (paravirtual Metal) | Windows (WARP, DX12) | #12 budget |
+|---|---|---|---|---|
+| Spawn to first frame | 116 ms | 210 ms | 237 ms | < 150 ms |
+| Keystroke to render p99 | 5.9 ms | 4.0 ms | 50 ms | < 8 ms |
+| Scroll frame p99 | 5.8 ms | 5.4 ms | 46 ms | |
+| Idle memory | 135 MB | 82 MB | 50 MB | < 80 MB |
+| Memory before GPU init | 9.6 MB | 71 MB | 21 MB | |
+| Idle CPU | 0 | (not measured) | (not measured) | ~0% |
+| Binary (stripped) | 11 MB | 6.8 MB | | < 50 MB |
 
-| Metric | Result | #12 budget |
-|---|---|---|
-| Spawn to first frame | 116 ms (gpu init 67, first frame 26) | < 150 ms |
-| Keystroke to render, p50 / p99 | 3.8 / 5.9 ms | < 8 ms p99 |
-| Smooth scroll frame, p50 / p99 | 3.9 / 5.8 ms | (16 ms at 60 Hz) |
-| Page jump (full viewport reshape), p99 | 7.6 ms | |
-| Idle memory | 135 MB (9.6 MB before GPU init) | < 80 MB |
-| Idle CPU | 0 ms over 8 s | ~0% |
-| Binary size (stripped, thin LTO) | 11 MB | < 50 MB |
+What the numbers say:
 
-Our CPU work per frame is small: layout and shaping 0.2 ms, glyph/rect upload 0.3 ms. A full
-viewport reshape (about 40 lines, advanced shaping) is about 1.9 ms. Most of each frame is the
-software rasterizer and present copy, which a real GPU removes.
+- **Our own work is small everywhere.** Layout and shaping take 0.1-0.3 ms per frame, glyph
+  and rect upload 0.2-0.4 ms, and a full viewport reshape 1-3 ms. The rest is the GPU (or the
+  software stand-in for one).
+- **Windows WARP is a CPU rasterizer**: 40 ms of each frame is waiting for it. That says nothing
+  about real hardware, but it is a useful worst case for machines without a usable GPU.
+- **Startup is OS and driver setup**, not our code: on macOS, event loop + window creation is
+  ~115 ms in the VM; GPU init is 70-80 ms on macOS/Windows and 45-200 ms on llvmpipe. The first
+  frame itself is 4 ms on Metal.
+- **Memory is mostly the platform.** The editor's own data is under 10 MB. macOS starts at 71 MB
+  before any GPU work (AppKit), and llvmpipe adds ~125 MB.
 
-Memory is the one miss, and it comes from the llvmpipe driver (about 125 MB after GPU init);
-the editor itself is under 10 MB. Real-GPU numbers on macOS and Windows come from the
-`spike-gui-renderer` CI workflow and a run on owner hardware; they are recorded on #28.
+Budget status: typing latency passes wherever there is a GPU-like path. Cold start and idle
+memory need a run on real hardware before we accept or adjust the #12 GUI budgets.
 
 ## Consequences
 
@@ -75,7 +82,8 @@ the editor itself is under 10 MB. Real-GPU numbers on macOS and Windows come fro
 - GPU init is the largest startup cost. Follow-ups: create the window first and paint the
   background, init the device in parallel with loading the buffer, and use wgpu's pipeline
   cache where available.
-- Idle memory must be checked on real drivers before we accept the budget. If it is over, try
-  the GL backend and smaller swapchain/atlas sizes.
+- Idle memory and cold start must be checked on real hardware before we accept the budgets. If
+  memory is over, try the GL backend and smaller swapchain/atlas sizes; for startup, overlap
+  window creation, GPU init and file load.
 - Still to prove in M1: AccessKit tree, IME on macOS and Windows with a real input method,
   ligatures, and wide-glyph (CJK) cursor placement.
