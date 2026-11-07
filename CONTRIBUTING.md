@@ -13,6 +13,16 @@ cargo deny check   # optional locally: cargo install cargo-deny
 
 CI is kept lean: PRs run fmt, clippy and tests on Linux only. macOS and Windows run on `main`, nightly, or when a PR has the `ci:full` label (add it for platform-sensitive changes). `cargo-deny` runs only when dependencies change. Docs-only PRs skip CI.
 
+## Public repo: no secrets, no personal data
+
+This repo is public. Never put secrets, tokens, credentials, private keys, personal emails, or local paths in code, commits, PRs, issues or comments. Configure git with your GitHub noreply email:
+
+```sh
+git config user.email "<id>+<login>@users.noreply.github.com"
+```
+
+The `hygiene` CI job (gitleaks + email checks) blocks violations. If you leak a secret, rotate it first; deleting the commit is not enough.
+
 ## Ground rules
 
 - **Minimal core.** If a feature can be an extension, it is one. Bundled extensions use only the public API.
