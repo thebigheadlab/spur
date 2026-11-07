@@ -1,8 +1,8 @@
 # Lean CI. Rust builds are expensive, so:
-# - PRs run one Linux job (fmt -> clippy -> nextest).
-# - macOS + Windows run on main, or on a PR when a maintainer comments
-#   `/ci full` (see ci-full.yml).
-# - Docs-only changes skip CI; superseded runs are cancelled.
+# - PRs run one Linux job (fmt -> clippy -> test).
+# - macOS + Windows run on main, or on a PR when a maintainer asks for it
+#   (see ci-full.yml).
+# - Docs-only changes skip CI; superseded PR runs are cancelled.
 # - Cache is written only from main, so PRs never thrash it.
 # - No secrets are used; fork PRs get a read-only token.
 name: CI
@@ -20,34 +20,15 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
-env:
-  CARGO_TERM_COLOR: always
-  CARGO_INCREMENTAL: 0
-  CARGO_NET_RETRY: 10
-  RUSTFLAGS: -D warnings
-  RUST_BACKTRACE: short
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   linux:
     name: lint + test (linux)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - run: cargo fmt --all --check
-      - uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest
-      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-      - run: cargo nextest run --workspace --cargo-profile ci --locked --no-tests=warn
-      - run: cargo test --workspace --doc --locked
+    uses: ./.github/workflows/test-os.yml
+    with:
+      os: ubuntu-latest
+      fmt: true
 
   cross-os:
     name: test (${{ matrix.os }})

@@ -8,7 +8,7 @@ This repository is public. Commits, PRs, issues, comments, CI logs and docs must
 - personal email addresses (commit authorship must use a GitHub `noreply` email);
 - local machine paths, hostnames, or internal URLs.
 
-Use placeholders like `<TOKEN>` or `user@example.com` in examples. CI (`hygiene` workflow: gitleaks + email checks) enforces this; never bypass or weaken it.
+Use placeholders like `<TOKEN>` or `user@example.com` in examples. Push protection blocks known secrets; the `hygiene` workflow (gitleaks, email and local-path checks) detects the rest after push, so check before you push. Never bypass or weaken either.
 
 ## Workflow
 
