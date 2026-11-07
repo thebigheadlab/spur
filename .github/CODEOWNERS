@@ -1,0 +1,4 @@
+# CI, hygiene and security config need a maintainer review.
+/.github/ @apurvasaraiya
+/.gitleaks.toml @apurvasaraiya
+/deny.toml @apurvasaraiya
