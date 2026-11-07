@@ -21,4 +21,6 @@ Flags: `--bench`, `--vsync`, `--system-fonts` (scan system fonts at startup), `-
 Bench timings are measured from applying an input action to frame presented and GPU idle
 (`device.poll(Wait)`), with vsync off. They exclude OS input delivery and compositor/display latency.
 
-Font: DejaVu Sans Mono (Bitstream Vera / DejaVu license, free to embed) in `assets/`.
+Font: DejaVu Sans Mono in `assets/`, under the Bitstream Vera / DejaVu license. Its notice is in
+[`assets/LICENSE-DejaVu`](assets/LICENSE-DejaVu) and must ship with the font wherever it is copied
+(for example into `spur-gui`).

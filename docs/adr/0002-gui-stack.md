@@ -36,6 +36,9 @@ Principles that come with it:
 
 1. **Shape only what is visible**, and cache shaped lines by content, styling and font config,
    so highlighting or theme changes reshape a line even when its text did not change.
+   *Not prototyped:* the spike caches by line index and compares the line's text. Inserting or
+   deleting a line therefore reshapes every visible line below it, and a theme change
+   invalidates nothing. The "structural" numbers below are a full-viewport reshape.
 2. **No system font scan at startup.** Embed one monospace font. Fallback fonts (CJK, emoji)
    load lazily. Scanning cost 78 ms and about 25 MB on Linux in the prototype.
 3. **Render on demand.** No continuous redraw loop; skip frames while occluded. Idle CPU 0.
@@ -113,6 +116,12 @@ What the numbers say:
   Windows VMs and RDP sessions look like this; the fallback policy is an open question below.
 - **Startup is dominated by OS and driver setup** (window creation, GPU init), not our code.
 - **Memory is mostly platform and driver RSS.** Whether real drivers do better is not shown.
+  RSS also grows by about 14 MB over a 3k-step bench run (117 to 131 MB on Linux) although the
+  line cache is evicted. This is likely glyph-atlas growth (`atlas.trim()` frees only unused
+  glyphs) or allocator retention; it needs explaining before an idle memory budget is set.
+- **Known spike gaps:** the IME cursor area is computed from the previous frame's layout, so it
+  lags one frame (the risk below); the scale factor is read once, and `ScaleFactorChanged` is not
+  handled, so moving to a monitor with a different DPI gives wrong metrics.
 
 **Budget status: open.** The stack is accepted for building on. Typing, startup and memory
 budgets are unverified until there is a key-to-photon measurement and a run on real hardware.
