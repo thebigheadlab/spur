@@ -7,11 +7,13 @@ Thanks for helping. Specs and tasks are GitHub issues; start from the [epic](htt
 ```sh
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo test --workspace   # unit tests + doctests
 cargo deny check   # optional locally: cargo install cargo-deny
 ```
 
-CI is kept lean: PRs run fmt, clippy and tests on Linux only. macOS and Windows run on `main`, or on a PR when a maintainer comments `/ci full` (owners, members and collaborators only; it tests the PR head at comment time and posts a `CI full (3 OS)` status). `cargo-deny` runs only when dependencies change. Docs-only PRs skip CI.
+CI is kept lean: PRs run fmt, clippy and tests on Linux only. macOS and Windows run on `main`, or on a PR when a maintainer comments `/ci full` (owners, members and collaborators only; it tests the PR head at comment time and posts a `CI full (3 OS)` status). `cargo-deny` runs only when dependencies change. Docs-only PRs skip the Rust jobs (hygiene still runs), so don't make the Rust check a required status without a path-aware placeholder job.
+
+Lints are strict and CI treats warnings as errors: every public item needs a doc comment (`missing_docs`), `println!`/`dbg!`/`todo!` are flagged, and clippy `pedantic` is on. Use `writeln!` on a locked stdout for CLI output.
 
 ## Public repo: no secrets, no personal data
 
@@ -21,7 +23,7 @@ This repo is public. Never put secrets, tokens, credentials, private keys, perso
 git config user.email "<id>+<login>@users.noreply.github.com"
 ```
 
-The `hygiene` CI job (gitleaks + email checks) blocks violations. If you leak a secret, rotate it first; deleting the commit is not enough.
+GitHub secret scanning with push protection blocks known secret formats at push time. The `hygiene` CI job (gitleaks, noreply author check, email and local-path scan) detects the rest on every PR; it cannot un-publish anything already pushed. If you leak a secret, rotate it first; deleting the commit is not enough.
 
 ## Ground rules
 
