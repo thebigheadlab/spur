@@ -1,4 +1,4 @@
-# Reusable: lint + test on one OS. Used by ci.yml and ci-full.yml.
+# Reusable: lint + test on one OS. Used by ci.yml (Linux on PRs; macOS + Windows on main or after approval).
 # One dev profile (no debuginfo) for clippy, unit tests and doctests: one target dir, one cache.
 name: test-os
 
