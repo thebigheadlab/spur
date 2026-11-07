@@ -11,7 +11,7 @@ cargo test --workspace
 cargo deny check   # optional locally: cargo install cargo-deny
 ```
 
-CI is kept lean: PRs run fmt, clippy and tests on Linux only. macOS and Windows run on `main`, nightly, or when a PR has the `ci:full` label (add it for platform-sensitive changes). `cargo-deny` runs only when dependencies change. Docs-only PRs skip CI.
+CI is kept lean: PRs run fmt, clippy and tests on Linux only. macOS and Windows run on `main`, or on a PR when a maintainer comments `/ci full` (owners, members and collaborators only; it tests the PR head at comment time and posts a `CI full (3 OS)` status). `cargo-deny` runs only when dependencies change. Docs-only PRs skip CI.
 
 ## Public repo: no secrets, no personal data
 

@@ -1,0 +1,39 @@
+# Reusable: build + test on one OS at a given ref. Used by ci.yml and ci-full.yml.
+name: test-os
+
+on:
+  workflow_call:
+    inputs:
+      os:
+        required: true
+        type: string
+      ref:
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ inputs.os }})
+    runs-on: ${{ inputs.os }}
+    timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+      CARGO_NET_RETRY: 10
+      RUSTFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' && inputs.ref == '' }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - run: cargo nextest run --workspace --cargo-profile ci --locked --no-tests=warn
