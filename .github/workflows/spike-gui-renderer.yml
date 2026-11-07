@@ -1,0 +1,58 @@
+# Spike #28: build the standalone GUI renderer prototype and run its scripted benchmark
+# on Linux (Xvfb + Mesa lavapipe), macOS (Metal) and Windows (DX12/WARP).
+# CI runners have no real GPU, so numbers are an upper bound, not the budget check.
+name: spike-gui-renderer
+
+# Manual only (Actions tab, maintainers): it runs macOS + Windows, which is costly.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bench:
+    name: bench (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+        working-directory: spikes/gui-renderer
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: spikes/gui-renderer
+      - name: Linux deps (Xvfb, lavapipe)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -q && sudo apt-get install -y -q xvfb mesa-vulkan-drivers libxkbcommon-x11-0
+      - run: cargo build --release --locked
+      - name: Binary size
+        run: ls -l target/release/spur-gui-spike* | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Bench
+        run: |
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            xvfb-run -a -s "-screen 0 1920x1080x24" ./bench.sh 5 | tee bench.txt
+          else
+            ./bench.sh 5 | tee bench.txt
+          fi
+          for f in results/run*.json; do cat "$f"; done
+          {
+            echo "### $RUNNER_OS"; echo '```'; cat bench.txt; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: gui-spike-${{ matrix.os }}
+          path: spikes/gui-renderer/results/
