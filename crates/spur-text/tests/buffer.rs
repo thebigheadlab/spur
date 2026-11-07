@@ -243,3 +243,69 @@ fn snapshot_coordinates_and_line_endings() {
     // Line endings round-trip byte for byte.
     assert_eq!(text(&s), "a\r\nb\rc\nd😀e\u{301}");
 }
+
+#[test]
+fn undo_after_redo_with_other_authors_edit_between() {
+    // Regression: the second undo used to revert the original edit over the
+    // undo/redo pair and conflict with the user's own undo.
+    let mut buf = Buffer::new("");
+    buf.apply(insert(&buf, AuthorId::User, buf.version(), 0, "foo"))
+        .unwrap();
+    buf.apply(insert(&buf, agent(), buf.version(), 3, " X"))
+        .unwrap();
+    buf.undo(&AuthorId::User).unwrap().unwrap();
+    assert_eq!(text(&buf.snapshot()), " X");
+    buf.redo(&AuthorId::User).unwrap().unwrap();
+    assert_eq!(text(&buf.snapshot()), "foo X");
+    buf.undo(&AuthorId::User).unwrap().unwrap();
+    assert_eq!(text(&buf.snapshot()), " X");
+    buf.redo(&AuthorId::User).unwrap().unwrap();
+    assert_eq!(text(&buf.snapshot()), "foo X");
+    // After another agent edit the redo is no longer the head: still undoable.
+    buf.apply(insert(&buf, agent(), buf.version(), 0, "Y"))
+        .unwrap();
+    buf.undo(&AuthorId::User).unwrap().unwrap();
+    assert_eq!(text(&buf.snapshot()), "Y X");
+}
+
+#[test]
+fn undo_conflict_reports_original_coordinates() {
+    let mut buf = Buffer::new("");
+    buf.apply(insert(&buf, AuthorId::User, buf.version(), 0, "hello"))
+        .unwrap();
+    buf.apply(insert(&buf, agent(), buf.version(), 0, ">> "))
+        .unwrap();
+    buf.apply(insert(&buf, agent(), buf.version(), 5, "ZZ"))
+        .unwrap();
+    let UndoError::Conflict { conflicts } = buf.undo(&AuthorId::User).unwrap_err();
+    // The undo deletes 0..5 of the text right after the user's edit, not 3..8.
+    assert_eq!(conflicts[0].incoming.range, 0..5);
+}
+
+#[test]
+fn log_byte_limit_is_configurable() {
+    let mut buf = Buffer::with_log_limits("", 100, 4);
+    for i in 0..3 {
+        buf.apply(insert(&buf, AuthorId::User, buf.version(), i, "ab"))
+            .unwrap();
+    }
+    // 2 + 2 bytes fit; the third insert pushes the first out.
+    assert_eq!(buf.oldest_version(), Version(1));
+    assert!(buf.last_edit_time().is_some());
+    assert!(Buffer::new("x").last_edit_time().is_none());
+}
+
+#[test]
+fn rebased_transaction_keeps_mapped_selection_before() {
+    let mut buf = Buffer::new("abc");
+    let v0 = buf.version();
+    let agent_txn = Transaction::new(agent(), v0, ChangeSet::insert(3, 3, "!").unwrap())
+        .with_selections(Selection::cursor(3), Selection::cursor(4));
+    buf.apply(insert(&buf, AuthorId::User, v0, 0, "__"))
+        .unwrap();
+    let applied = buf.apply(agent_txn).unwrap();
+    assert_eq!(applied.selection, None);
+    let undone = buf.undo(&agent()).unwrap().unwrap();
+    assert_eq!(undone.selection, Some(Selection::cursor(5)));
+    assert_eq!(text(&buf.snapshot()), "__abc");
+}

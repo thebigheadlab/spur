@@ -165,4 +165,46 @@ proptest! {
         prop_assert_eq!(buf.resolve(lazy).ok(), buf.tracked(id));
         prop_assert!(buf.version() >= Version(0));
     }
+
+    /// Random edits, undos and redos from two authors (inserts only, disjoint alphabets).
+    /// Whatever succeeds never changes the other author's text, and an undo directly
+    /// followed by a redo (or the reverse) round-trips without a conflict.
+    #[test]
+    fn multi_author_undo_redo(ops in prop::collection::vec((0u8..6, 0usize..64, "[a-c]{1,3}"), 1..40)) {
+        let agent = AuthorId::Agent("x".into());
+        let mut buf = Buffer::new("");
+        let only = |t: &str, upper: bool| t.chars().filter(|c| c.is_ascii_uppercase() == upper).collect::<String>();
+        for (op, at, s) in &ops {
+            let before = full(&buf.snapshot());
+            let (author, other_upper) = if op % 2 == 0 { (AuthorId::User, true) } else { (agent.clone(), false) };
+            match op / 2 {
+                0 => {
+                    let at = at % (buf.len() + 1);
+                    let s = if op % 2 == 0 { s.clone() } else { s.to_uppercase() };
+                    buf.apply(Transaction::new(author, buf.version(), ChangeSet::insert(buf.len(), at, &s).unwrap())).unwrap();
+                }
+                kind => {
+                    let first = if kind == 1 { buf.undo(&author) } else { buf.redo(&author) };
+                    if let Ok(Some(_)) = first {
+                            let mid = full(&buf.snapshot());
+                            prop_assert_eq!(only(&mid, other_upper), only(&before, other_upper));
+                            // Undo/redo (or redo/undo) twice: each step must succeed.
+                            for _ in 0..2 {
+                                let back = if kind == 1 { buf.redo(&author) } else { buf.undo(&author) };
+                                prop_assert!(matches!(back, Ok(Some(_))), "round trip failed: {:?}", back);
+                                prop_assert_eq!(full(&buf.snapshot()), before.clone());
+                                let again = if kind == 1 { buf.undo(&author) } else { buf.redo(&author) };
+                                prop_assert!(matches!(again, Ok(Some(_))), "second step failed: {:?}", again);
+                                prop_assert_eq!(full(&buf.snapshot()), mid.clone());
+                            }
+                            let back = if kind == 1 { buf.redo(&author) } else { buf.undo(&author) };
+                            prop_assert!(matches!(back, Ok(Some(_))), "final step failed: {:?}", back);
+                            prop_assert_eq!(full(&buf.snapshot()), before);
+                    } else {
+                        prop_assert_eq!(full(&buf.snapshot()), before);
+                    }
+                }
+            }
+        }
+    }
 }

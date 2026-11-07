@@ -2,6 +2,7 @@
 //! composes to the current text.
 
 use std::collections::HashMap;
+use std::time::SystemTime;
 
 use crate::change::ChangeSet;
 use crate::selection::Selection;
@@ -24,6 +25,8 @@ pub(crate) struct Revision {
     pub(crate) reverts: Option<usize>,
     /// Buffer version that committed this revision (the latest one for a merged group).
     pub(crate) version: Version,
+    /// Wall-clock time of the commit (the latest one for a merged group).
+    pub(crate) time: SystemTime,
 }
 
 /// One step an author can redo.
@@ -60,6 +63,7 @@ pub(crate) struct NewRevision {
     pub(crate) selection_after: Option<Selection>,
     pub(crate) reverts: Option<usize>,
     pub(crate) version: Version,
+    pub(crate) time: SystemTime,
 }
 
 impl History {
@@ -76,6 +80,7 @@ impl History {
                 selection_after: None,
                 reverts: None,
                 version: Version(0),
+                time: SystemTime::now(),
             }],
             head: ROOT,
             redo: HashMap::new(),
@@ -100,6 +105,7 @@ impl History {
             head.inverse = new.inverse.compose(&head.inverse);
             head.selection_after = new.selection_after;
             head.version = new.version;
+            head.time = new.time;
             return self.head;
         }
         let index = self.revs.len();
@@ -114,6 +120,7 @@ impl History {
             selection_after: new.selection_after,
             reverts: new.reverts,
             version: new.version,
+            time: new.time,
         });
         self.revs[self.head].last_child = Some(index);
         self.head = index;
@@ -121,7 +128,10 @@ impl History {
     }
 
     /// Finds the author's latest revision on the head path that is still in effect.
-    /// Revert revisions are skipped: undoing again goes to the author's previous edit.
+    /// Undo revisions (an odd number of reverts deep) are skipped, so undoing again goes
+    /// to the author's previous edit. Redo revisions (a revert of an undo) are targets
+    /// themselves: undoing a redo reverts the redo, not the original edit, which would
+    /// overlap the undo/redo pair still on the path.
     pub(crate) fn undo_target(&self, author: &AuthorId) -> UndoTarget {
         let mut reverted: Vec<usize> = Vec::new();
         let mut at = self.head;
@@ -130,7 +140,8 @@ impl History {
             if !reverted.contains(&at) {
                 if let Some(target) = rev.reverts {
                     reverted.push(target);
-                } else if rev.author == *author {
+                }
+                if rev.author == *author && !self.is_undo(at) {
                     return if at == self.head {
                         UndoTarget::TreeMove(at)
                     } else {
@@ -141,6 +152,17 @@ impl History {
             at = rev.parent;
         }
         UndoTarget::Nothing
+    }
+
+    /// True if `rev` undoes something: it ends an odd-length chain of reverts.
+    fn is_undo(&self, rev: usize) -> bool {
+        let mut depth = 0;
+        let mut at = rev;
+        while let Some(target) = self.revs[at].reverts {
+            depth += 1;
+            at = target;
+        }
+        depth % 2 == 1
     }
 
     /// Revisions after `from` up to and including the head, oldest first, or `None` if

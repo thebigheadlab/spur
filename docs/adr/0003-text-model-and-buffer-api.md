@@ -2,7 +2,7 @@
 
 - Status: proposed
 - Date: 2026-11-07
-- Spec: #52 (text engine), #4; architecture #3. Related tasks: #17, #18, #20, #22.
+- Spec: #52 (text engine), #4; architecture #3. Related tasks: #17, #18, #20, #22. (Issue numbers refer to the project's spec issues, which are being restored.)
 
 ## Context
 
@@ -53,9 +53,9 @@ Decided by the owner on 2026-11-07.
 - If `base` is the current version, the changes apply as is.
 - If `base` is older, the sequencer transforms the changes through every committed change set since `base`, in order:
   - A hunk that overlaps a committed hunk (positive-length intersection, or an insertion strictly inside the other's replaced range) is a conflict. The whole transaction is rejected with `EditError::Stale` and the list of conflicts. Nothing is applied partially.
-  - Otherwise each hunk is mapped. Inserts at the same offset are ordered deterministically: already committed text comes first.
+  - Otherwise each hunk is mapped. Inserts at the same offset are ordered deterministically: already committed text comes first. This includes an insert at the start of a committed replacement: it lands after the replacement text. So if a user types just before a word that an agent rewrote, the user's text ends up after the rewritten word.
   - If `base` is older than the retained change log, the result is `EditError::TooOld`.
-- The change log keeps the last `N` change sets (default 10 000, configurable) and at most 64 MB of inserted text, whichever limit is hit first, so whole-file rewrites cannot grow it without bound. Rebasing and lazy anchors work only inside that window.
+- The change log keeps the last `N` change sets (default 10 000) and at most 64 MB of inserted text (default), whichever limit is hit first, so whole-file rewrites cannot grow it without bound. Both limits are set per buffer (`Buffer::with_log_limits`). Rebasing and lazy anchors work only inside that window.
 - Rejected: **fragment CRDT per buffer** (Zed) and **hybrid** (eg-walker, diamond-types). With one sequencer and no replicas, a CRDT adds identity metadata on every character without buying anything. Reopen condition: client replicas, offline merge or host-less collaboration. Then adopt a crate (cola, diamond-types, loro, yrs) behind the same API.
 
 ### Anchors
@@ -71,12 +71,13 @@ Mapping rule, shared by anchors, selections and rebase: a position before a hunk
 
 ### Q6 Undo model
 
-- History is an undo tree: a flat `Vec<Revision>` with parent and last-child links (Helix). Each revision stores its author, group, change set, inverse, and selections before and after.
+- History is an undo tree: a flat `Vec<Revision>` with parent and last-child links (Helix). Each revision stores its author, group, change set, inverse, selections before and after, the version that committed it, and a wall-clock timestamp (for "earlier by duration" and "undo to last save").
 - `undo(author)`:
   - If the head revision is the author's, move the head to its parent by applying the inverse. Redo follows the tree.
-  - Otherwise find the author's latest revision on the path from the root to the head that is still in effect. Rebase its inverse through every later revision. On overlap with another author's later edit, refuse with `UndoError::Conflict` and the conflicting ranges; never undo partially. On success, commit the rebased inverse as a new revision that records which revision it reverts.
+  - Otherwise find the author's latest revision on the path from the root to the head that is still in effect. Undo revisions are skipped. A redo revision (one that reverts an undo) is a target itself, so undo, redo, undo works even after other authors edited in between. Rebase its inverse through every later revision. On overlap with another author's later edit, refuse with `UndoError::Conflict` and the conflicting ranges; never undo partially. On success, commit the rebased inverse as a new revision that records which revision it reverts.
 - `redo(author)` replays the author's own undo stack: a tree move if the author's undo was a tree move and the head has not moved since, otherwise it reverts the revert.
 - Groups: consecutive transactions with the same author and the same `GroupKey` (actor plus turn id, for example one insert-mode session or one agent turn) merge into one revision, so one undo step undoes the whole group. A transaction from another author in between ends the group.
+- Finding the target walks the head path, and a revert rebases over every later revision: O(revisions) work. That is fine for M0. The history cap from #18 (default 10 000 revisions or 50 MB) also bounds this walk.
 - Every undo and redo is itself a committed transaction with a new `Version`, so anchors, the change log and rebasing see one uniform stream of edits.
 
 ### Q7 Text representation
@@ -100,7 +101,7 @@ impl ChangeSet {
     pub fn insert(base_len, at, text) -> Self; pub fn delete(base_len, range) -> Self; pub fn replace(...) -> Self;
     pub fn map_offset(&self, offset: usize, bias: Bias) -> usize;
     pub fn compose(&self, next: &ChangeSet) -> ChangeSet;
-    pub fn rebase(&self, over: &ChangeSet) -> Result<ChangeSet, Vec<Conflict>>;
+    pub fn rebase(&self, over: &ChangeSet) -> Result<ChangeSet, Vec<HunkConflict>>;
 }
 
 pub struct Selection { pub ranges: Vec<SelRange>, pub primary: usize }
@@ -121,13 +122,20 @@ pub struct Buffer { /* rope, version, change log, undo tree, tracked anchors */ 
 impl Buffer {
     pub fn new(text: &str) -> Self;
     pub fn snapshot(&self) -> Snapshot; pub fn version(&self) -> Version;
-    pub fn apply(&mut self, txn: Transaction) -> Result<Applied, EditError>;   // Stale | TooOld | Invalid
+    pub fn apply(&mut self, txn: Transaction) -> Result<Applied, EditError>;
+    // EditError: Stale | TooOld | FutureVersion | LengthMismatch | NotCharBoundary
     pub fn undo(&mut self, author: &AuthorId) -> Result<Option<Applied>, UndoError>;
     pub fn redo(&mut self, author: &AuthorId) -> Result<Option<Applied>, UndoError>;
     pub fn anchor(&self, offset, bias) -> Anchor; pub fn resolve(&self, anchor) -> Result<usize, AnchorError>;
+    pub fn with_log_limits(text: &str, capacity: usize, byte_limit: usize) -> Self;
+    pub fn last_edit_time(&self) -> Option<SystemTime>;
     pub fn track(&mut self, offset, bias) -> AnchorId; pub fn tracked(&self, id) -> Option<usize>; pub fn untrack(&mut self, id);
 }
 ```
+
+Conflicts (`Conflict`) report the incoming hunk in the coordinates it was submitted in, for both `apply` and `undo`.
+
+A rebased transaction keeps its before-selection, mapped through the edits since its base, so undoing it restores the cursor. Its after-selection is dropped, because it refers to text the author never saw.
 
 `Applied` reports the new version, the change set as actually applied (after rebase) and the resulting selection, so frontends and extensions get the same edit stream.
 
@@ -153,9 +161,11 @@ First results (same 4 vCPU container as the spike, `cargo bench -p spur-text`):
 | Resolve 10k tracked anchors after 10k edits | 10.9 µs |
 | Snapshot clone, 100 MB | 17 ns |
 
-Not measured yet: memory after 10k whole-file rewrites. The change log is bounded; the undo tree is not capped yet (#18: default 10 000 revisions or 50 MB).
+Not done yet, tracked for #17, #18 and ADR 0004:
+- memory after 10k whole-file rewrites: the change log is bounded, but the undo tree is not capped yet (#18: default 10 000 revisions or 50 MB);
+- the longest-line metric, and benches at 1 MB, 1 GB and on a single giant line (#17).
 
-Property tests: rebasing equals sequential application when there is no conflict; "undo mine" never changes another author's text; undo then redo round-trips; tracked and lazy anchors agree.
+Property tests: rebasing equals sequential application when there is no conflict; "undo mine" never changes another author's text; undo then redo round-trips, for one author and for two authors with interleaved edits; tracked and lazy anchors agree.
 
 ## Consequences
 

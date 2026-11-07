@@ -2,6 +2,7 @@
 
 use std::collections::VecDeque;
 use std::fmt;
+use std::time::SystemTime;
 
 use crate::anchor::{Anchor, AnchorId, AnchorTable};
 use crate::change::{Bias, Change, ChangeSet, rebase_tagged};
@@ -216,6 +217,7 @@ pub struct Buffer {
     version: Version,
     log: VecDeque<LogEntry>,
     log_capacity: usize,
+    log_byte_limit: usize,
     log_bytes: usize,
     history: History,
     anchors: AnchorTable,
@@ -229,6 +231,13 @@ impl Buffer {
 
     /// Like [`Buffer::new`], keeping `capacity` change sets for rebasing (at least 1).
     pub fn with_log_capacity(text: &str, capacity: usize) -> Self {
+        Self::with_log_limits(text, capacity, DEFAULT_LOG_BYTES)
+    }
+
+    /// Like [`Buffer::new`], keeping at most `capacity` change sets (at least 1) and at
+    /// most `byte_limit` bytes of inserted text in the change log, whichever comes first.
+    /// The newest change set is always kept.
+    pub fn with_log_limits(text: &str, capacity: usize, byte_limit: usize) -> Self {
         let text = Text::new(text);
         Self {
             history: History::new(text.len()),
@@ -236,6 +245,7 @@ impl Buffer {
             version: Version(0),
             log: VecDeque::new(),
             log_capacity: capacity.max(1),
+            log_byte_limit: byte_limit,
             log_bytes: 0,
             anchors: AnchorTable::default(),
         }
@@ -279,7 +289,13 @@ impl Buffer {
         let rebased = txn.base != self.version;
         let changes = self.rebase_to_current(txn.base, &txn.changes)?;
         self.check_boundaries(&changes)?;
+        // The after-selection is relative to the text the author expected, which a rebase
+        // changes; the before-selection maps through the edits since `base`.
         let selection_after = if rebased { None } else { txn.selection_after };
+        let selection_before = txn.selection_before.map(|s| {
+            self.log_since(txn.base)
+                .fold(s, |s, entry| s.map(&entry.changes))
+        });
         if changes.is_empty() {
             return Ok(Applied {
                 author: txn.author,
@@ -295,10 +311,11 @@ impl Buffer {
             group: txn.group,
             changes: changes.clone(),
             inverse,
-            selection_before: if rebased { None } else { txn.selection_before },
+            selection_before,
             selection_after: selection_after.clone(),
             reverts: None,
             version: self.version,
+            time: SystemTime::now(),
         });
         Ok(Applied {
             author: txn.author,
@@ -374,7 +391,7 @@ impl Buffer {
         };
         let rev = &self.history.revs[child];
         let (changes, selection) = (rev.changes.clone(), rev.selection_after.clone());
-        self.commit_over(author, changes, selection, &path, None)
+        self.commit_over(author, &changes, selection, &path, None)
     }
 
     /// Reverts revision `rev` (on the head path) by rebasing its inverse over later edits.
@@ -384,24 +401,26 @@ impl Buffer {
         };
         let r = &self.history.revs[rev];
         let (inverse, selection) = (r.inverse.clone(), r.selection_before.clone());
-        self.commit_over(author, inverse, selection, &path, Some(rev))
+        self.commit_over(author, &inverse, selection, &path, Some(rev))
     }
 
     /// Rebases `changes` over the revisions in `path`, then commits it as a new revision.
     fn commit_over(
         &mut self,
         author: &AuthorId,
-        changes: ChangeSet,
+        changes: &ChangeSet,
         selection: Option<Selection>,
         path: &[usize],
         reverts: Option<usize>,
     ) -> Result<Option<Applied>, UndoError> {
-        let mut changes = changes;
         let mut selection = selection;
+        let mut tagged: Vec<(usize, Change)> =
+            changes.hunks().iter().cloned().enumerate().collect();
+        let mut len = changes.base_len();
         for &later in path {
             let later = &self.history.revs[later];
             let over = &later.changes;
-            changes = changes.rebase(over).map_err(|hunks| UndoError::Conflict {
+            tagged = rebase_tagged(&tagged, len, over).map_err(|hunks| UndoError::Conflict {
                 conflicts: hunks
                     .into_iter()
                     .map(|h| Conflict {
@@ -411,8 +430,11 @@ impl Buffer {
                     })
                     .collect(),
             })?;
+            len = over.new_len();
             selection = selection.map(|s| s.map(over));
         }
+        let changes = ChangeSet::new(len, tagged.into_iter().map(|(_, c)| c))
+            .expect("rebased hunks stay sorted and in bounds");
         let inverse = self.commit(&changes);
         self.history.push(NewRevision {
             author: author.clone(),
@@ -423,6 +445,7 @@ impl Buffer {
             selection_after: selection.clone(),
             reverts,
             version: self.version,
+            time: SystemTime::now(),
         });
         Ok(Some(self.applied(author, changes, selection)))
     }
@@ -465,8 +488,7 @@ impl Buffer {
         if base < oldest {
             return Err(EditError::TooOld { base, oldest });
         }
-        let skip = usize::try_from(base.0 - oldest.0).unwrap_or(usize::MAX);
-        let mut entries = self.log.iter().skip(skip).peekable();
+        let mut entries = self.log_since(base).peekable();
         if let Some(first) = entries.peek()
             && first.changes.base_len() != changes.base_len()
         {
@@ -496,6 +518,20 @@ impl Buffer {
             .expect("rebased hunks stay sorted and in bounds"))
     }
 
+    /// Log entries committed after `base`, oldest first. `base` must be within
+    /// `oldest_version()..=version()`.
+    fn log_since(&self, base: Version) -> impl Iterator<Item = &LogEntry> {
+        let skip = usize::try_from(base.0 - self.oldest_version().0).unwrap_or(usize::MAX);
+        self.log.iter().skip(skip)
+    }
+
+    /// Wall-clock time of the newest revision on the current undo path, or `None` if the
+    /// buffer is at its loaded state. Basis for "earlier by duration" and undo to last save.
+    pub fn last_edit_time(&self) -> Option<SystemTime> {
+        (self.history.head != crate::history::ROOT)
+            .then(|| self.history.revs[self.history.head].time)
+    }
+
     fn check_boundaries(&self, changes: &ChangeSet) -> Result<(), EditError> {
         for h in changes.hunks() {
             for offset in [h.range.start, h.range.end] {
@@ -518,7 +554,7 @@ impl Buffer {
         self.version = Version(self.version.0 + 1);
         self.log_bytes += text_bytes(changes);
         while !self.log.is_empty()
-            && (self.log.len() >= self.log_capacity || self.log_bytes > DEFAULT_LOG_BYTES)
+            && (self.log.len() >= self.log_capacity || self.log_bytes > self.log_byte_limit)
         {
             let dropped = self.log.pop_front().expect("checked non-empty");
             self.log_bytes -= text_bytes(&dropped.changes);
@@ -553,8 +589,7 @@ impl Buffer {
         if anchor.version < oldest {
             return Err(AnchorError::TooOld);
         }
-        let skip = usize::try_from(anchor.version.0 - oldest.0).unwrap_or(usize::MAX);
-        let mut entries = self.log.iter().skip(skip).peekable();
+        let mut entries = self.log_since(anchor.version).peekable();
         let len_then = entries.peek().map_or(self.len(), |e| e.changes.base_len());
         if anchor.offset > len_then {
             return Err(AnchorError::OutOfBounds);
