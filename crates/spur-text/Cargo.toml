@@ -12,3 +12,14 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+# Exact pin: beta crate, wrapped by the private `storage` module (ADR 0003).
+ropey = { version = "=2.0.0-beta.1", default-features = false, features = ["metric_lines_lf_cr", "metric_chars", "metric_utf16", "simd"] }
+unicode-segmentation = "1.12"
+
+[dev-dependencies]
+proptest = "1.7"
+criterion = { version = "0.7", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "text"
+harness = false
