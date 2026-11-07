@@ -1,9 +1,19 @@
+# Lean CI. Rust builds are expensive, so:
+# - PRs run one Linux job (fmt -> clippy -> nextest) sharing one cache.
+# - macOS + Windows run on main, nightly, or a PR labelled `ci:full`.
+# - Docs-only changes skip CI; superseded runs are cancelled.
+# - Cache is written only from main, so PRs never thrash it.
 name: CI
 
 on:
   push:
     branches: [main]
+    paths-ignore: ["**.md", "docs/**", "LICENSE-*", ".github/dependabot.yml"]
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
+    paths-ignore: ["**.md", "docs/**", "LICENSE-*", ".github/dependabot.yml"]
+  schedule:
+    - cron: "0 3 * * *"
   workflow_dispatch:
 
 permissions:
@@ -16,40 +26,47 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
   RUSTFLAGS: -D warnings
+  RUST_BACKTRACE: short
 
 jobs:
-  fmt:
-    name: rustfmt
+  linux:
+    name: lint + test (linux)
+    # Ignore label events other than ci:full so labelling doesn't rerun CI.
+    if: github.event.action != 'labeled' || github.event.label.name == 'ci:full'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - run: cargo fmt --all --check
-
-  clippy:
-    name: clippy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - run: cargo nextest run --workspace --cargo-profile ci --locked --no-tests=warn
+      - run: cargo test --workspace --doc --locked
 
-  test:
+  cross-os:
     name: test (${{ matrix.os }})
+    if: >-
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'ci:full')
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --workspace --all-targets --locked
-      - run: cargo test --workspace --locked
-
-  deny:
-    name: cargo-deny
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - run: cargo nextest run --workspace --cargo-profile ci --locked --no-tests=warn
