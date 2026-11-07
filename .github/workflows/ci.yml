@@ -1,8 +1,11 @@
 # Lean CI. Rust builds are expensive, so:
-# - PRs run one Linux job (fmt -> clippy -> nextest) sharing one cache.
-# - macOS + Windows run on main, nightly, or a PR labelled `ci:full`.
-# - Docs-only changes skip CI; superseded runs are cancelled.
+# - PRs run one Linux job (fmt -> clippy -> test).
+# - macOS + Windows run on main. On a PR they wait for a maintainer to approve the
+#   `ci-full` environment (Actions > Review deployments). Approval is per run, so
+#   it is bound to the exact commit; non-maintainers cannot approve.
+# - Docs-only changes skip CI; superseded PR runs are cancelled.
 # - Cache is written only from main, so PRs never thrash it.
+# - No secrets are used; fork PRs get a read-only token.
 name: CI
 
 on:
@@ -10,10 +13,7 @@ on:
     branches: [main]
     paths-ignore: ["**.md", "docs/**", "LICENSE-*", ".github/dependabot.yml"]
   pull_request:
-    types: [opened, synchronize, reopened, labeled]
     paths-ignore: ["**.md", "docs/**", "LICENSE-*", ".github/dependabot.yml"]
-  schedule:
-    - cron: "0 3 * * *"
   workflow_dispatch:
 
 permissions:
@@ -21,52 +21,38 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
-env:
-  CARGO_TERM_COLOR: always
-  CARGO_INCREMENTAL: 0
-  CARGO_NET_RETRY: 10
-  RUSTFLAGS: -D warnings
-  RUST_BACKTRACE: short
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   linux:
     name: lint + test (linux)
-    # Ignore label events other than ci:full so labelling doesn't rerun CI.
-    if: github.event.action != 'labeled' || github.event.label.name == 'ci:full'
+    uses: ./.github/workflows/test-os.yml
+    with:
+      os: ubuntu-latest
+      fmt: true
+
+  # PR only: waits for a required reviewer on the `ci-full` environment.
+  # Disabled until the repo variable CI_FULL_ENABLED is "true" (set it after the
+  # environment has required reviewers, or it would run unapproved).
+  approve-full:
+    name: approve full OS matrix
+    if: github.event_name == 'pull_request' && vars.CI_FULL_ENABLED == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 5
+    environment: ci-full
     steps:
-      - uses: actions/checkout@v4
-      - run: cargo fmt --all --check
-      - uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest
-      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-      - run: cargo nextest run --workspace --cargo-profile ci --locked --no-tests=warn
-      - run: cargo test --workspace --doc --locked
+      - run: echo "Full OS matrix approved for ${{ github.event.pull_request.head.sha }}"
 
   cross-os:
     name: test (${{ matrix.os }})
+    needs: approve-full
     if: >-
-      github.event_name != 'pull_request' ||
-      contains(github.event.pull_request.labels.*.name, 'ci:full')
+      always() &&
+      (github.event_name != 'pull_request' || needs.approve-full.result == 'success')
+    uses: ./.github/workflows/test-os.yml
     strategy:
       fail-fast: false
       matrix:
         os: [macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest
-      - run: cargo nextest run --workspace --cargo-profile ci --locked --no-tests=warn
+    with:
+      os: ${{ matrix.os }}

@@ -21,16 +21,20 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn crates() -> [&'static str; 7] {
-    [
+#[cfg_attr(not(any(feature = "tui", feature = "gui")), allow(unused_mut))]
+fn crates() -> Vec<&'static str> {
+    let mut v = vec![
         spur_text::NAME,
         spur_core::NAME,
         spur_keymap::NAME,
         spur_ext::NAME,
         spur_rpc::NAME,
-        spur_tui::NAME,
-        spur_gui::NAME,
-    ]
+    ];
+    #[cfg(feature = "tui")]
+    v.push(spur_tui::NAME);
+    #[cfg(feature = "gui")]
+    v.push(spur_gui::NAME);
+    v
 }
 
 #[cfg(test)]

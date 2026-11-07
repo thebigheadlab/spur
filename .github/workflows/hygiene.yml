@@ -1,0 +1,60 @@
+# Public-repo hygiene: detects secrets, personal emails and local paths.
+# Cheap (single Linux job, no Rust build), so it runs on every PR.
+# Prevention is GitHub secret scanning + push protection (enabled in repo settings).
+name: hygiene
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  secrets:
+    name: secret + email scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GITLEAKS_VERSION: 8.18.4
+      GITLEAKS_SHA256: ba6dbb656933921c775ee5a2d1c13a91046e7952e9d919f9bac4cec61d628e7d
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install gitleaks (checksum verified)
+        run: |
+          f="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfLo "$f" "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/$f"
+          echo "${GITLEAKS_SHA256}  $f" | sha256sum -c -
+          tar -xzf "$f" -C /usr/local/bin gitleaks
+      - name: Scan full history for secrets
+        # No --verbose: it prints commit author emails into public logs.
+        run: gitleaks detect --source . --redact --no-banner --exit-code 1
+      - name: Check commit author emails
+        # --no-merges skips GitHub's synthetic PR merge commit.
+        run: |
+          bad=$(git log --no-merges --format='%ae%n%ce' | sort -u \
+            | grep -vE '(@users\.noreply\.github\.com|^noreply@anthropic\.com|^noreply@github\.com)$' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::Commits must use a noreply email (e.g. ID+login@users.noreply.github.com). Found:"
+            echo "$bad" | sed 's/\(.\).*@/\1***@/'
+            exit 1
+          fi
+      - name: Check tracked files for personal emails and local paths
+        run: |
+          emails=$(git grep -hoIE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' -- . ':!LICENSE-*' ':!Cargo.lock' \
+            | sort -u | grep -vE '(@users\.noreply\.github\.com|^noreply@[a-z.]+|@example\.(com|org))$' || true)
+          paths=$(git grep -nIE '(/home/[a-z][a-z0-9_-]*/|/Users/[A-Za-z][A-Za-z0-9_-]*/|[A-Za-z]:\\Users\\)' -- . ':!.github/workflows/hygiene.yml' || true)
+          if [ -n "$emails$paths" ]; then
+            [ -n "$emails" ] && { echo "::error::Email addresses found in tracked files:"; echo "$emails" | sed 's/\(.\).*@/\1***@/'; }
+            [ -n "$paths" ] && { echo "::error::Local machine paths found in tracked files:"; echo "$paths"; }
+            exit 1
+          fi
