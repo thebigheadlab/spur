@@ -41,6 +41,7 @@ struct Bench {
     pending: Option<(Phase, Instant)>,
     samples: Vec<(Phase, f64, FrameTiming)>,
     warmup: usize,
+    skipped: usize,
 }
 
 struct App {
@@ -170,6 +171,14 @@ impl App {
 
     fn bench_tick(&mut self, ft: FrameTiming, el: &ActiveEventLoop) {
         let Some(b) = self.bench.as_mut() else { return };
+        if !ft.presented && b.pending.is_some() {
+            // Nothing reached the screen: do not record a (falsely fast) sample.
+            b.skipped += 1;
+            if let Some(r) = &self.r {
+                r.window.request_redraw();
+            }
+            return;
+        }
         if let Some((p, t)) = b.pending.take() {
             if b.warmup > 0 {
                 b.warmup -= 1;
@@ -239,7 +248,7 @@ impl App {
             .collect();
         let size = r.window.inner_size();
         println!(
-            "{{\n  \"os\": \"{}\", \"adapter\": \"{}\", \"window\": [{}, {}], \"scale\": {}, \"lines\": {}, \"vsync\": {},\n  \"startup_ms\": {{{}}},\n  \"idle_mem_mb\": {:.1}, \"end_mem_mb\": {:.1},\n  \"frame_ms\": {{\n{}    \"_\": null\n  }}\n}}",
+            "{{\n  \"os\": \"{}\", \"adapter\": \"{}\", \"window\": [{}, {}], \"scale\": {}, \"lines\": {}, \"vsync\": {},\n  \"startup_ms\": {{{}}},\n  \"idle_mem_mb\": {:.1}, \"end_mem_mb\": {:.1}, \"skipped_frames\": {},\n  \"frame_ms\": {{\n{}    \"_\": null\n  }}\n}}",
             std::env::consts::OS,
             r.adapter_info,
             size.width,
@@ -250,6 +259,7 @@ impl App {
             marks.join(", "),
             self.idle_mem.unwrap_or(0) as f64 / 1048576.0,
             mem_mb(),
+            b.skipped,
             phases
         );
     }
@@ -419,6 +429,7 @@ fn main() {
             pending: None,
             samples: Vec::new(),
             warmup: 5,
+            skipped: 0,
         });
     }
     el.run_app(&mut app).expect("run");

@@ -3,10 +3,9 @@
 # CI runners have no real GPU, so numbers are an upper bound, not the budget check.
 name: spike-gui-renderer
 
+# Manual only (Actions tab, maintainers): it runs macOS + Windows, which is costly.
 on:
   workflow_dispatch:
-  pull_request:
-    paths: ["spikes/gui-renderer/**", ".github/workflows/spike-gui-renderer.yml"]
 
 permissions:
   contents: read
@@ -29,8 +28,10 @@ jobs:
         shell: bash
         working-directory: spikes/gui-renderer
     steps:
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: spikes/gui-renderer
       - name: Linux deps (Xvfb, lavapipe)
@@ -48,7 +49,7 @@ jobs:
           fi
           for f in results/run*.json; do cat "$f"; done
           {
-            echo "### $RUNNER_OS"; echo '```'; cat bench.txt; cat results/run5.json; echo '```'
+            echo "### $RUNNER_OS"; echo '```'; cat bench.txt; echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
