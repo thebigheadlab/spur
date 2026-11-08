@@ -400,7 +400,10 @@ impl Buffer {
             return Ok(None);
         };
         let r = &self.history.revs[rev];
-        let (inverse, selection) = (r.inverse.clone(), r.selection_before.clone());
+        // `selection_before` is in the coordinates before `rev`; move it past `rev` so it
+        // can follow the later edits, then past the rebased inverse (in `commit_over`).
+        let selection = r.selection_before.as_ref().map(|s| s.map(&r.changes));
+        let inverse = r.inverse.clone();
         self.commit_over(author, &inverse, selection, &path, Some(rev))
     }
 
@@ -435,7 +438,17 @@ impl Buffer {
         }
         let changes = ChangeSet::new(len, tagged.into_iter().map(|(_, c)| c))
             .expect("rebased hunks stay sorted and in bounds");
+        if reverts.is_some() {
+            selection = selection.map(|s| s.map(&changes));
+        }
         let inverse = self.commit(&changes);
+        // Never hand back an offset outside the text or inside a char.
+        if let Some(sel) = &mut selection {
+            for r in &mut sel.ranges {
+                r.anchor = self.floor_boundary(r.anchor);
+                r.head = self.floor_boundary(r.head);
+            }
+        }
         self.history.push(NewRevision {
             author: author.clone(),
             group: None,
@@ -545,6 +558,15 @@ impl Buffer {
 
     /// Applies validated changes to the text, bumps the version, logs them and moves
     /// tracked anchors. Returns the inverse.
+    /// `offset` clamped to the text and moved back onto a char boundary.
+    fn floor_boundary(&self, offset: usize) -> usize {
+        let mut o = offset.min(self.len());
+        while !self.text.is_char_boundary(o) {
+            o -= 1;
+        }
+        o
+    }
+
     fn commit(&mut self, changes: &ChangeSet) -> ChangeSet {
         debug_assert_eq!(changes.base_len(), self.text.len());
         let inverse = changes.invert_with(|r| self.text.slice(r));

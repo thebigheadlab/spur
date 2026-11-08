@@ -10,6 +10,7 @@ mod bus;
 mod command;
 mod context;
 mod core;
+pub mod editor;
 mod name;
 mod when;
 
