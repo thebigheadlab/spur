@@ -36,8 +36,12 @@ pub fn check_segment(seg: &str) -> Result<(), &'static str> {
     if !chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_') {
         return Err("segment may contain only a-z, 0-9 and _");
     }
+    // `__` is the MCP separator, so a trailing `_` would not round-trip.
     if seg.contains("__") {
         return Err("segment may not contain __");
+    }
+    if seg.ends_with('_') {
+        return Err("segment may not end with _");
     }
     Ok(())
 }
@@ -234,6 +238,9 @@ mod tests {
         assert_eq!(id.to_mcp_name(), "git__stage_hunk");
         assert_eq!(CommandId::from_mcp_name("git__stage_hunk").unwrap(), id);
         assert_eq!(id.namespace(), "git");
+        // A trailing `_` would map `x_.y` to `x___y`, which reads back as `x._y`.
+        assert!(CommandId::new("x_.y").is_err());
+        assert!(CommandId::from_mcp_name("x___y").is_err());
     }
 
     #[test]

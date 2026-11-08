@@ -109,7 +109,12 @@ impl When {
     /// Returns [`ParseError`] with the byte offset of the problem.
     pub fn parse(src: &str) -> Result<Self, ParseError> {
         let toks = lex(src)?;
-        let mut p = Parser { toks, pos: 0, src };
+        let mut p = Parser {
+            toks,
+            pos: 0,
+            src,
+            depth: 0,
+        };
         let root = p.expr()?;
         if let Some(t) = p.toks.get(p.pos) {
             return Err(ParseError {
@@ -399,10 +404,14 @@ fn lex(src: &str) -> Result<Vec<Token>, ParseError> {
     Ok(out)
 }
 
+/// Nesting limit for `(` and `!`, so hostile input cannot overflow the stack.
+const MAX_NESTING: u32 = 64;
+
 struct Parser<'s> {
     toks: Vec<Token>,
     pos: usize,
     src: &'s str,
+    depth: u32,
 }
 
 impl Parser<'_> {
@@ -447,6 +456,16 @@ impl Parser<'_> {
         Ok(v)
     }
 
+    fn nested(&mut self, f: fn(&mut Self) -> Result<Node, ParseError>) -> Result<Node, ParseError> {
+        if self.depth >= MAX_NESTING {
+            return self.err("nested too deeply");
+        }
+        self.depth += 1;
+        let r = f(self);
+        self.depth -= 1;
+        r
+    }
+
     fn expr(&mut self) -> Result<Node, ParseError> {
         let mut v = self.list(&Tok::Or, Self::and)?;
         Ok(if v.len() == 1 {
@@ -479,7 +498,7 @@ impl Parser<'_> {
         if self.peek() == Some(&Tok::Not) {
             let start = self.here();
             self.pos += 1;
-            let inner = self.unary()?;
+            let inner = self.nested(Self::unary)?;
             let end = inner.end;
             return Ok(Node {
                 kind: Kind::Not(Box::new(inner)),
@@ -506,7 +525,7 @@ impl Parser<'_> {
         let first = self.bump();
         let needle = match first {
             Some(Tok::LParen) => {
-                let mut inner = self.expr()?;
+                let mut inner = self.nested(Self::expr)?;
                 if self.bump() != Some(Tok::RParen) {
                     self.pos -= 1;
                     return self.err("expected ')'");
@@ -724,5 +743,14 @@ mod tests {
             "\"editor.mode == normal\""
         );
         assert!(serde_json::from_str::<When>("\"((\"").is_err());
+    }
+
+    #[test]
+    fn deep_nesting_is_an_error_not_a_crash() {
+        for src in ["(".repeat(5000) + "a", "!".repeat(5000) + "a"] {
+            let e = When::parse(&src).unwrap_err();
+            assert!(e.message.contains("nested"), "{e:?}");
+        }
+        assert!(When::parse(&("(".repeat(20) + "a" + &")".repeat(20))).is_ok());
     }
 }

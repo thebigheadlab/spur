@@ -327,6 +327,8 @@ pub struct Cx<'a, S> {
     audit: &'a mut AuditLog,
     info: &'a InvInfo,
     depth: u32,
+    /// The extension whose handler is running, if any; it may only emit `<id>.*`.
+    owner: Option<Arc<str>>,
 }
 
 impl<S> Cx<'_, S> {
@@ -388,18 +390,20 @@ impl<S> Cx<'_, S> {
             audit: &mut *self.audit,
             info: &info,
             depth: self.depth + 1,
+            owner: None,
         };
         run(&mut child, &Target::Id(id.clone()), args)
     }
 
-    /// Queues an event; it is published when the top-level command returns. An
-    /// extension may only emit `<its id>.*`.
+    /// Queues an event; it is published when the top-level command returns. A handler
+    /// registered by an extension may only emit `<its id>.*`; built-in handlers emit
+    /// their own events whoever invoked them.
     ///
     /// # Errors
     ///
-    /// Returns `permission_denied` if an extension emits outside its namespace.
+    /// Returns `permission_denied` if an extension's handler emits outside its namespace.
     pub fn emit(&mut self, name: EventName, payload: Value) -> Result<(), CommandError> {
-        if let Actor::Extension { id } = &self.info.actor {
+        if let Some(id) = &self.owner {
             let ns = name.namespace();
             if ns != &**id || RESERVED_EVENT_FAMILIES.contains(&ns) {
                 return Err(CommandError::new(
@@ -456,6 +460,10 @@ fn run_entry<S>(
     args: &Value,
 ) -> Result<Value, CommandError> {
     let id = &entry.meta.id;
+    cx.owner = match &entry.meta.source {
+        Source::Extension { id } => Some(id.clone()),
+        _ => None,
+    };
     let hooks = registry.middleware.get(id).map_or(&[][..], Vec::as_slice);
     let mut args = Cow::Borrowed(args);
     for mw in hooks {
@@ -699,6 +707,7 @@ impl<S> Core<S> {
             audit: &mut self.audit,
             info: &info,
             depth: 0,
+            owner: None,
         };
         let result = run(&mut cx, &inv.command, &inv.args);
         for (name, actor, payload) in self.outbox.drain(..) {
@@ -1063,6 +1072,17 @@ mod tests {
         assert_eq!(
             run(&mut c, "lsp.ready").unwrap_err().code,
             ErrorCode::PermissionDenied
+        );
+        // A built-in command run by an extension still emits its own events.
+        c.register_fn(CommandMeta::new(id("core.touch"), ""), |cx, _| {
+            cx.emit(EventName::new("buffer.changed").unwrap(), Value::Null)?;
+            Ok(Value::Null)
+        })
+        .unwrap();
+        let (_, sub) = c.bus_mut().subscribe(Filter::all(), 8, None).unwrap();
+        assert!(c.execute(Invocation::new(id("core.touch"), ext())).is_ok());
+        assert!(
+            matches!(sub.try_recv(), Some(Delivery::Event(e)) if e.name.as_str() == "buffer.changed")
         );
     }
 }

@@ -42,7 +42,7 @@ Events (`seq`, `name`, `actor`, `payload`) get a sequence number from 1. A ring 
 
 Each subscriber has a bounded queue (default 256). Publishing never waits: when a queue is full the event is counted as missed, and the subscriber receives one `Lagged { missed, first_missed_seq }` in order before the next event, or on its next receive. Filters are exact names or `prefix.*`.
 
-Events a command emits go to an outbox and are published when the top-level call returns, also on error, because text commits are not rolled back. Extensions may emit only `<id>.*`; the families `buffer`, `selection`, `mode`, `view`, `client`, `extension`, `command`, `bus`, `agent`, `changeset` and `checkpoint` are reserved.
+Events a command emits go to an outbox and are published when the top-level call returns, also on error, because text commits are not rolled back. Handlers an extension registers may emit only `<id>.*` (built-in commands emit their own events whoever invokes them); the families `buffer`, `selection`, `mode`, `view`, `client`, `extension`, `command`, `bus`, `agent`, `changeset` and `checkpoint` are reserved.
 
 ### Audit
 
