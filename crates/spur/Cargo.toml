@@ -12,16 +12,17 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-spur-text.workspace = true
 spur-core.workspace = true
 spur-keymap.workspace = true
-spur-ext.workspace = true
-spur-rpc.workspace = true
+serde_json = "1.0"
 spur-tui = { workspace = true, optional = true }
 spur-gui = { workspace = true, optional = true }
+spur-vim = { workspace = true, optional = true }
 
 [features]
 # Frontends are optional so a headless/remote server build skips the GUI stack.
-default = ["tui", "gui"]
+default = ["tui", "gui", "preset-vim"]
 tui = ["dep:spur-tui"]
 gui = ["dep:spur-gui"]
+# Optional key presets, shipped as extensions and loaded only on request.
+preset-vim = ["dep:spur-vim"]
