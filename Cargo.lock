@@ -560,6 +560,10 @@ dependencies = [
 name = "spur-core"
 version = "0.0.0"
 dependencies = [
+ "criterion",
+ "regex",
+ "serde",
+ "serde_json",
  "spur-text",
 ]
 
