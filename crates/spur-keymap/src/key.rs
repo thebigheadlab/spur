@@ -188,7 +188,12 @@ fn named(name: &str) -> Option<KeyCode> {
 /// Returns [`KeyParseError`] for an unknown key or modifier, or an empty string.
 pub fn parse_keys(s: &str) -> Result<Vec<Key>, KeyParseError> {
     let t = s.trim();
-    let words = t.contains(char::is_whitespace)
+    let lower = t.to_ascii_lowercase();
+    let mod_prefix = MODIFIERS
+        .iter()
+        .any(|m| lower.starts_with(m) && lower[m.len()..].starts_with('+'));
+    let words = mod_prefix
+        || t.contains(char::is_whitespace)
         || (t.len() > 1 && t.contains('+') && !t.contains('<'))
         || (t.chars().count() > 1 && (word_key(t).is_some() || t == "{char}"));
     if words {
@@ -197,6 +202,11 @@ pub fn parse_keys(s: &str) -> Result<Vec<Key>, KeyParseError> {
         parse_brackets(s)
     }
 }
+
+/// Modifier words.
+const MODIFIERS: &[&str] = &[
+    "ctrl", "control", "alt", "opt", "option", "shift", "cmd", "super", "win", "meta",
+];
 
 fn word_key(name: &str) -> Option<KeyCode> {
     match name.to_ascii_lowercase().as_str() {
@@ -213,12 +223,18 @@ fn parse_words(s: &str) -> Result<Vec<Key>, KeyParseError> {
     for word in s.split_whitespace() {
         let offset = word.as_ptr() as usize - base;
         let err = |message: String| KeyParseError { offset, message };
-        let parts: Vec<&str> = word.split('+').collect();
+        // `ctrl++` is ctrl and the `+` key; a lone trailing `+` is missing its key.
+        let (body, plus) = match word.strip_suffix("++") {
+            Some(b) if !b.is_empty() => (format!("{b}+plus"), true),
+            _ => (word.to_owned(), false),
+        };
+        if !plus && word.len() > 1 && word.ends_with('+') {
+            return Err(err(format!("`{word}` is missing a key after `+`")));
+        }
+        let parts: Vec<&str> = body.split('+').collect();
         let (last, mod_parts) = match parts.split_last() {
-            // `ctrl++` ends in an empty part: the key is `+`.
-            Some((&"", rest)) if !rest.is_empty() => ("plus", &rest[..rest.len() - 1]),
-            Some((l, rest)) => (*l, rest),
-            None => return Err(err("empty key".into())),
+            Some((l, rest)) if !l.is_empty() => (*l, rest),
+            _ => return Err(err("empty key".into())),
         };
         let mut mods = Mods::NONE;
         for m in mod_parts {
@@ -379,6 +395,10 @@ mod tests {
         assert!(parse_keys("").is_err());
         assert!(parse_keys("hyper+a").is_err());
         assert!(parse_keys("ctrl+nope").is_err());
+        assert!(parse_keys("g+").is_err());
+        assert!(parse_keys("ctrl+").is_err());
+        let lt = Key::new(KeyCode::Char('<'), Mods::CTRL);
+        assert_eq!(parse_keys(&lt.to_string()).unwrap(), vec![lt]);
     }
 
     #[test]

@@ -47,6 +47,11 @@ pub struct Session {
     /// Who the keys belong to.
     pub actor: Actor,
     observers: Vec<Box<dyn Observer>>,
+    /// Read an unbound alt+char as `esc` then the char. Frontends turn this off when the
+    /// terminal reports real alt keys (kitty keyboard protocol).
+    pub split_alt: bool,
+    /// Counts keys and pastes, so frontends can tell a repeated message from an old one.
+    pub seq: u64,
 }
 
 impl Session {
@@ -63,6 +68,8 @@ impl Session {
             keymap: Keymap::new(),
             actor: Actor::User,
             observers: Vec::new(),
+            split_alt: true,
+            seq: 0,
         };
         s.load_layer(
             Layer::from_toml("default", Source::Core, DEFAULT_LAYER)
@@ -163,8 +170,18 @@ impl Session {
     pub fn key(&mut self, key: Key, now: Instant) -> Status {
         let mode = self.mode();
         // Without the kitty keyboard protocol, `esc` then a quick key arrives as alt+key.
-        // When alt+key means nothing here, treat it as the two keys.
-        if key.mods == Mods::ALT
+        // When alt+key means nothing here, treat it as the two keys. Not on the Ask
+        // card's command list, where it would close the card and type into the text;
+        // on Find it closes find and types over the match, as esc then the key would.
+        let on_list = self
+            .core
+            .state
+            .ask
+            .as_ref()
+            .is_some_and(|a| a.kind != spur_core::editor::AskKind::Find);
+        if self.split_alt
+            && key.mods == Mods::ALT
+            && !on_list
             && let KeyCode::Char(c) = key.code
             && !self.keymap.binds(&mode, key)
         {
@@ -172,6 +189,7 @@ impl Session {
             return self.key(Key::char(c), now);
         }
         self.core.state.message = None;
+        self.seq += 1;
         let feed = self.keymap.feed(key, &mode, self.core.context(), now);
         for d in &feed.run {
             self.run(d);
@@ -262,6 +280,36 @@ impl Session {
             });
             e.message
         })
+    }
+
+    /// Pastes text the way the current mode takes typed text (its fallback command),
+    /// as one dispatch so observers record it. Prompts get the first line only.
+    pub fn paste(&mut self, text: &str) {
+        let mode = self.mode();
+        let insert = CommandId::new("editor.insert_text").unwrap_or_else(|e| unreachable!("{e}"));
+        let command = self
+            .keymap
+            .mode_options(&mode)
+            .and_then(|o| o.fallback.clone())
+            .unwrap_or_else(|| insert.clone());
+        let text = if command == insert {
+            text.to_owned()
+        } else {
+            text.lines().next().unwrap_or_default().to_owned()
+        };
+        let d = Dispatch {
+            steps: Arc::from([crate::keymap::Step {
+                command,
+                args: Arc::new(serde_json::json!({ "text": text })),
+            }]),
+            count: None,
+            register: None,
+            chars: Vec::new(),
+            keys: Vec::new(),
+        };
+        self.core.state.message = None;
+        self.seq += 1;
+        self.run(&d);
     }
 
     /// True once the user asked to quit.

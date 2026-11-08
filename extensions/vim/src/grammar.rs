@@ -370,6 +370,22 @@ fn find_motion(
     } else {
         Kind::Inclusive
     };
+    let start = |s: &Snapshot, h: usize| {
+        if repeat && till {
+            if backward {
+                motion::left(s, h, false)
+            } else {
+                motion::right(s, h, false)
+            }
+        } else {
+            h
+        }
+    };
+    if let Some(r) = without_target(cx, |s, h| {
+        objects::find_char(s, start(s, h), c, n, till, backward)
+    }) {
+        return r;
+    }
     move_ranges(cx, extend, false, kind, move |s, h, _| {
         // A repeated `t` starts one char further so it does not stick before its target.
         let from = if repeat && till {
@@ -382,6 +398,29 @@ fn find_motion(
             h
         };
         objects::find_char(s, from, c, n, till, backward).unwrap_or(h)
+    })
+}
+
+/// A motion that finds no target for any cursor does nothing, and cancels a pending
+/// operator instead of applying it to the char under the cursor.
+fn without_target(
+    cx: C<'_, '_>,
+    target: impl Fn(&Snapshot, usize) -> Option<usize>,
+) -> Option<Result<Value, CommandError>> {
+    let snap = cx.state.snapshot();
+    let none = cx
+        .state
+        .view()
+        .selection
+        .ranges
+        .iter()
+        .all(|r| target(&snap, r.head).is_none());
+    if !none {
+        return None;
+    }
+    Some(match pending(cx.state) {
+        Some(op) => cancel(cx, &op),
+        None => Ok(Value::Null),
     })
 }
 
@@ -582,7 +621,15 @@ pub(crate) fn register(core: &mut Core<Editor>) -> Result<(), RegisterError> {
         );
         meta.repeatable = repeatable;
         core.register_fn(meta, move |cx, args| {
+            let had_op = pending(cx.state).is_some();
             let r = f(cx, args);
+            // A failed motion (no previous search, bad pattern) drops a pending operator.
+            if r.is_err()
+                && had_op
+                && let Some(op) = pending(cx.state)
+            {
+                let _ = cancel(cx, &op);
+            }
             sync_context(cx);
             sync(cx);
             r
@@ -771,6 +818,9 @@ pub(crate) fn register(core: &mut Core<Editor>) -> Result<(), RegisterError> {
         true,
         |cx, a| {
             let args: FlagArgs = parse_args(a)?;
+            if let Some(r) = without_target(cx, objects::match_bracket) {
+                return r;
+            }
             move_ranges(cx, args.extend, false, Kind::Inclusive, |s, h, _| {
                 objects::match_bracket(s, h).unwrap_or(h)
             })

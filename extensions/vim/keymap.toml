@@ -804,3 +804,17 @@ command = "vim.cmdline_submit"
 mode = "cmdline"
 keys = "<BS>"
 command = "vim.cmdline_backspace"
+
+# ---- Spur's own entry points, available in the preset too ----
+
+[[bind]]
+mode = "normal visual visual_line"
+keys = "<C-Space>"
+command = "ask.open"
+label = "Ask"
+
+[[bind]]
+mode = "normal"
+keys = "<C-q>"
+command = "editor.quit"
+label = "Leave"

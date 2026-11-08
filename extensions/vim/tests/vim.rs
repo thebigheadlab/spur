@@ -219,3 +219,32 @@ fn preset_has_no_duplicate_bindings() {
         .collect();
     assert!(dups.is_empty(), "{dups:?}");
 }
+
+#[test]
+fn motions_without_a_target_do_nothing() {
+    check("|abc def", "dfz", "|abc def", "normal");
+    check("|abc def", "dtz", "|abc def", "normal");
+    check("|abc def", "d%", "|abc def", "normal");
+    // A failing motion drops the operator.
+    check("|abc", "dnx", "|bc", "normal");
+}
+
+#[test]
+fn paste_is_recorded_and_respects_the_command_line() {
+    let mut s = session("|a\nb");
+    let now = Instant::now();
+    for k in parse_keys("i").unwrap() {
+        s.key(k, now);
+    }
+    s.paste("P");
+    for k in parse_keys("<Esc>j0.").unwrap() {
+        s.key(k, now);
+    }
+    assert_eq!(state(&s).0, "Pa\nPb");
+    for k in parse_keys(":").unwrap() {
+        s.key(k, now);
+    }
+    s.paste("w");
+    assert_eq!(state(&s).0, "Pa\nPb");
+    assert_eq!(s.core.state.line_prompt.as_deref(), Some(":w"));
+}

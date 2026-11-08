@@ -102,23 +102,23 @@ args = { extend = true }
 [[bind]]
 mode = "edit"
 keys = "ctrl+home"
-command = "editor.move_doc_start"
+command = "editor.move_file_start"
 
 [[bind]]
 mode = "edit"
 keys = "ctrl+shift+home"
-command = "editor.move_doc_start"
+command = "editor.move_file_start"
 args = { extend = true }
 
 [[bind]]
 mode = "edit"
 keys = "ctrl+end"
-command = "editor.move_doc_end"
+command = "editor.move_file_end"
 
 [[bind]]
 mode = "edit"
 keys = "ctrl+shift+end"
-command = "editor.move_doc_end"
+command = "editor.move_file_end"
 args = { extend = true }
 
 [[bind]]

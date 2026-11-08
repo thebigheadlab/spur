@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use spur_text::{SelRange, Selection, Snapshot};
 
 use super::commands::{C, after_selection_change, ev, focus, save, sync_context};
-use super::{Editor, ModeSpec, motion};
+use super::{DocId, Editor, ModeSpec, ViewId, motion};
 use crate::command::{CommandError, CommandMeta, parse_args};
 use crate::core::{Core, RegisterError};
 use crate::name::{CommandId, events};
@@ -72,6 +72,8 @@ pub struct Ask {
     pub origin: Selection,
     /// The text was filled in for you; typing replaces it.
     pub seeded: bool,
+    /// The view it opened in.
+    pub view: ViewId,
 }
 
 /// A command as the Ask card lists it.
@@ -129,8 +131,8 @@ const TITLES: &[(&str, &str)] = &[
     ),
     ("editor.shrink_selection", "Shrink selection"),
     ("editor.collapse_selection", "Drop selection"),
-    ("editor.move_doc_start", "Go to top"),
-    ("editor.move_doc_end", "Go to bottom"),
+    ("editor.move_file_start", "Go to top"),
+    ("editor.move_file_end", "Go to bottom"),
     ("ask.find", "Find in file"),
     ("editor.find_next", "Find next match"),
     ("editor.goto_line", "Go to line"),
@@ -144,7 +146,7 @@ const FEATURED: &[&str] = &[
     "editor.undo",
     "editor.redo",
     "editor.select_all",
-    "editor.move_doc_end",
+    "editor.move_file_end",
     "editor.quit",
 ];
 
@@ -319,13 +321,10 @@ fn ensure_mode(ed: &mut Editor) {
         });
 }
 
-fn switch_mode(cx: C<'_, '_>, mode: &Arc<str>) -> Result<(), CommandError> {
-    let id = focus(cx);
-    let view = cx
-        .state
-        .views
-        .get_mut(&id)
-        .unwrap_or_else(|| unreachable!());
+fn switch_mode(cx: C<'_, '_>, id: ViewId, mode: &Arc<str>) -> Result<(), CommandError> {
+    let Some(view) = cx.state.views.get_mut(&id) else {
+        return Ok(());
+    };
     if view.mode == *mode {
         return Ok(());
     }
@@ -350,7 +349,9 @@ fn open(
         None => cx.state.view().mode.clone(),
     };
     let origin = cx.state.view().selection.clone();
+    let view = focus(cx);
     cx.state.ask = Some(Ask {
+        view,
         kind,
         title: title.into(),
         text,
@@ -362,14 +363,14 @@ fn open(
         seeded: false,
     });
     refresh(cx.state);
-    switch_mode(cx, &ASK_MODE.into())
+    switch_mode(cx, view, &ASK_MODE.into())
 }
 
 fn close(cx: C<'_, '_>) -> Result<Option<Ask>, CommandError> {
     let Some(a) = cx.state.ask.take() else {
         return Ok(None);
     };
-    switch_mode(cx, &a.return_mode)?;
+    switch_mode(cx, a.view, &a.return_mode)?;
     Ok(Some(a))
 }
 
@@ -383,6 +384,37 @@ fn set_selection(cx: C<'_, '_>, sel: Selection) -> Result<(), CommandError> {
     view.goals = vec![None; sel.ranges.len()];
     view.selection = sel;
     after_selection_change(cx)
+}
+
+/// Saves every modified document that has a path, through a view that shows it.
+fn save_all(cx: C<'_, '_>) -> Result<(), CommandError> {
+    let focus_before = focus(cx);
+    let docs: Vec<DocId> = cx
+        .state
+        .docs
+        .iter()
+        .filter(|(_, d)| d.modified() && d.path.is_some())
+        .map(|(id, _)| *id)
+        .collect();
+    let mut result = Ok(());
+    for doc in docs {
+        let Some(view) = cx
+            .state
+            .views
+            .iter()
+            .find(|(_, v)| v.doc == doc)
+            .map(|(id, _)| *id)
+        else {
+            continue;
+        };
+        cx.state.focus = view;
+        if let Err(e) = save(cx, None) {
+            result = Err(e);
+            break;
+        }
+    }
+    cx.state.focus = focus_before;
+    result
 }
 
 /// Byte ranges of `needle` in `hay`, ignoring case unless the needle has capitals.
@@ -485,6 +517,9 @@ fn find_live(cx: C<'_, '_>) -> Result<(), CommandError> {
         .anchor
         .min(origin.ranges[origin.primary].head);
     let found = find(cx, &text, from, false)?;
+    if found.1 == 0 {
+        set_selection(cx, origin)?;
+    }
     if let Some(a) = cx.state.ask.as_mut() {
         a.note = Some(find_note(found));
     }
@@ -550,7 +585,9 @@ fn grow(s: &Snapshot, r: SelRange) -> (std::ops::Range<usize>, Grain) {
         b1 += 1;
     }
     let block = motion::line_start(s, b0)..motion::line_end(s, b1);
-    if bigger(&block) {
+    // From a blank line there is no block of its own; go straight to the file.
+    let on_blank = (l0..=l1).all(blank);
+    if !on_blank && bigger(&block) {
         return (block, Grain::Block);
     }
     (0..s.len(), Grain::All)
@@ -582,6 +619,26 @@ struct FindArgs {
     text: String,
     #[serde(default)]
     backward: bool,
+}
+
+#[derive(Deserialize, Default)]
+struct ExtendArgs {
+    #[serde(default)]
+    extend: bool,
+}
+
+fn to_edge(cx: C<'_, '_>, end: bool, extend: bool) -> Result<Value, CommandError> {
+    let at = if end { cx.state.snapshot().len() } else { 0 };
+    let p = cx.state.primary();
+    let anchor = if extend { p.anchor } else { at };
+    set_selection(
+        cx,
+        Selection {
+            ranges: vec![SelRange { anchor, head: at }],
+            primary: 0,
+        },
+    )?;
+    Ok(Value::Null)
 }
 
 #[derive(Deserialize, Default)]
@@ -725,7 +782,7 @@ pub(super) fn register(core: &mut Core<Editor>) -> Result<(), RegisterError> {
             if let Some(a) = close(cx)?
                 && a.kind == AskKind::Find
             {
-                if a.text.is_empty() {
+                if a.text.is_empty() || a.note.as_deref() == Some("no matches") {
                     set_selection(cx, a.origin)?;
                 } else {
                     cx.state.find_text = Some(a.text);
@@ -832,6 +889,22 @@ pub(super) fn register(core: &mut Core<Editor>) -> Result<(), RegisterError> {
             Ok(Value::Null)
         },
     )?;
+    reg(
+        "editor.move_file_start",
+        "Put the cursor at the very start of the file (extend = select to there).",
+        |cx, a| {
+            let args: ExtendArgs = parse_args(a)?;
+            to_edge(cx, false, args.extend)
+        },
+    )?;
+    reg(
+        "editor.move_file_end",
+        "Put the cursor at the very end of the file (extend = select to there).",
+        |cx, a| {
+            let args: ExtendArgs = parse_args(a)?;
+            to_edge(cx, true, args.extend)
+        },
+    )?;
     reg("editor.select_all", "Select the whole file.", |cx, _| {
         let len = cx.state.snapshot().len();
         set_selection(
@@ -871,10 +944,12 @@ pub(super) fn register(core: &mut Core<Editor>) -> Result<(), RegisterError> {
                     }
                 })
                 .collect();
-            let after = Selection {
+            let mut after = Selection {
                 ranges,
                 primary: before.primary,
             };
+            let mut goals = vec![None; after.ranges.len()];
+            super::commands::merge_cursors(&mut after, &mut goals);
             stack.push((after.clone(), before, biggest));
             set_selection(cx, after)?;
             let id = focus(cx);
@@ -933,9 +1008,14 @@ pub(super) fn register(core: &mut Core<Editor>) -> Result<(), RegisterError> {
                 cx.state.quit = true;
                 return Ok(Value::Null);
             }
-            let has_path = cx.state.doc().path.is_some();
+            let all_have_paths = cx
+                .state
+                .docs
+                .values()
+                .filter(|d| d.modified())
+                .all(|d| d.path.is_some());
             let mut items = Vec::new();
-            if has_path {
+            if all_have_paths {
                 items.push(AskItem {
                     title: "Save and leave".into(),
                     hint: String::new(),
@@ -967,9 +1047,9 @@ pub(super) fn register(core: &mut Core<Editor>) -> Result<(), RegisterError> {
     })?;
     reg(
         "editor.save_and_quit",
-        "Save the file, then leave Spur.",
+        "Save every changed file, then leave Spur.",
         |cx, _| {
-            save(cx, None)?;
+            save_all(cx)?;
             cx.state.quit = true;
             Ok(Value::Null)
         },

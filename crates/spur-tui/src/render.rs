@@ -179,6 +179,20 @@ impl Grid {
 
     /// Sets one grapheme of display width `w` at (x, y).
     pub fn set(&mut self, x: u16, y: u16, g: &str, style: Style, w: u16) {
+        // Overwriting half of a wide grapheme blanks its other half, so no cell is left
+        // as an orphan continuation the terminal never repaints.
+        if x > 0
+            && let Some(i) = self.idx(x, y)
+            && self.cells[i].sym.is_empty()
+            && let Some(j) = self.idx(x - 1, y)
+        {
+            self.cells[j].sym = " ".into();
+        }
+        if let Some(i) = self.idx(x + w, y)
+            && self.cells[i].sym.is_empty()
+        {
+            self.cells[i].sym = " ".into();
+        }
         if let Some(i) = self.idx(x, y) {
             self.cells[i] = Cell {
                 sym: g.to_owned(),
@@ -198,12 +212,7 @@ impl Grid {
     /// Fills a row span with a style.
     pub fn fill(&mut self, y: u16, from: u16, to: u16, style: Style) {
         for x in from..to.min(self.width) {
-            if let Some(i) = self.idx(x, y) {
-                self.cells[i] = Cell {
-                    sym: " ".into(),
-                    style,
-                };
-            }
+            self.set(x, y, " ", style, 1);
         }
     }
 
@@ -236,8 +245,8 @@ pub struct UiState {
     pub left_col: usize,
     /// When the keymap started waiting for more keys.
     pub pending_since: Option<Instant>,
-    /// The message on the rail and when it first showed.
-    pub message: Option<(String, Instant)>,
+    /// The message on the rail, the input it followed and when it first showed.
+    pub message: Option<(String, u64, Instant)>,
 }
 
 /// Display layout of one line: for each grapheme, (char index, display column, width,
@@ -360,11 +369,24 @@ fn card_frame(grid: &mut Grid, x: u16, y: u16, w: u16, h: u16, title: &str) {
     grid.put(x + 1, bottom, &line, CARD_EDGE);
     grid.put(right, bottom, "\u{256f}", CARD_EDGE);
     if !title.is_empty() {
-        let t = format!(" {title} ");
-        let max = usize::from(w.saturating_sub(4));
-        let t: String = t.graphemes(true).take(max).collect();
+        let t = fit(&format!(" {title} "), usize::from(w.saturating_sub(4)));
         grid.put(x + 2, y, &t, CARD_TITLE);
     }
+}
+
+/// Cuts `text` to at most `w` display columns.
+fn fit(text: &str, w: usize) -> String {
+    let mut used = 0;
+    let mut out = String::new();
+    for g in text.graphemes(true) {
+        let gw = g.width();
+        if used + gw > w {
+            break;
+        }
+        used += gw;
+        out.push_str(g);
+    }
+    out
 }
 
 /// Fits `text` into `w` columns, keeping the end (what was typed last).
@@ -395,7 +417,7 @@ fn place(
     bottom: u16,
 ) -> Option<(u16, u16)> {
     let (cx, cy) = caret;
-    if w > width || h > bottom.saturating_sub(top) {
+    if w < 4 || h < 2 || w > width || h > bottom.saturating_sub(top) {
         return None;
     }
     let x = cx.saturating_sub(2).min(width - w);
@@ -529,11 +551,12 @@ pub fn render(s: &mut Session, width: u16, height: u16, ui: &mut UiState, now: I
 
     // Message: shown on the rail for a few seconds.
     let message = if let Some(m) = &vp.message {
+        // A message set by a newer key shows again even with the same text.
         let since = match &ui.message {
-            Some((t, at)) if *t == m.text => *at,
+            Some((t, seq, at)) if *t == m.text && *seq == s.seq => *at,
             _ => now,
         };
-        ui.message = Some((m.text.clone(), since));
+        ui.message = Some((m.text.clone(), s.seq, since));
         (now.duration_since(since) < MESSAGE_FOR).then_some((m.text.as_str(), m.error))
     } else {
         ui.message = None;
@@ -547,7 +570,14 @@ pub fn render(s: &mut Session, width: u16, height: u16, ui: &mut UiState, now: I
         let w = width.saturating_sub(2).clamp(20.min(width), 60);
         let inner = usize::from(w.saturating_sub(4));
         let input = a.kind != AskKind::Confirm;
-        let rows_n = u16::try_from(a.items.len()).unwrap_or(0) + u16::from(input);
+        // On a short terminal, show a window of rows around the highlighted one.
+        let room = usize::from(height.saturating_sub(top_row))
+            .saturating_sub(2 + usize::from(input))
+            .max(1);
+        let first = a.selected.saturating_sub(room - 1);
+        let shown: Vec<(usize, &spur_core::editor::AskItem)> =
+            a.items.iter().enumerate().skip(first).take(room).collect();
+        let rows_n = u16::try_from(shown.len()).unwrap_or(0) + u16::from(input);
         let h = rows_n + 2;
         if let Some((x, y)) = place(caret, w, h, width, top_row, height) {
             card_frame(&mut grid, x, y, w, h, &a.title);
@@ -576,7 +606,7 @@ pub fn render(s: &mut Session, width: u16, height: u16, ui: &mut UiState, now: I
             } else {
                 cursor = None;
             }
-            for (i, it) in a.items.iter().enumerate() {
+            for (i, it) in shown {
                 let picked = i == a.selected;
                 let (st, hs) = if picked {
                     (CARD_PICK, CARD_PICK_HINT)
@@ -585,11 +615,7 @@ pub fn render(s: &mut Session, width: u16, height: u16, ui: &mut UiState, now: I
                 };
                 grid.fill(ry, x + 1, x + w - 1, st);
                 let hint_w = it.hint.width();
-                let title: String = it
-                    .title
-                    .graphemes(true)
-                    .take(inner.saturating_sub(hint_w + 2))
-                    .collect();
+                let title = fit(&it.title, inner.saturating_sub(hint_w + 2));
                 grid.put(x + 2, ry, &title, st);
                 if !it.hint.is_empty() {
                     let hx = (x + w).saturating_sub(2 + u16::try_from(hint_w).unwrap_or(0));
@@ -641,7 +667,8 @@ pub fn render(s: &mut Session, width: u16, height: u16, ui: &mut UiState, now: I
                         let ry = y + 1 + u16::try_from(i).unwrap_or(0);
                         grid.put(x + 2, ry, k, CARD_TITLE);
                         let lx = x + 2 + u16::try_from(kw + 2).unwrap_or(0);
-                        grid.put(lx, ry, l, CARD);
+                        let room = usize::from((x + w).saturating_sub(lx + 2));
+                        grid.put(lx, ry, &fit(l, room), CARD);
                     }
                 }
             }
@@ -918,6 +945,48 @@ mod tests {
             (0..14).any(|y| f.grid.row(y).contains("to the top")),
             "hints missing"
         );
+    }
+
+    #[test]
+    fn ask_card_fits_short_terminals_and_zero_width() {
+        let mut s = session("one\ntwo");
+        let mut ui = UiState::default();
+        let now = Instant::now();
+        s.key(spur_keymap::parse_keys("ctrl+space").unwrap()[0], now);
+        let f = render(&mut s, 40, 8, &mut ui, now);
+        assert!(
+            (0..8).any(|y| f.grid.row(y).contains('\u{203a}')),
+            "card missing"
+        );
+        for (w, h) in [(0, 30), (1, 30), (3, 3), (0, 0)] {
+            let _ = render(&mut s, w, h, &mut ui, now);
+        }
+    }
+
+    #[test]
+    fn same_message_twice_shows_again() {
+        let mut s = session("x");
+        let mut ui = UiState::default();
+        let now = Instant::now();
+        let save = spur_keymap::parse_keys("ctrl+s").unwrap()[0];
+        s.key(save, now);
+        let _ = render(&mut s, 40, 5, &mut ui, now);
+        let later = now + MESSAGE_FOR;
+        s.key(save, later);
+        let f = render(&mut s, 40, 5, &mut ui, later);
+        assert!(f.grid.row(0).contains("file name"), "{}", f.grid.row(0));
+    }
+
+    #[test]
+    fn covering_half_a_wide_char_blanks_the_other_half() {
+        let mut g = Grid::new(6, 1);
+        g.put(0, 0, "\u{65e5}\u{672c}", Style::default());
+        g.set(1, 0, "|", Style::default(), 1);
+        let syms: Vec<&str> = g.cells.iter().map(|c| c.sym.as_str()).collect();
+        assert_eq!(syms[..4], [" ", "|", "\u{672c}", ""]);
+        // Writing over the left half of a wide char blanks its right half.
+        g.set(2, 0, "x", Style::default(), 1);
+        assert_eq!(g.cells[3].sym, " ");
     }
 
     #[test]

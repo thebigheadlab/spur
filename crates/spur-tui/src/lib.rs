@@ -28,6 +28,9 @@ pub const NAME: &str = env!("CARGO_PKG_NAME");
 /// update.
 const IDLE_POLL: Duration = Duration::from_millis(500);
 
+/// Set while our keyboard flags are pushed, so restoring pops them exactly once.
+static PUSHED_FLAGS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Copper caret (OSC 12); terminals that do not know it ignore it.
 const CURSOR_COLOR: &str = "\x1b]12;#d98b48\x07";
 /// Back to the user's caret color (OSC 112).
@@ -37,9 +40,11 @@ const CURSOR_COLOR_RESET: &str = "\x1b]112\x07";
 /// a panic hook.
 pub fn restore_terminal() {
     let mut out = io::stdout();
+    if PUSHED_FLAGS.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        let _ = execute!(out, PopKeyboardEnhancementFlags);
+    }
     let _ = execute!(
         out,
-        PopKeyboardEnhancementFlags,
         DisableBracketedPaste,
         cursor::SetCursorStyle::DefaultUserShape,
         crossterm::style::Print(CURSOR_COLOR_RESET),
@@ -70,6 +75,7 @@ impl Guard {
                 out,
                 PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
             )?;
+            PUSHED_FLAGS.store(true, std::sync::atomic::Ordering::SeqCst);
         }
         let prev = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
@@ -93,6 +99,8 @@ impl Drop for Guard {
 /// Returns terminal I/O errors. The terminal is restored either way.
 pub fn run(session: &mut Session) -> io::Result<()> {
     let _guard = Guard::enter()?;
+    // With the kitty protocol the terminal reports real alt keys; no need to guess.
+    session.split_alt = !PUSHED_FLAGS.load(std::sync::atomic::Ordering::SeqCst);
     let mut ui = UiState::default();
     let mut prev: Option<Frame> = None;
     let mut buf = Vec::with_capacity(64 * 1024);
@@ -147,18 +155,7 @@ fn handle(session: &mut Session, ev: Event, prev: &mut Option<Frame>) {
         }
         Event::Paste(text) => {
             let text = text.replace("\r\n", "\n").replace('\r', "\n");
-            // Into the Ask card when it is open (one line), else into the text.
-            let id = if session.core.state.ask.is_some() {
-                "ask.type"
-            } else {
-                "editor.insert_text"
-            };
-            let text = if id == "ask.type" {
-                text.lines().next().unwrap_or_default().to_owned()
-            } else {
-                text
-            };
-            let _ = session.command(id, serde_json::json!({ "text": text }));
+            session.paste(&text);
         }
         // Force a full redraw.
         Event::Resize(..) => *prev = None,

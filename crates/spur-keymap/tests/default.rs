@@ -262,3 +262,95 @@ fn unbound_alt_key_is_esc_then_key() {
     assert!(s.core.state.ask.is_none());
     assert_eq!(text(&s), "axc");
 }
+
+#[test]
+fn alt_key_on_the_ask_card_stays_on_the_card() {
+    let mut s = session("one", 0);
+    press(&mut s, "ctrl+space");
+    typ(&mut s, "sa");
+    press(&mut s, "alt+v");
+    assert_eq!(&*s.mode(), "ask");
+    assert_eq!(text(&s), "one");
+}
+
+#[test]
+fn grow_merges_cursors_in_one_word() {
+    let mut s = session("hello world", 1);
+    let id = s.core.state.focus;
+    s.core.state.views.get_mut(&id).unwrap().selection = Selection {
+        ranges: vec![SelRange::cursor(1), SelRange::cursor(3)],
+        primary: 0,
+    };
+    press(&mut s, "alt+up");
+    assert_eq!(s.core.state.view().selection.ranges.len(), 1);
+}
+
+#[test]
+fn grow_from_a_blank_line_skips_to_the_file() {
+    let mut s = session("aaa\nbbb\n\nccc\nddd", 8);
+    press(&mut s, "alt+up");
+    assert_eq!(selected(&s), text(&s));
+}
+
+#[test]
+fn ctrl_end_goes_to_the_very_end() {
+    let mut s = session("one\n  two three", 0);
+    press(&mut s, "ctrl+end");
+    assert_eq!(s.core.state.primary().head, 15);
+    press(&mut s, "ctrl+shift+home");
+    assert_eq!(selected(&s), text(&s));
+}
+
+#[test]
+fn find_without_matches_goes_back() {
+    let mut s = session("abc abd", 7);
+    press(&mut s, "ctrl+f");
+    typ(&mut s, "abz");
+    assert_eq!(s.core.state.primary().head, 7);
+    assert_eq!(selected(&s), "");
+    press(&mut s, "esc");
+    assert_eq!(s.core.state.primary().head, 7);
+    assert!(s.core.state.find_text.is_none());
+}
+
+#[test]
+fn save_and_leave_saves_every_file() {
+    let dir = std::env::temp_dir().join(format!("spur-leave-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (a, b) = (dir.join("a.txt"), dir.join("b.txt"));
+    std::fs::write(&a, "aaa").unwrap();
+    std::fs::write(&b, "bbb").unwrap();
+    let mut s = Session::new();
+    s.command("editor.open", serde_json::json!({ "path": b }))
+        .unwrap();
+    typ(&mut s, "X");
+    s.command("editor.open", serde_json::json!({ "path": a }))
+        .unwrap();
+    press(&mut s, "ctrl+q");
+    let titles: Vec<_> = s
+        .core
+        .state
+        .ask
+        .as_ref()
+        .unwrap()
+        .items
+        .iter()
+        .map(|i| i.title.clone())
+        .collect();
+    assert_eq!(titles[0], "Save and leave");
+    press(&mut s, "enter");
+    assert!(s.should_quit());
+    assert_eq!(std::fs::read_to_string(&b).unwrap(), "Xbbb");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn paste_goes_where_typing_goes() {
+    let mut s = session("x", 0);
+    s.paste("ab\ncd");
+    assert_eq!(text(&s), "ab\ncdx");
+    press(&mut s, "ctrl+space");
+    s.paste("save\nmore");
+    assert_eq!(s.core.state.ask.as_ref().unwrap().text, "save");
+    assert_eq!(text(&s), "ab\ncdx");
+}
