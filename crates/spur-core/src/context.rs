@@ -115,7 +115,7 @@ impl Context {
         old
     }
 
-    /// Increases on every change, so callers (which-key, menus) can cache results.
+    /// Increases on every change, so callers (key hints, menus) can cache results.
     pub fn generation(&self) -> u64 {
         self.generation
     }

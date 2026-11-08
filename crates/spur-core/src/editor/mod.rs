@@ -1,16 +1,72 @@
-//! Editor state: documents, views, modes and registers, plus the preset-agnostic
-//! `editor.*` and `buffer.*` commands that operate on them.
+//! Editor state: documents, views, modes and clips, plus the preset-agnostic
+//! `editor.*`, `buffer.*` and `ask.*` commands that operate on them.
 
+pub mod ask;
 mod commands;
 pub mod motion;
 
+use std::any::{Any, TypeId};
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use spur_text::{Buffer, Point, SelRange, Selection, Snapshot, Version};
 
+pub use ask::{Ask, AskItem, AskKind, Entry, Grain};
 pub use commands::register_editor_commands;
+
+/// Building blocks for preset extensions that add their own editing commands.
+pub mod kit {
+    pub use super::commands::{
+        C, Kind, after_selection_change, apply_hunks, count, ev, focus, line_ending, move_ranges,
+        open, save, span, sync_context,
+    };
+}
+
+/// A recorded command call, replayed by presets that repeat changes or play macros.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Call {
+    /// Command.
+    pub command: crate::CommandId,
+    /// Args.
+    pub args: Arc<serde_json::Value>,
+    /// Count.
+    pub count: Option<u32>,
+    /// Register.
+    pub register: Option<char>,
+}
+
+/// Lets a preset take over a motion: called before every motion command moves the
+/// selections, with the motion's kind and target function. Returning `Some` replaces
+/// the move (a preset applying an operator to the motion's range, for example).
+pub type MotionHook = fn(
+    &mut crate::Cx<'_, Editor>,
+    commands::Kind,
+    &dyn Fn(&Snapshot, usize, usize) -> usize,
+) -> Option<Result<serde_json::Value, crate::CommandError>>;
+
+/// State that extensions keep on the editor, one value per type.
+#[derive(Default)]
+pub struct Extensions(HashMap<TypeId, Box<dyn Any + Send + Sync>>);
+
+impl Extensions {
+    /// The value of type `T`, if set.
+    pub fn get<T: Any + Send + Sync>(&self) -> Option<&T> {
+        self.0.get(&TypeId::of::<T>())?.downcast_ref()
+    }
+
+    /// The value of type `T`, created with `Default` if missing.
+    pub fn get_mut<T: Any + Send + Sync + Default>(&mut self) -> &mut T {
+        self.0
+            .entry(TypeId::of::<T>())
+            .or_insert_with(|| Box::new(T::default()))
+            .downcast_mut()
+            .unwrap_or_else(|| unreachable!("keyed by type"))
+    }
+}
+
+/// The one mode Spur needs: typing edits text.
+pub const EDIT_MODE: &str = "edit";
 
 /// Identifies a document.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize)]
@@ -52,19 +108,39 @@ pub struct View {
     pub turn: u64,
     /// First visible line.
     pub top_line: usize,
+    /// While > 0, edits do not start new undo steps (replays by presets).
+    pub turn_lock: u32,
+    /// Grow history: (selection after, selection before, grain), newest last.
+    pub grain: Vec<(Selection, Selection, Grain)>,
+}
+
+impl View {
+    /// Starts a new undo step unless replay holds the current one.
+    pub fn bump_turn(&mut self) {
+        if self.turn_lock == 0 {
+            self.turn += 1;
+        }
+    }
 }
 
 /// A mode, as data. Presets add their own.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct ModeSpec {
     /// Name, e.g. `normal`.
     pub name: Arc<str>,
     /// Edits made in this mode join one undo step until the mode is left or the cursor
     /// moves (insert-like modes). Otherwise each top-level edit is its own step.
     pub groups_edits: bool,
+    /// The cursor sits on a char and cannot rest after the last one.
+    pub block_cursor: bool,
+    /// Selections include the char under the cursor.
+    pub inclusive_selection: bool,
+    /// Selections cover whole lines.
+    pub linewise_selection: bool,
 }
 
-/// Text held in a register.
+/// Copied text.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Register {
     /// One entry per cursor.
@@ -83,11 +159,36 @@ pub struct Editor {
     pub focus: ViewId,
     /// Known modes.
     pub modes: HashMap<Arc<str>, ModeSpec>,
-    /// Registers; `"` is the unnamed one.
+    /// Copied text by name; `"` is the clipboard copy and paste use by default.
     pub registers: HashMap<char, Register>,
     /// Mode new views start in.
     pub default_mode: Arc<str>,
+    /// A one-line prompt a preset is showing (its own command line), with its prefix.
+    pub line_prompt: Option<String>,
+    /// A preset's motion hook, see [`MotionHook`].
+    pub motion_hook: Option<MotionHook>,
+    /// Extension state.
+    pub ext: Extensions,
+    /// A message to show briefly.
+    pub message: Option<Message>,
+    /// Set by `editor.quit`; the frontend exits.
+    pub quit: bool,
+    /// The Ask card, while open.
+    pub ask: Option<Ask>,
+    /// Commands the Ask card can list, filled by the frontend from the registry.
+    pub entries: Vec<Entry>,
+    /// Text of the last find.
+    pub find_text: Option<String>,
     next_id: u64,
+}
+
+/// A short message for the user.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Message {
+    /// Text.
+    pub text: String,
+    /// An error.
+    pub error: bool,
 }
 
 impl Default for Editor {
@@ -97,25 +198,35 @@ impl Default for Editor {
 }
 
 impl Editor {
-    /// An editor with one empty scratch document, starting in `insert` mode (no preset).
+    /// An editor with one empty document, in the single `edit` mode. Typing types; there
+    /// is nothing else to learn. Presets may add modes of their own.
     pub fn new() -> Self {
         let mut modes = HashMap::new();
-        for (name, groups_edits) in [("normal", false), ("insert", true)] {
-            modes.insert(
-                Arc::from(name),
-                ModeSpec {
-                    name: name.into(),
-                    groups_edits,
-                },
-            );
-        }
+        modes.insert(
+            Arc::from(EDIT_MODE),
+            ModeSpec {
+                name: EDIT_MODE.into(),
+                groups_edits: true,
+                block_cursor: false,
+                inclusive_selection: false,
+                linewise_selection: false,
+            },
+        );
         let mut ed = Self {
             docs: BTreeMap::new(),
             views: BTreeMap::new(),
             focus: ViewId(0),
             modes,
             registers: HashMap::new(),
-            default_mode: "insert".into(),
+            default_mode: EDIT_MODE.into(),
+            line_prompt: None,
+            motion_hook: None,
+            ext: Extensions::default(),
+            message: None,
+            quit: false,
+            ask: None,
+            entries: Vec::new(),
+            find_text: None,
             next_id: 1,
         };
         let doc = ed.add_doc(Buffer::new(""), None);
@@ -156,6 +267,8 @@ impl Editor {
                 mode: self.default_mode.clone(),
                 turn: 0,
                 top_line: 0,
+                turn_lock: 0,
+                grain: Vec::new(),
             },
         );
         id
@@ -181,7 +294,9 @@ impl Editor {
         let v = self.view();
         self.modes
             .get(&v.mode)
-            .unwrap_or_else(|| &self.modes[&self.default_mode])
+            .or_else(|| self.modes.get(&self.default_mode))
+            .or_else(|| self.modes.get(EDIT_MODE))
+            .unwrap_or_else(|| unreachable!("the edit mode is never removed"))
     }
 
     /// Scrolls the focused view so the primary cursor is visible with `margin` lines.
@@ -219,12 +334,20 @@ impl Editor {
             line: motion::line_of(&snap, off),
             column: motion::char_col(&snap, off),
         };
+        let inclusive = self.mode().inclusive_selection;
+        let linewise = self.mode().linewise_selection;
         let mut cursors = Vec::new();
         let mut selections = Vec::new();
         for (i, r) in view.selection.ranges.iter().enumerate() {
             cursors.push((point(r.head), i == view.selection.primary));
-            if r.anchor != r.head {
-                let (a, b) = (r.anchor.min(r.head), r.anchor.max(r.head));
+            let (mut a, mut b) = (r.anchor.min(r.head), r.anchor.max(r.head));
+            if linewise {
+                a = motion::line_start(&snap, motion::line_of(&snap, a));
+                b = motion::line_end(&snap, motion::line_of(&snap, b));
+            } else if inclusive {
+                b = snap.next_grapheme_boundary(b).unwrap_or(b);
+            }
+            if a != b {
                 selections.push((point(a), point(b)));
             }
         }
@@ -237,6 +360,65 @@ impl Editor {
             mode: view.mode.clone(),
             path: doc.path.clone(),
             modified: doc.modified(),
+            line_prompt: self.line_prompt.clone(),
+            message: self.message.clone(),
+            ask: self.ask.clone(),
+            grain: view
+                .grain
+                .last()
+                .filter(|(after, _, _)| *after == view.selection)
+                .map(|g| g.2),
+            highlights: self.highlights(&snap, view.top_line, end),
+        }
+    }
+
+    /// Other visible matches of the open find, for highlighting.
+    fn highlights(&self, snap: &Snapshot, top: usize, end: usize) -> Vec<(Point, Point)> {
+        let Some(a) = self.ask.as_ref().filter(|a| a.kind == AskKind::Find) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for line in top..end {
+            let start = motion::line_start(snap, line);
+            let text = motion::line_text(snap, line);
+            for m in ask::matches(&text, &a.text) {
+                let col = |b: usize| text[..b].chars().count();
+                out.push((
+                    Point {
+                        line,
+                        column: col(m.start),
+                    },
+                    Point {
+                        line,
+                        column: col(m.end),
+                    },
+                ));
+            }
+            let _ = start;
+        }
+        out
+    }
+
+    /// Moves cursors off line endings in block-cursor modes.
+    pub fn clamp_cursors(&mut self) {
+        if !self.mode().block_cursor {
+            return;
+        }
+        let snap = self.snapshot();
+        let view = self
+            .views
+            .get_mut(&self.focus)
+            .unwrap_or_else(|| unreachable!());
+        for r in &mut view.selection.ranges {
+            let line = motion::line_of(&snap, r.head);
+            let end = motion::line_end(&snap, line);
+            if r.head >= end && end > motion::line_start(&snap, line) {
+                let collapsed = r.anchor == r.head;
+                r.head = motion::left(&snap, end, false);
+                if collapsed {
+                    r.anchor = r.head;
+                }
+            }
         }
     }
 
@@ -267,4 +449,14 @@ pub struct Viewport {
     pub path: Option<PathBuf>,
     /// Unsaved changes.
     pub modified: bool,
+    /// A preset's one-line prompt, while open.
+    pub line_prompt: Option<String>,
+    /// Message to show briefly.
+    pub message: Option<Message>,
+    /// The Ask card, while open.
+    pub ask: Option<Ask>,
+    /// Size of the selection after a grow, while it stands.
+    pub grain: Option<Grain>,
+    /// Find matches on the visible lines.
+    pub highlights: Vec<(Point, Point)>,
 }

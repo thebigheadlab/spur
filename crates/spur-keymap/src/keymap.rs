@@ -1,5 +1,5 @@
 //! Layered keymaps compiled into one trie per mode, with `when` filters, timeouts,
-//! counts, registers, sticky groups and generated which-key menus.
+//! counts, registers, sticky groups and generated key hint menus.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -44,11 +44,13 @@ pub struct Binding {
     pub action: Action,
     /// Condition.
     pub when: Option<When>,
-    /// Label for which-key.
+    /// Label for key hints.
     pub label: Option<Arc<str>>,
+    /// Fire at once even if longer bindings start with these keys.
+    pub nowait: bool,
 }
 
-/// A labelled prefix (`<Space>` = "+leader"), optionally sticky: after a binding under
+/// A labelled prefix (`ctrl+k` = "more"), optionally sticky: after a binding under
 /// it fires, the prefix stays active until `<Esc>`.
 #[derive(Clone, Debug)]
 pub struct Group {
@@ -74,6 +76,21 @@ pub struct ModeOptions {
     /// Command run with `{"text": c}` for an unbound printable key (self-insert).
     #[serde(default)]
     pub fallback: Option<CommandId>,
+    /// Editor mode setting: edits join one undo step (insert-like).
+    #[serde(default)]
+    pub groups_edits: Option<bool>,
+    /// Editor mode setting: the cursor sits on a char.
+    #[serde(default)]
+    pub block_cursor: Option<bool>,
+    /// Editor mode setting: selections include the char under the cursor.
+    #[serde(default)]
+    pub inclusive_selection: Option<bool>,
+    /// Editor mode setting: selections cover whole lines.
+    #[serde(default)]
+    pub linewise_selection: Option<bool>,
+    /// Cursor shape hint for frontends: `block`, `bar` or `underline`.
+    #[serde(default)]
+    pub cursor: Option<String>,
 }
 
 /// A layer: bindings from one source (core default, preset, user config, extension).
@@ -130,9 +147,12 @@ pub struct BindingSpec {
     /// Condition.
     #[serde(default)]
     pub when: Option<String>,
-    /// which-key label.
+    /// Key hint label.
     #[serde(default)]
     pub label: Option<String>,
+    /// Fire at once even if longer bindings exist.
+    #[serde(default)]
+    pub nowait: bool,
 }
 
 /// Serialized step.
@@ -248,6 +268,7 @@ impl Layer {
                     action: action.clone(),
                     when: when.clone(),
                     label: b.label.as_deref().map(Arc::from),
+                    nowait: b.nowait,
                 });
             }
         }
@@ -273,6 +294,9 @@ impl Layer {
         Ok(layer)
     }
 }
+
+/// Largest count a key sequence can carry, so a typo cannot hang or exhaust memory.
+pub const MAX_COUNT: u32 = 9999;
 
 /// A binding as placed in the compiled trie.
 #[derive(Debug)]
@@ -400,7 +424,7 @@ struct Pending {
     sticky: Option<Vec<Key>>,
 }
 
-/// One row of a which-key menu.
+/// One row of a key hints menu.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MenuItem {
     /// The next key.
@@ -509,6 +533,18 @@ impl Keymap {
         removed
     }
 
+    /// Merged options of `mode`.
+    pub fn mode_options(&self, mode: &str) -> Option<&ModeOptions> {
+        self.options.get(mode)
+    }
+
+    /// All modes with options, sorted.
+    pub fn modes(&self) -> Vec<(&str, &ModeOptions)> {
+        let mut v: Vec<_> = self.options.iter().map(|(k, v)| (&**k, v)).collect();
+        v.sort_by_key(|(k, _)| *k);
+        v
+    }
+
     /// Layer names, bottom first.
     pub fn layers(&self) -> impl Iterator<Item = &str> {
         self.layers.iter().map(|l| &*l.name)
@@ -526,6 +562,16 @@ impl Keymap {
                 if opts.fallback.is_some() {
                     o.fallback.clone_from(&opts.fallback);
                 }
+                macro_rules! take {
+                    ($($f:ident),*) => {$(if opts.$f.is_some() { o.$f.clone_from(&opts.$f); })*};
+                }
+                take!(
+                    groups_edits,
+                    block_cursor,
+                    inclusive_selection,
+                    linewise_selection,
+                    cursor
+                );
             }
             for g in &layer.groups {
                 let mut node = self.tries.entry(g.mode.clone()).or_default();
@@ -562,7 +608,14 @@ impl Keymap {
         Some(node)
     }
 
-    /// Keys typed so far (for the statusline), with count and register.
+    /// True if `key`, typed now, starts or completes a binding in `mode`.
+    pub fn binds(&self, mode: &str, key: Key) -> bool {
+        let mut keys = self.pending.keys.clone();
+        keys.push(key);
+        self.node(mode, &keys).is_some()
+    }
+
+    /// Keys typed so far, with count and register.
     pub fn pending_keys(&self) -> String {
         let p = &self.pending;
         let mut s = String::new();
@@ -677,7 +730,13 @@ impl Keymap {
                 && let Some(d) = key.text().and_then(|c| c.to_digit(10))
                 && (d != 0 || p.count.is_some())
             {
-                p.count = Some(p.count.unwrap_or(0).saturating_mul(10).saturating_add(d));
+                p.count = Some(
+                    p.count
+                        .unwrap_or(0)
+                        .saturating_mul(10)
+                        .saturating_add(d)
+                        .min(MAX_COUNT),
+                );
                 return Status::Pending;
             }
         }
@@ -728,6 +787,7 @@ impl Keymap {
         if sticky_here {
             p.sticky = Some(keys.clone());
         }
+        let has_children = has_children && !chosen.as_ref().is_some_and(|c| c.binding.nowait);
         match (chosen, has_children) {
             (Some(c), false) => {
                 run.push(self.fire(&c));
@@ -750,7 +810,7 @@ impl Keymap {
         }
     }
 
-    /// which-key rows for the keys pending in `mode`: groups first, then by key.
+    /// Key hint rows for the keys pending in `mode`: groups first, then by key.
     pub fn menu(&self, mode: &str, cx: &impl ContextLookup) -> Vec<MenuItem> {
         let Some(node) = self.node(mode, &self.pending.keys) else {
             return Vec::new();

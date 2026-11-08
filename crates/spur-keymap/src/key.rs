@@ -1,4 +1,11 @@
-//! Keys and Vim-style key notation: `gg`, `<C-w>v`, `<Space>f`, `<Esc>`, `f<char>`.
+//! Keys and key notation.
+//!
+//! Spur's notation is plain words: `ctrl+s`, `alt+up`, `shift+left`, `enter`, `f5`.
+//! A sequence separates keys with spaces (`ctrl+k ctrl+s`), `space` and `plus` name
+//! those keys, and `{char}` is a pattern for any typed char. Keys are shown this way.
+//!
+//! Preset extensions may also use bracket notation (`gg`, `<C-w>v`, `f<char>`), which
+//! is parsed when a binding has no spaces, no `+` and is not a key name.
 
 use std::fmt;
 
@@ -174,12 +181,78 @@ fn named(name: &str) -> Option<KeyCode> {
     })
 }
 
-/// Parses key notation into a sequence.
+/// Parses key notation (Spur's words, or bracket notation) into a sequence.
 ///
 /// # Errors
 ///
-/// Returns [`KeyParseError`] for an unknown `<name>`, an unclosed `<`, or an empty string.
+/// Returns [`KeyParseError`] for an unknown key or modifier, or an empty string.
 pub fn parse_keys(s: &str) -> Result<Vec<Key>, KeyParseError> {
+    let t = s.trim();
+    let words = t.contains(char::is_whitespace)
+        || (t.len() > 1 && t.contains('+') && !t.contains('<'))
+        || (t.chars().count() > 1 && (word_key(t).is_some() || t == "{char}"));
+    if words {
+        parse_words(s)
+    } else {
+        parse_brackets(s)
+    }
+}
+
+fn word_key(name: &str) -> Option<KeyCode> {
+    match name.to_ascii_lowercase().as_str() {
+        "plus" => Some(KeyCode::Char('+')),
+        "{char}" => Some(KeyCode::AnyChar),
+        "cr" | "bs" | "del" | "lt" | "gt" | "bar" | "char" => None,
+        _ => named(name),
+    }
+}
+
+fn parse_words(s: &str) -> Result<Vec<Key>, KeyParseError> {
+    let mut out = Vec::new();
+    let base = s.as_ptr() as usize;
+    for word in s.split_whitespace() {
+        let offset = word.as_ptr() as usize - base;
+        let err = |message: String| KeyParseError { offset, message };
+        let parts: Vec<&str> = word.split('+').collect();
+        let (last, mod_parts) = match parts.split_last() {
+            // `ctrl++` ends in an empty part: the key is `+`.
+            Some((&"", rest)) if !rest.is_empty() => ("plus", &rest[..rest.len() - 1]),
+            Some((l, rest)) => (*l, rest),
+            None => return Err(err("empty key".into())),
+        };
+        let mut mods = Mods::NONE;
+        for m in mod_parts {
+            mods = mods
+                | match m.to_ascii_lowercase().as_str() {
+                    "ctrl" | "control" => Mods::CTRL,
+                    "alt" | "opt" | "option" => Mods::ALT,
+                    "shift" => Mods::SHIFT,
+                    "cmd" | "super" | "win" | "meta" => Mods::SUPER,
+                    other => return Err(err(format!("unknown modifier `{other}`"))),
+                };
+        }
+        let code = if last.chars().count() == 1 {
+            KeyCode::Char(last.chars().next().unwrap_or_default())
+        } else {
+            word_key(last).ok_or_else(|| err(format!("unknown key `{last}`")))?
+        };
+        out.push(Key::new(code, mods));
+    }
+    if out.is_empty() {
+        return Err(KeyParseError {
+            offset: 0,
+            message: "empty key sequence".into(),
+        });
+    }
+    Ok(out)
+}
+
+/// Parses bracket notation (`gg`, `<C-w>v`), used by preset extensions.
+///
+/// # Errors
+///
+/// Returns [`KeyParseError`] for an unknown `<name>` or an empty string.
+pub fn parse_brackets(s: &str) -> Result<Vec<Key>, KeyParseError> {
     let err = |offset, message: &str| KeyParseError {
         offset,
         message: message.into(),
@@ -229,53 +302,53 @@ impl fmt::Display for Key {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut mods = self.mods;
         let name = match self.code {
-            KeyCode::Char(' ') => Some("Space".to_owned()),
-            KeyCode::Char('<') => Some("lt".to_owned()),
+            KeyCode::Char(' ') => "space".to_owned(),
+            KeyCode::Char('+') => "plus".to_owned(),
             KeyCode::Char(c) => {
-                if self.mods.is_empty() {
-                    return write!(f, "{c}");
-                }
-                if c.is_ascii_uppercase() {
+                if !mods.is_empty() && c.is_ascii_uppercase() {
                     mods = mods | Mods::SHIFT;
+                    c.to_ascii_lowercase().to_string()
+                } else {
+                    c.to_string()
                 }
-                Some(c.to_ascii_lowercase().to_string())
             }
-            KeyCode::Esc => Some("Esc".into()),
-            KeyCode::Enter => Some("CR".into()),
-            KeyCode::Tab => Some("Tab".into()),
-            KeyCode::Backspace => Some("BS".into()),
-            KeyCode::Delete => Some("Del".into()),
-            KeyCode::Insert => Some("Insert".into()),
-            KeyCode::Up => Some("Up".into()),
-            KeyCode::Down => Some("Down".into()),
-            KeyCode::Left => Some("Left".into()),
-            KeyCode::Right => Some("Right".into()),
-            KeyCode::Home => Some("Home".into()),
-            KeyCode::End => Some("End".into()),
-            KeyCode::PageUp => Some("PageUp".into()),
-            KeyCode::PageDown => Some("PageDown".into()),
-            KeyCode::F(n) => Some(format!("F{n}")),
-            KeyCode::AnyChar => Some("char".into()),
+            KeyCode::Esc => "esc".into(),
+            KeyCode::Enter => "enter".into(),
+            KeyCode::Tab => "tab".into(),
+            KeyCode::Backspace => "backspace".into(),
+            KeyCode::Delete => "delete".into(),
+            KeyCode::Insert => "insert".into(),
+            KeyCode::Up => "up".into(),
+            KeyCode::Down => "down".into(),
+            KeyCode::Left => "left".into(),
+            KeyCode::Right => "right".into(),
+            KeyCode::Home => "home".into(),
+            KeyCode::End => "end".into(),
+            KeyCode::PageUp => "pageup".into(),
+            KeyCode::PageDown => "pagedown".into(),
+            KeyCode::F(n) => format!("f{n}"),
+            KeyCode::AnyChar => "{char}".into(),
         };
-        let name = name.unwrap_or_default();
-        f.write_str("<")?;
         for (m, p) in [
-            (Mods::CTRL, "C-"),
-            (Mods::ALT, "A-"),
-            (Mods::SHIFT, "S-"),
-            (Mods::SUPER, "D-"),
+            (Mods::CTRL, "ctrl+"),
+            (Mods::ALT, "alt+"),
+            (Mods::SHIFT, "shift+"),
+            (Mods::SUPER, "cmd+"),
         ] {
             if mods.contains(m) {
                 f.write_str(p)?;
             }
         }
-        write!(f, "{name}>")
+        f.write_str(&name)
     }
 }
 
 /// Formats a key sequence in notation.
 pub fn format_keys(keys: &[Key]) -> String {
-    keys.iter().map(ToString::to_string).collect()
+    keys.iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[cfg(test)]
@@ -285,27 +358,51 @@ mod tests {
     #[test]
     fn parse_and_format() {
         for (src, canon) in [
-            ("gg", "gg"),
-            ("<C-w>v", "<C-w>v"),
-            ("<c-W>", "<C-w>"),
-            ("<C-S-w>", "<C-S-w>"),
-            ("<space>f", "<Space>f"),
-            ("<esc>", "<Esc>"),
-            ("<Enter>", "<CR>"),
-            ("<S-Tab>", "<S-Tab>"),
-            ("<A-x>", "<A-x>"),
-            ("<lt>", "<lt>"),
-            ("f<char>", "f<char>"),
-            ("<F12>", "<F12>"),
-            ("<S-a>", "A"),
-            ("<", "<lt>"),
-            ("<>", "<lt>>"),
+            ("ctrl+s", "ctrl+s"),
+            ("Ctrl+Shift+W", "ctrl+shift+w"),
+            ("alt+up", "alt+up"),
+            ("ctrl+k ctrl+s", "ctrl+k ctrl+s"),
+            ("space", "space"),
+            ("ctrl+space", "ctrl+space"),
+            ("enter", "enter"),
+            ("shift+tab", "shift+tab"),
+            ("f12", "f12"),
+            ("g g", "g g"),
+            ("ctrl++", "ctrl+plus"),
+            ("a {char}", "a {char}"),
+            ("A", "A"),
         ] {
             let keys = parse_keys(src).unwrap_or_else(|e| panic!("{src}: {e}"));
             assert_eq!(format_keys(&keys), canon, "{src}");
             assert_eq!(parse_keys(canon).unwrap(), keys, "{canon} round trip");
         }
         assert!(parse_keys("").is_err());
+        assert!(parse_keys("hyper+a").is_err());
+        assert!(parse_keys("ctrl+nope").is_err());
+    }
+
+    #[test]
+    fn brackets() {
+        for (src, canon) in [
+            ("gg", "g g"),
+            ("<C-w>v", "ctrl+w v"),
+            ("<c-W>", "ctrl+w"),
+            ("<C-S-w>", "ctrl+shift+w"),
+            ("<space>f", "space f"),
+            ("<esc>", "esc"),
+            ("<Enter>", "enter"),
+            ("<S-Tab>", "shift+tab"),
+            ("<A-x>", "alt+x"),
+            ("<lt>", "<"),
+            ("f<char>", "f {char}"),
+            ("<F12>", "f12"),
+            ("<S-a>", "A"),
+            ("<", "<"),
+        ] {
+            let keys = parse_keys(src).unwrap_or_else(|e| panic!("{src}: {e}"));
+            assert_eq!(format_keys(&keys), canon, "{src}");
+            assert_eq!(parse_keys(canon).unwrap(), keys, "{canon} round trip");
+        }
         assert!(parse_keys("<nope>").is_err());
         assert!(parse_keys("<X-a>").is_err());
         assert!(parse_keys("<F99>").is_err());

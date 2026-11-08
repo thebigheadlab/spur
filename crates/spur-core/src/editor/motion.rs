@@ -117,15 +117,18 @@ pub fn first_nonblank(s: &Snapshot, line: usize) -> usize {
             .map_or(text.len(), |(i, _)| i)
 }
 
+/// Char class for word motions.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Class {
+#[allow(missing_docs)]
+pub enum Class {
     Newline,
     Space,
     Word,
     Punct,
 }
 
-fn class(c: char, big: bool) -> Class {
+/// Class of `c`; `big` treats punctuation as word chars.
+pub fn class(c: char, big: bool) -> Class {
     match c {
         '\n' | '\r' => Class::Newline,
         c if c.is_whitespace() => Class::Space,
@@ -135,7 +138,8 @@ fn class(c: char, big: bool) -> Class {
     }
 }
 
-fn chars_after(s: &Snapshot, offset: usize) -> impl Iterator<Item = (usize, char)> + '_ {
+/// Chars from `offset` on, with their offsets.
+pub fn chars_after(s: &Snapshot, offset: usize) -> impl Iterator<Item = (usize, char)> + '_ {
     let mut at = offset;
     s.chunks(offset..s.len())
         .into_iter()
@@ -148,14 +152,15 @@ fn chars_after(s: &Snapshot, offset: usize) -> impl Iterator<Item = (usize, char
         })
 }
 
-fn char_before(s: &Snapshot, offset: usize) -> Option<(usize, char)> {
+/// The char before `offset`, with its offset.
+pub fn char_before(s: &Snapshot, offset: usize) -> Option<(usize, char)> {
     let start = (offset.saturating_sub(4)..offset).find(|&i| {
         s.is_boundary(i) && s.slice(i..offset).is_some_and(|t| t.chars().count() == 1)
     })?;
     s.slice(start..offset)?.chars().next().map(|c| (start, c))
 }
 
-/// Start of the next word (Vim `w`; `big` = `W`). An empty line counts as a word.
+/// Start of the next word (`big`: words are separated by spaces only). An empty line counts as a word.
 pub fn word_next(s: &Snapshot, offset: usize, big: bool) -> usize {
     let mut it = chars_after(s, offset);
     let Some((_, first)) = it.next() else {
@@ -193,7 +198,7 @@ pub fn word_next(s: &Snapshot, offset: usize, big: bool) -> usize {
     s.len()
 }
 
-/// Start of the previous word (Vim `b`).
+/// Start of the previous word.
 pub fn word_prev(s: &Snapshot, offset: usize, big: bool) -> usize {
     let mut at = offset;
     // Skip whitespace (stopping at an empty line).
@@ -230,7 +235,7 @@ pub fn word_prev(s: &Snapshot, offset: usize, big: bool) -> usize {
     at
 }
 
-/// Last char of the current or next word (Vim `e`).
+/// Last char of the current or next word.
 pub fn word_end(s: &Snapshot, offset: usize, big: bool) -> usize {
     let mut it = chars_after(s, offset).skip(1).peekable();
     // Skip whitespace.

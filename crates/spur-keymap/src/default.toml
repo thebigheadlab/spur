@@ -1,0 +1,300 @@
+# Spur's default keys. One mode: typing types. Everything else is one key away on the
+# Ask card (ctrl+space), which lists commands with their keys, jumps to lines and finds
+# text. Notation: `ctrl+s`, `alt+up`, sequences separated by spaces.
+
+[mode.edit]
+groups_edits = true
+fallback = "editor.insert_text"
+cursor = "bar"
+
+[mode.ask]
+fallback = "ask.type"
+cursor = "bar"
+
+[[bind]]
+mode = "edit"
+keys = "left"
+command = "editor.move_left"
+
+[[bind]]
+mode = "edit"
+keys = "shift+left"
+command = "editor.move_left"
+args = { extend = true }
+
+[[bind]]
+mode = "edit"
+keys = "right"
+command = "editor.move_right"
+
+[[bind]]
+mode = "edit"
+keys = "shift+right"
+command = "editor.move_right"
+args = { extend = true }
+
+[[bind]]
+mode = "edit"
+keys = "up"
+command = "editor.move_up"
+
+[[bind]]
+mode = "edit"
+keys = "shift+up"
+command = "editor.move_up"
+args = { extend = true }
+
+[[bind]]
+mode = "edit"
+keys = "down"
+command = "editor.move_down"
+
+[[bind]]
+mode = "edit"
+keys = "shift+down"
+command = "editor.move_down"
+args = { extend = true }
+
+[[bind]]
+mode = "edit"
+keys = "ctrl+left"
+command = "editor.move_word_prev"
+
+[[bind]]
+mode = "edit"
+keys = "ctrl+shift+left"
+command = "editor.move_word_prev"
+args = { extend = true }
+
+[[bind]]
+mode = "edit"
+keys = "ctrl+right"
+command = "editor.move_word_next"
+
+[[bind]]
+mode = "edit"
+keys = "ctrl+shift+right"
+command = "editor.move_word_next"
+args = { extend = true }
+
+[[bind]]
+mode = "edit"
+keys = "home"
+command = "editor.move_line_start"
+
+[[bind]]
+mode = "edit"
+keys = "shift+home"
+command = "editor.move_line_start"
+args = { extend = true }
+
+[[bind]]
+mode = "edit"
+keys = "end"
+command = "editor.move_line_end"
+
+[[bind]]
+mode = "edit"
+keys = "shift+end"
+command = "editor.move_line_end"
+args = { extend = true }
+
+[[bind]]
+mode = "edit"
+keys = "ctrl+home"
+command = "editor.move_doc_start"
+
+[[bind]]
+mode = "edit"
+keys = "ctrl+shift+home"
+command = "editor.move_doc_start"
+args = { extend = true }
+
+[[bind]]
+mode = "edit"
+keys = "ctrl+end"
+command = "editor.move_doc_end"
+
+[[bind]]
+mode = "edit"
+keys = "ctrl+shift+end"
+command = "editor.move_doc_end"
+args = { extend = true }
+
+[[bind]]
+mode = "edit"
+keys = "backspace"
+command = "editor.delete_backward"
+
+[[bind]]
+mode = "edit"
+keys = "delete"
+command = "editor.delete_forward"
+
+[[bind]]
+mode = "edit"
+keys = "enter"
+command = "editor.insert_newline"
+
+[[bind]]
+mode = "edit"
+keys = "tab"
+command = "editor.insert_text"
+args = { text = "    " }
+
+[[bind]]
+mode = "edit"
+keys = "esc"
+command = "editor.collapse_selection"
+label = "Drop selection"
+
+[[bind]]
+mode = "edit"
+keys = "ctrl+s"
+command = "buffer.save"
+label = "Save"
+
+[[bind]]
+mode = "edit"
+keys = "ctrl+z"
+command = "editor.undo"
+label = "Undo"
+
+[[bind]]
+mode = "edit"
+keys = "ctrl+shift+z"
+command = "editor.redo"
+label = "Redo"
+
+[[bind]]
+mode = "edit"
+keys = "ctrl+y"
+command = "editor.redo"
+label = "Redo"
+
+[[bind]]
+mode = "edit"
+keys = "ctrl+c"
+command = "editor.copy"
+label = "Copy"
+
+[[bind]]
+mode = "edit"
+keys = "ctrl+x"
+command = "editor.delete_selection"
+label = "Cut"
+
+[[bind]]
+mode = "edit"
+keys = "ctrl+v"
+command = "editor.paste"
+label = "Paste"
+
+[[bind]]
+mode = "edit"
+keys = "ctrl+a"
+command = "editor.select_all"
+label = "Select everything"
+
+[[bind]]
+mode = "edit"
+keys = "alt+up"
+command = "editor.grow_selection"
+label = "Grow selection"
+
+[[bind]]
+mode = "edit"
+keys = "alt+down"
+command = "editor.shrink_selection"
+label = "Shrink selection"
+
+[[bind]]
+mode = "edit"
+keys = "ctrl+space"
+command = "ask.open"
+label = "Ask"
+
+[[bind]]
+mode = "edit"
+keys = "ctrl+f"
+command = "ask.find"
+label = "Find"
+
+[[bind]]
+mode = "edit"
+keys = "f3"
+command = "editor.find_next"
+label = "Next match"
+
+[[bind]]
+mode = "edit"
+keys = "shift+f3"
+command = "editor.find_next"
+args = { backward = true }
+label = "Previous match"
+
+[[bind]]
+mode = "edit"
+keys = "ctrl+q"
+command = "editor.quit"
+label = "Leave"
+
+[[bind]]
+mode = "ask"
+keys = "esc"
+command = "ask.close"
+
+[[bind]]
+mode = "ask"
+keys = "ctrl+space"
+command = "ask.close"
+
+[[bind]]
+mode = "ask"
+keys = "enter"
+command = "ask.accept"
+
+[[bind]]
+mode = "ask"
+keys = "shift+enter"
+command = "ask.accept"
+args = { backward = true }
+
+[[bind]]
+mode = "ask"
+keys = "ctrl+f"
+command = "ask.accept"
+
+[[bind]]
+mode = "ask"
+keys = "f3"
+command = "ask.accept"
+
+[[bind]]
+mode = "ask"
+keys = "up"
+command = "ask.move"
+args = { by = -1 }
+
+[[bind]]
+mode = "ask"
+keys = "down"
+command = "ask.move"
+args = { by = 1 }
+
+[[bind]]
+mode = "ask"
+keys = "shift+tab"
+command = "ask.move"
+args = { by = -1 }
+
+[[bind]]
+mode = "ask"
+keys = "tab"
+command = "ask.move"
+args = { by = 1 }
+
+[[bind]]
+mode = "ask"
+keys = "backspace"
+command = "ask.erase"

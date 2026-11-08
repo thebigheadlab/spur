@@ -375,12 +375,27 @@ impl<S> Cx<'_, S> {
     ///
     /// Returns the command's error, or `too_deep`, `unknown_command`, `vetoed`.
     pub fn execute(&mut self, id: &CommandId, args: &Value) -> Result<Value, CommandError> {
+        self.execute_with(id, args, None, None)
+    }
+
+    /// Like [`Cx::execute`], with a count and register (replaying recorded calls).
+    ///
+    /// # Errors
+    ///
+    /// Returns the command's error, or `too_deep`, `unknown_command`, `vetoed`.
+    pub fn execute_with(
+        &mut self,
+        id: &CommandId,
+        args: &Value,
+        count: Option<u32>,
+        register: Option<char>,
+    ) -> Result<Value, CommandError> {
         let info = InvInfo {
             actor: self.info.actor.clone(),
             client: self.info.client,
             turn: self.info.turn,
-            count: None,
-            register: None,
+            count,
+            register,
         };
         let mut child = Cx {
             state: &mut *self.state,

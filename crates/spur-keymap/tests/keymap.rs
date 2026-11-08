@@ -60,7 +60,7 @@ command = "test.quit"
 [[group]]
 mode = "normal"
 keys = "<Space>"
-label = "+leader"
+label = "more"
 
 [[group]]
 mode = "normal"
@@ -245,10 +245,7 @@ fn which_key_menu() {
         root.iter()
             .any(|m| m.key == "g" && m.group && m.label == "test.g")
     );
-    assert!(
-        root.iter()
-            .any(|m| m.key == "<Space>" && m.label == "+leader")
-    );
+    assert!(root.iter().any(|m| m.key == "space" && m.label == "more"));
 }
 
 #[test]
@@ -269,7 +266,7 @@ fn sticky_group_repeats_until_esc() {
     let (ran, s) = typ(&mut k, "normal", "<C-w>>>>", &c);
     assert_eq!(ran, ["test.wider"; 3]);
     assert_eq!(s, Status::Pending);
-    assert_eq!(k.pending_keys(), "<C-w>");
+    assert_eq!(k.pending_keys(), "ctrl+w");
     let (_, s) = typ(&mut k, "normal", "<Esc>", &c);
     assert_eq!(s, Status::Cancelled);
     assert_eq!(typ(&mut k, "normal", "j", &c).0, ["editor.move_down"]);

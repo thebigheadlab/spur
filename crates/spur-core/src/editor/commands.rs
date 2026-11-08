@@ -16,18 +16,21 @@ use crate::command::{CommandError, CommandMeta, ErrorCode, RemoteSide, parse_arg
 use crate::core::{Core, Cx, RegisterError};
 use crate::name::{CommandId, EventName, events};
 
-type C<'a, 'b> = &'a mut Cx<'b, Editor>;
+/// The context a command handler gets.
+pub type C<'a, 'b> = &'a mut Cx<'b, Editor>;
 
-fn ev(name: &str) -> EventName {
+/// An event name known to be valid.
+pub fn ev(name: &str) -> EventName {
     EventName::new(name).unwrap_or_else(|e| unreachable!("{e}"))
 }
 
 /// Largest count a command honours; bigger ones are clamped so `999999999x` cannot hang.
-const MAX_COUNT: usize = 100_000;
+pub const MAX_COUNT: usize = 100_000;
 /// Largest text one command may insert.
 const MAX_INSERT: usize = 64 << 20;
 
-fn count(cx: &Cx<'_, Editor>) -> usize {
+/// The invocation count, at least 1.
+pub fn count(cx: &Cx<'_, Editor>) -> usize {
     cx.count().map_or(1, |c| (c.max(1) as usize).min(MAX_COUNT))
 }
 
@@ -37,14 +40,14 @@ fn repeat(text: &str, n: usize) -> Result<String, CommandError> {
     Ok(text.repeat(n))
 }
 
-fn repeat_check(len: usize, n: usize) -> Result<(), CommandError> {
+pub fn repeat_check(len: usize, n: usize) -> Result<(), CommandError> {
     if len.saturating_mul(n) > MAX_INSERT {
         return Err(CommandError::failed("count too large"));
     }
     Ok(())
 }
 
-fn default_true() -> bool {
+pub fn default_true() -> bool {
     true
 }
 
@@ -68,6 +71,9 @@ struct RegArgs {
     register: Option<char>,
     #[serde(default)]
     before: Option<bool>,
+    /// Leave the cursor on the last pasted char instead of after it.
+    #[serde(default)]
+    cursor_on_last: bool,
 }
 
 #[derive(Deserialize)]
@@ -80,12 +86,13 @@ struct PathArgs {
     path: Option<PathBuf>,
 }
 
-fn focus(cx: &Cx<'_, Editor>) -> ViewId {
+/// The focused view.
+pub fn focus(cx: &Cx<'_, Editor>) -> ViewId {
     cx.state.focus
 }
 
 /// Publishes context keys that `when` clauses and statuslines read.
-fn sync_context(cx: C<'_, '_>) {
+pub fn sync_context(cx: C<'_, '_>) {
     let ed = &*cx.state;
     let mode = ed.view().mode.clone();
     let doc = ed.doc();
@@ -96,18 +103,45 @@ fn sync_context(cx: C<'_, '_>) {
     let _ = cx.context.set("buffer.has_path", has_path);
 }
 
-fn after_selection_change(cx: C<'_, '_>) -> Result<(), CommandError> {
+/// Emits `selection.changed` for the focused view.
+///
+/// # Errors
+///
+/// Returns the command error to report.
+pub fn after_selection_change(cx: C<'_, '_>) -> Result<(), CommandError> {
     let view = focus(cx);
     cx.emit(ev(events::SELECTION_CHANGED), json!({ "view": view.0 }))
 }
 
+/// What a motion covers when its range is used (by a preset's motion hook).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    /// Up to, not including, the target (`w`, `h`, `l`, `0`).
+    Exclusive,
+    /// Including the char at the target (`e`, `f`, `%`).
+    Inclusive,
+    /// Whole lines from the cursor's line to the target's (`j`, `k`, `gg`, `G`).
+    Linewise,
+}
+
 /// Moves every range with `f(snapshot, head, goal)`. Non-vertical motions clear the goal.
-fn move_ranges(
+/// A preset's motion hook may take the motion over instead.
+///
+/// # Errors
+///
+/// Returns the command error to report.
+pub fn move_ranges(
     cx: C<'_, '_>,
     extend: bool,
     vertical: bool,
+    kind: Kind,
     f: impl Fn(&Snapshot, usize, usize) -> usize,
 ) -> Result<Value, CommandError> {
+    if let Some(hook) = cx.state.motion_hook
+        && let Some(r) = hook(cx, kind, &f)
+    {
+        return r;
+    }
     let snap = cx.state.snapshot();
     let depth = cx.depth();
     let id = focus(cx);
@@ -128,14 +162,14 @@ fn move_ranges(
     merge_cursors(&mut view.selection, &mut view.goals);
     if depth == 0 {
         // Moving the cursor ends the current undo step.
-        view.turn += 1;
+        view.bump_turn();
     }
     after_selection_change(cx)?;
     Ok(Value::Null)
 }
 
 /// Removes duplicate cursors (same anchor and head), keeping the primary.
-fn merge_cursors(sel: &mut Selection, goals: &mut Vec<Option<usize>>) {
+pub fn merge_cursors(sel: &mut Selection, goals: &mut Vec<Option<usize>>) {
     let primary = sel.ranges[sel.primary];
     let mut seen = std::collections::HashSet::new();
     let mut ranges = Vec::new();
@@ -151,11 +185,12 @@ fn merge_cursors(sel: &mut Selection, goals: &mut Vec<Option<usize>>) {
     *goals = new_goals;
 }
 
-fn span(r: SelRange) -> Range<usize> {
+/// A selection range as start..end.
+pub fn span(r: SelRange) -> Range<usize> {
     r.anchor.min(r.head)..r.anchor.max(r.head)
 }
 
-fn edit_error(e: &EditError) -> CommandError {
+pub fn edit_error(e: &EditError) -> CommandError {
     let code = match e {
         EditError::Stale { .. } | EditError::TooOld { .. } => ErrorCode::Stale,
         _ => ErrorCode::Failed,
@@ -169,14 +204,30 @@ fn edit(
     mut per_range: impl FnMut(&Snapshot, SelRange) -> Option<(Range<usize>, String)>,
 ) -> Result<Value, CommandError> {
     let snap = cx.state.snapshot();
-    let id = focus(cx);
-    let before = cx.state.views[&id].selection.clone();
-    let mut hunks: Vec<(usize, Range<usize>, String)> = before
+    let before = cx.state.view().selection.clone();
+    let hunks: Vec<(usize, Range<usize>, String)> = before
         .ranges
         .iter()
         .enumerate()
         .filter_map(|(i, r)| per_range(&snap, *r).map(|(range, text)| (i, range, text)))
         .collect();
+    apply_hunks(cx, &snap, hunks, |start, _, _, t| start + t.len())
+}
+
+/// Commits hunks tagged with the index of the range they belong to. `cursor` gives each
+/// such range's new cursor from the hunk's start in the new text; other ranges are mapped through the edit.
+///
+/// # Errors
+///
+/// Returns the command error to report.
+pub fn apply_hunks(
+    cx: C<'_, '_>,
+    snap: &Snapshot,
+    mut hunks: Vec<(usize, Range<usize>, String)>,
+    cursor: impl Fn(usize, &Snapshot, &Range<usize>, &str) -> usize,
+) -> Result<Value, CommandError> {
+    let id = focus(cx);
+    let before = cx.state.views[&id].selection.clone();
     hunks.sort_by_key(|(_, r, _)| (r.start, r.end));
     // Two cursors touching the same text: keep the first hunk.
     let mut last_end = None;
@@ -202,8 +253,10 @@ fn edit(
     // the size change of the hunks before it.
     let mut delta: isize = 0;
     for (i, r, t) in &hunks {
-        let at = r.start.saturating_add_signed(delta) + t.len();
-        after.ranges[*i] = SelRange::cursor(at);
+        let start = r.start.saturating_add_signed(delta);
+        if let Some(slot) = after.ranges.get_mut(*i) {
+            *slot = SelRange::cursor(cursor(start, snap, r, t));
+        }
         delta += t.len().cast_signed() - r.len().cast_signed();
     }
     let mut goals = vec![None; after.ranges.len()];
@@ -219,7 +272,7 @@ fn edit(
         .get_mut(&id)
         .unwrap_or_else(|| unreachable!());
     if !groups && depth == 0 {
-        view.turn += 1;
+        view.bump_turn();
     }
     let turn = if explicit_turn == 0 {
         view.turn
@@ -250,7 +303,7 @@ fn edit(
 }
 
 /// Maps other views of the same document and emits `buffer.changed`.
-fn committed(cx: C<'_, '_>, id: ViewId, applied: &Applied) -> Result<Value, CommandError> {
+pub fn committed(cx: C<'_, '_>, id: ViewId, applied: &Applied) -> Result<Value, CommandError> {
     let doc = cx.state.views[&id].doc;
     for (vid, v) in &mut cx.state.views {
         if *vid != id && v.doc == doc {
@@ -265,7 +318,8 @@ fn committed(cx: C<'_, '_>, id: ViewId, applied: &Applied) -> Result<Value, Comm
     Ok(json!(applied.version.0))
 }
 
-fn line_ending(s: &Snapshot) -> &'static str {
+/// The line ending the document uses.
+pub fn line_ending(s: &Snapshot) -> &'static str {
     let first = s.line_range(0).unwrap_or(0..0);
     if motion::ending_len(s, first) == 2 {
         "\r\n"
@@ -274,7 +328,7 @@ fn line_ending(s: &Snapshot) -> &'static str {
     }
 }
 
-fn yank(cx: C<'_, '_>, register: Option<char>) -> usize {
+pub fn copy(cx: C<'_, '_>, register: Option<char>) -> usize {
     let snap = cx.state.snapshot();
     let values: Vec<String> = cx
         .state
@@ -346,7 +400,7 @@ fn undo_redo(cx: C<'_, '_>, redo: bool) -> Result<Value, CommandError> {
                     r.head = motion::snap_char(&snap, r.head);
                 }
                 view.goals = vec![None; view.selection.ranges.len()];
-                view.turn += 1;
+                view.bump_turn();
                 last = Some(committed(cx, id, &applied)?);
             }
         }
@@ -354,7 +408,12 @@ fn undo_redo(cx: C<'_, '_>, redo: bool) -> Result<Value, CommandError> {
     Ok(last.unwrap_or(Value::Bool(false)))
 }
 
-fn open(cx: C<'_, '_>, path: &Path) -> Result<Value, CommandError> {
+/// Opens a file in a new view.
+///
+/// # Errors
+///
+/// Returns the command error to report.
+pub fn open(cx: C<'_, '_>, path: &Path) -> Result<Value, CommandError> {
     let existing = cx
         .state
         .docs
@@ -418,7 +477,12 @@ fn write_atomic(path: &Path, snap: &Snapshot) -> std::io::Result<()> {
     })
 }
 
-fn save(cx: C<'_, '_>, path: Option<PathBuf>) -> Result<Value, CommandError> {
+/// Saves the focused document, optionally to a new path.
+///
+/// # Errors
+///
+/// Returns the command error to report.
+pub fn save(cx: C<'_, '_>, path: Option<PathBuf>) -> Result<Value, CommandError> {
     let doc_id = cx.state.view().doc;
     let doc = &cx.state.docs[&doc_id];
     let path = path
@@ -443,38 +507,75 @@ fn save(cx: C<'_, '_>, path: Option<PathBuf>) -> Result<Value, CommandError> {
 }
 
 fn paste(cx: C<'_, '_>, args: &RegArgs) -> Result<Value, CommandError> {
-    let name = args.register.unwrap_or('"');
+    let name = args.register.or(cx.register()).unwrap_or('"');
     let Some(reg) = cx.state.registers.get(&name).cloned() else {
         return Ok(Value::Null);
     };
     let before = args.before.unwrap_or(true);
+    let on_last = args.cursor_on_last;
     let times = count(cx);
     let n = reg.values.len().max(1);
     let longest = reg.values.iter().map(String::len).max().unwrap_or(0);
     repeat_check(longest, times)?;
-    let mut i = 0;
-    edit(cx, |snap, r| {
-        let mut text = reg.values.get(i % n).cloned().unwrap_or_default();
-        text = text.repeat(times);
-        i += 1;
-        let at = if reg.linewise {
-            let line = motion::line_of(snap, r.head);
-            if before {
-                motion::line_start(snap, line)
-            } else if line + 1 < snap.line_count() {
-                motion::line_start(snap, line + 1)
+    let snap = cx.state.snapshot();
+    let le = line_ending(&snap);
+    let hunks = cx
+        .state
+        .view()
+        .selection
+        .ranges
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let mut text = reg
+                .values
+                .get(i % n)
+                .cloned()
+                .unwrap_or_default()
+                .repeat(times);
+            let at = if reg.linewise {
+                let line = motion::line_of(&snap, r.head);
+                if before {
+                    motion::line_start(&snap, line)
+                } else if line + 1 < snap.line_count() {
+                    motion::line_start(&snap, line + 1)
+                } else {
+                    text = format!("{le}{}", text.strip_suffix(le).unwrap_or(&text));
+                    snap.len()
+                }
+            } else if before {
+                r.head
             } else {
-                let le = line_ending(snap);
-                text = format!("{le}{}", text.strip_suffix(le).unwrap_or(&text));
-                snap.len()
-            }
-        } else if before {
-            r.head
+                motion::right(&snap, r.head, false)
+            };
+            (i, at..at, text)
+        })
+        .collect();
+    let linewise = reg.linewise;
+    let le_len = le.len();
+    let result = apply_hunks(cx, &snap, hunks, move |start, _, _, t| {
+        if linewise {
+            // Marker: resolved to the first non-blank below.
+            start + usize::from(t.starts_with(['\r', '\n'])) * le_len
+        } else if on_last {
+            start + t.len() - t.chars().last().map_or(0, char::len_utf8)
         } else {
-            motion::right(snap, r.head, false)
-        };
-        Some((at..at, text))
-    })
+            start + t.len()
+        }
+    })?;
+    if linewise {
+        let s = cx.state.snapshot();
+        let id = focus(cx);
+        let view = cx
+            .state
+            .views
+            .get_mut(&id)
+            .unwrap_or_else(|| unreachable!());
+        for r in &mut view.selection.ranges {
+            *r = SelRange::cursor(motion::first_nonblank(&s, motion::line_of(&s, r.head)));
+        }
+    }
+    Ok(result)
 }
 
 /// Registers the `editor.*` and `buffer.*` commands.
@@ -567,28 +668,28 @@ pub fn register_editor_commands(core: &mut Core<Editor>) -> Result<(), RegisterE
     )?;
     reg(
         "editor.delete_selection",
-        "Cut every selection into a register.",
+        "Cut every selection.",
         edit_meta,
         |cx, a| {
             let args: RegArgs = parse_args(a)?;
-            yank(cx, args.register);
+            copy(cx, args.register.or(cx.register()));
             edit(cx, |_, r| {
                 (r.anchor != r.head).then(|| (span(r), String::new()))
             })
         },
     )?;
     reg(
-        "editor.yank",
-        "Copy every selection into a register.",
+        "editor.copy",
+        "Copy every selection.",
         CommandMeta::read_only,
         |cx, a| {
             let args: RegArgs = parse_args(a)?;
-            Ok(json!(yank(cx, args.register)))
+            Ok(json!(copy(cx, args.register.or(cx.register()))))
         },
     )?;
     reg(
         "editor.paste",
-        "Paste a register at every cursor (before = at the cursor).",
+        "Paste the last copied text at every cursor (before = at the cursor).",
         edit_meta,
         |cx, a| {
             let args: RegArgs = parse_args(a)?;
@@ -603,7 +704,7 @@ pub fn register_editor_commands(core: &mut Core<Editor>) -> Result<(), RegisterE
         |cx, a| {
             let m: MoveArgs = parse_args(a)?;
             let n = count(cx);
-            move_ranges(cx, m.extend, false, |s, h, _| {
+            move_ranges(cx, m.extend, false, Kind::Exclusive, |s, h, _| {
                 (0..n).fold(h, |at, _| motion::left(s, at, m.wrap))
             })
         },
@@ -615,7 +716,7 @@ pub fn register_editor_commands(core: &mut Core<Editor>) -> Result<(), RegisterE
         |cx, a| {
             let m: MoveArgs = parse_args(a)?;
             let n = count(cx);
-            move_ranges(cx, m.extend, false, |s, h, _| {
+            move_ranges(cx, m.extend, false, Kind::Exclusive, |s, h, _| {
                 (0..n).fold(h, |at, _| motion::right(s, at, m.wrap))
             })
         },
@@ -627,7 +728,9 @@ pub fn register_editor_commands(core: &mut Core<Editor>) -> Result<(), RegisterE
         |cx, a| {
             let m: MoveArgs = parse_args(a)?;
             let n = isize::try_from(count(cx)).unwrap_or(isize::MAX);
-            move_ranges(cx, m.extend, true, |s, h, g| motion::vertical(s, h, -n, g))
+            move_ranges(cx, m.extend, true, Kind::Linewise, |s, h, g| {
+                motion::vertical(s, h, -n, g)
+            })
         },
     )?;
     reg(
@@ -637,7 +740,9 @@ pub fn register_editor_commands(core: &mut Core<Editor>) -> Result<(), RegisterE
         |cx, a| {
             let m: MoveArgs = parse_args(a)?;
             let n = isize::try_from(count(cx)).unwrap_or(isize::MAX);
-            move_ranges(cx, m.extend, true, |s, h, g| motion::vertical(s, h, n, g))
+            move_ranges(cx, m.extend, true, Kind::Linewise, |s, h, g| {
+                motion::vertical(s, h, n, g)
+            })
         },
     )?;
     reg(
@@ -646,7 +751,7 @@ pub fn register_editor_commands(core: &mut Core<Editor>) -> Result<(), RegisterE
         mv,
         |cx, a| {
             let m: MoveArgs = parse_args(a)?;
-            move_ranges(cx, m.extend, false, |s, h, _| {
+            move_ranges(cx, m.extend, false, Kind::Exclusive, |s, h, _| {
                 motion::line_start(s, motion::line_of(s, h))
             })
         },
@@ -657,7 +762,7 @@ pub fn register_editor_commands(core: &mut Core<Editor>) -> Result<(), RegisterE
         mv,
         |cx, a| {
             let m: MoveArgs = parse_args(a)?;
-            move_ranges(cx, m.extend, false, |s, h, _| {
+            move_ranges(cx, m.extend, false, Kind::Exclusive, |s, h, _| {
                 motion::line_end(s, motion::line_of(s, h))
             })
         },
@@ -668,7 +773,7 @@ pub fn register_editor_commands(core: &mut Core<Editor>) -> Result<(), RegisterE
         mv,
         |cx, a| {
             let m: MoveArgs = parse_args(a)?;
-            move_ranges(cx, m.extend, false, |s, h, _| {
+            move_ranges(cx, m.extend, false, Kind::Exclusive, |s, h, _| {
                 motion::first_nonblank(s, motion::line_of(s, h))
             })
         },
@@ -680,7 +785,7 @@ pub fn register_editor_commands(core: &mut Core<Editor>) -> Result<(), RegisterE
         |cx, a| {
             let m: MoveArgs = parse_args(a)?;
             let line = cx.count().map(|c| (c as usize).saturating_sub(1));
-            move_ranges(cx, m.extend, false, |s, _, _| {
+            move_ranges(cx, m.extend, false, Kind::Linewise, |s, _, _| {
                 line.map_or(0, |l| motion::first_nonblank(s, l.min(s.line_count() - 1)))
             })
         },
@@ -692,7 +797,7 @@ pub fn register_editor_commands(core: &mut Core<Editor>) -> Result<(), RegisterE
         |cx, a| {
             let m: MoveArgs = parse_args(a)?;
             let line = cx.count().map(|c| (c as usize).saturating_sub(1));
-            move_ranges(cx, m.extend, false, |s, _, _| {
+            move_ranges(cx, m.extend, false, Kind::Linewise, |s, _, _| {
                 let l = line.unwrap_or(usize::MAX).min(s.line_count() - 1);
                 motion::first_nonblank(s, l)
             })
@@ -705,7 +810,7 @@ pub fn register_editor_commands(core: &mut Core<Editor>) -> Result<(), RegisterE
         |cx, a| {
             let m: MoveArgs = parse_args(a)?;
             let n = count(cx);
-            move_ranges(cx, m.extend, false, |s, h, _| {
+            move_ranges(cx, m.extend, false, Kind::Exclusive, |s, h, _| {
                 (0..n).fold(h, |at, _| motion::word_next(s, at, m.big))
             })
         },
@@ -717,7 +822,7 @@ pub fn register_editor_commands(core: &mut Core<Editor>) -> Result<(), RegisterE
         |cx, a| {
             let m: MoveArgs = parse_args(a)?;
             let n = count(cx);
-            move_ranges(cx, m.extend, false, |s, h, _| {
+            move_ranges(cx, m.extend, false, Kind::Exclusive, |s, h, _| {
                 (0..n).fold(h, |at, _| motion::word_prev(s, at, m.big))
             })
         },
@@ -729,7 +834,7 @@ pub fn register_editor_commands(core: &mut Core<Editor>) -> Result<(), RegisterE
         |cx, a| {
             let m: MoveArgs = parse_args(a)?;
             let n = count(cx);
-            move_ranges(cx, m.extend, false, |s, h, _| {
+            move_ranges(cx, m.extend, false, Kind::Inclusive, |s, h, _| {
                 (0..n).fold(h, |at, _| motion::word_end(s, at, m.big))
             })
         },
@@ -738,7 +843,7 @@ pub fn register_editor_commands(core: &mut Core<Editor>) -> Result<(), RegisterE
         "editor.collapse_selection",
         "Reduce every selection to its cursor.",
         CommandMeta::read_only,
-        |cx, _| move_ranges(cx, false, false, |_, h, _| h),
+        |cx, _| move_ranges(cx, false, false, Kind::Exclusive, |_, h, _| h),
     )?;
 
     reg("editor.undo", "Undo your last change.", plain, |cx, _| {
@@ -774,7 +879,7 @@ pub fn register_editor_commands(core: &mut Core<Editor>) -> Result<(), RegisterE
                 return Ok(Value::Null);
             }
             if was_grouping {
-                view.turn += 1;
+                view.bump_turn();
             }
             view.mode = spec.name.clone();
             cx.emit(
@@ -813,7 +918,7 @@ pub fn register_editor_commands(core: &mut Core<Editor>) -> Result<(), RegisterE
             save(cx, p.path)
         },
     )?;
-    Ok(())
+    super::ask::register(core)
 }
 
 #[cfg(test)]
@@ -823,6 +928,19 @@ mod tests {
 
     fn core(text: &str, mode: &str) -> Core<Editor> {
         let mut ed = Editor::new();
+        // Tests name a grouping mode `insert` and a non-grouping one `normal`.
+        for (name, groups_edits) in [("normal", false), ("insert", true)] {
+            ed.modes.insert(
+                name.into(),
+                super::super::ModeSpec {
+                    name: name.into(),
+                    groups_edits,
+                    block_cursor: false,
+                    inclusive_selection: false,
+                    linewise_selection: false,
+                },
+            );
+        }
         let doc = ed.add_doc(Buffer::new(text), None);
         ed.default_mode = mode.into();
         ed.focus = ed.add_view(doc);
@@ -993,7 +1111,7 @@ mod tests {
     }
 
     #[test]
-    fn yank_and_paste() {
+    fn copy_and_paste() {
         let mut c = core("one two", "normal");
         run_n(
             &mut c,
@@ -1001,7 +1119,7 @@ mod tests {
             json!({"extend": true}),
             Some(3),
         );
-        run(&mut c, "editor.yank", Value::Null);
+        run(&mut c, "editor.copy", Value::Null);
         run(&mut c, "editor.move_line_end", Value::Null);
         run(&mut c, "editor.paste", Value::Null);
         assert_eq!(text(&c), "one twoone");
