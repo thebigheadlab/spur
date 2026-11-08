@@ -627,6 +627,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "spur-vim"
+version = "0.0.0"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
+ "spur-core",
+ "spur-keymap",
+ "spur-text",
+]
+
+[[package]]
 name = "str_indices"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

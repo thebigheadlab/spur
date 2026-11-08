@@ -1,0 +1,806 @@
+# Vim preset: data only. Every key maps to a core command; the modal grammar
+# (operators, motions, text objects, `.`, macros) is executed by the core.
+# Deviations from Vim are marked `# deviation:`.
+
+[mode.normal]
+counts = true
+registers = true
+block_cursor = true
+cursor = "block"
+
+[mode.insert]
+groups_edits = true
+fallback = "editor.insert_text"
+cursor = "bar"
+
+[mode.operator]
+counts = true
+block_cursor = true
+cursor = "underline"
+
+[mode.visual]
+counts = true
+registers = true
+block_cursor = true
+inclusive_selection = true
+cursor = "block"
+
+[mode.visual_line]
+counts = true
+registers = true
+block_cursor = true
+linewise_selection = true
+cursor = "block"
+
+[mode.cmdline]
+groups_edits = true
+fallback = "vim.cmdline_insert"
+cursor = "bar"
+
+# ---- motions: normal and operator-pending ----
+
+[[bind]]
+mode = "normal operator"
+keys = "h"
+command = "editor.move_left"
+args = { wrap = false }
+
+[[bind]]
+mode = "normal operator"
+keys = "<Left>"
+command = "editor.move_left"
+args = { wrap = false }
+
+[[bind]]
+mode = "normal operator"
+keys = "<BS>"
+command = "editor.move_left"
+
+[[bind]]
+mode = "normal operator"
+keys = "l"
+command = "editor.move_right"
+args = { wrap = false }
+
+[[bind]]
+mode = "normal operator"
+keys = "<Right>"
+command = "editor.move_right"
+args = { wrap = false }
+
+[[bind]]
+mode = "normal operator"
+keys = "<Space>"
+command = "editor.move_right"
+
+[[bind]]
+mode = "normal operator"
+keys = "j"
+command = "editor.move_down"
+
+[[bind]]
+mode = "normal operator"
+keys = "<Down>"
+command = "editor.move_down"
+
+[[bind]]
+mode = "normal operator"
+keys = "k"
+command = "editor.move_up"
+
+[[bind]]
+mode = "normal operator"
+keys = "<Up>"
+command = "editor.move_up"
+
+[[bind]]
+mode = "normal operator"
+keys = "w"
+command = "editor.move_word_next"
+
+[[bind]]
+mode = "normal operator"
+keys = "W"
+command = "editor.move_word_next"
+args = { big = true }
+
+[[bind]]
+mode = "normal operator"
+keys = "b"
+command = "editor.move_word_prev"
+
+[[bind]]
+mode = "normal operator"
+keys = "B"
+command = "editor.move_word_prev"
+args = { big = true }
+
+[[bind]]
+mode = "normal operator"
+keys = "e"
+command = "editor.move_word_end"
+
+[[bind]]
+mode = "normal operator"
+keys = "E"
+command = "editor.move_word_end"
+args = { big = true }
+
+[[bind]]
+mode = "normal operator"
+keys = "0"
+command = "editor.move_line_start"
+
+[[bind]]
+mode = "normal operator"
+keys = "<Home>"
+command = "editor.move_line_start"
+
+[[bind]]
+mode = "normal operator"
+keys = "^"
+command = "editor.move_first_nonblank"
+
+[[bind]]
+mode = "normal operator"
+keys = "$"
+command = "editor.move_line_end"
+
+[[bind]]
+mode = "normal operator"
+keys = "<End>"
+command = "editor.move_line_end"
+
+[[bind]]
+mode = "normal operator"
+keys = "gg"
+command = "editor.move_doc_start"
+label = "first line"
+
+[[bind]]
+mode = "normal operator"
+keys = "G"
+command = "editor.move_doc_end"
+
+[[bind]]
+mode = "normal operator"
+keys = "f<char>"
+command = "vim.find_char"
+
+[[bind]]
+mode = "normal operator"
+keys = "t<char>"
+command = "vim.find_char"
+args = { till = true }
+
+[[bind]]
+mode = "normal operator"
+keys = "F<char>"
+command = "vim.find_char"
+args = { backward = true }
+
+[[bind]]
+mode = "normal operator"
+keys = "T<char>"
+command = "vim.find_char"
+args = { till = true, backward = true }
+
+[[bind]]
+mode = "normal operator"
+keys = ";"
+command = "vim.repeat_find"
+
+[[bind]]
+mode = "normal operator"
+keys = ","
+command = "vim.repeat_find"
+args = { reverse = true }
+
+[[bind]]
+mode = "normal operator"
+keys = "%"
+command = "vim.match_bracket"
+
+[[bind]]
+mode = "normal operator"
+keys = "n"
+command = "vim.search_next"
+
+[[bind]]
+mode = "normal operator"
+keys = "N"
+command = "vim.search_next"
+args = { reverse = true }
+
+# ---- operators ----
+
+[[bind]]
+mode = "normal"
+keys = "d"
+command = "vim.begin_operator"
+args = { op = "delete" }
+
+[[bind]]
+mode = "normal"
+keys = "c"
+command = "vim.begin_operator"
+args = { op = "change" }
+
+[[bind]]
+mode = "normal"
+keys = "y"
+command = "vim.begin_operator"
+args = { op = "yank" }
+
+[[bind]]
+mode = "normal"
+keys = ">"
+command = "vim.begin_operator"
+args = { op = "indent" }
+
+[[bind]]
+mode = "normal"
+keys = "<lt>"
+command = "vim.begin_operator"
+args = { op = "outdent" }
+
+[[bind]]
+mode = "normal"
+keys = "gu"
+label = "lowercase"
+command = "vim.begin_operator"
+args = { op = "lower" }
+
+[[bind]]
+mode = "normal"
+keys = "gU"
+label = "uppercase"
+command = "vim.begin_operator"
+args = { op = "upper" }
+
+[[bind]]
+mode = "normal"
+keys = "g~"
+label = "toggle case"
+command = "vim.begin_operator"
+args = { op = "toggle_case" }
+
+[[group]]
+mode = "normal"
+keys = "g"
+label = "+goto/case"
+
+# Doubled operators act on lines: dd cc yy >> << guu gUU g~~.
+[[bind]]
+mode = "operator"
+keys = "d"
+command = "vim.operator_line"
+when = "vim.operator == delete"
+
+[[bind]]
+mode = "operator"
+keys = "c"
+command = "vim.operator_line"
+when = "vim.operator == change"
+
+[[bind]]
+mode = "operator"
+keys = "y"
+command = "vim.operator_line"
+when = "vim.operator == yank"
+
+[[bind]]
+mode = "operator"
+keys = ">"
+command = "vim.operator_line"
+when = "vim.operator == indent"
+
+[[bind]]
+mode = "operator"
+keys = "<lt>"
+command = "vim.operator_line"
+when = "vim.operator == outdent"
+
+[[bind]]
+mode = "operator"
+keys = "u"
+command = "vim.operator_line"
+when = "vim.operator == lower"
+
+[[bind]]
+mode = "operator"
+keys = "U"
+command = "vim.operator_line"
+when = "vim.operator == upper"
+
+[[bind]]
+mode = "operator"
+keys = "~"
+command = "vim.operator_line"
+when = "vim.operator == toggle_case"
+
+# `cw` changes to the end of the word, like `ce`.
+[[bind]]
+mode = "operator"
+keys = "w"
+command = "editor.move_word_end"
+when = "vim.operator == change"
+
+[[bind]]
+mode = "operator"
+keys = "W"
+command = "editor.move_word_end"
+args = { big = true }
+when = "vim.operator == change"
+
+[[bind]]
+mode = "operator visual visual_line"
+keys = "i<char>"
+command = "vim.text_object"
+args = { inner = true }
+label = "inner object"
+
+[[bind]]
+mode = "operator visual visual_line"
+keys = "a<char>"
+command = "vim.text_object"
+label = "around object"
+
+[[bind]]
+mode = "operator"
+keys = "<Esc>"
+command = "vim.cancel_operator"
+
+# ---- shortcuts ----
+
+[[bind]]
+mode = "normal"
+keys = "x"
+run = [{ command = "vim.begin_operator", args = { op = "delete" } }, { command = "editor.move_right", args = { wrap = false } }]
+
+[[bind]]
+mode = "normal"
+keys = "<Del>"
+run = [{ command = "vim.begin_operator", args = { op = "delete" } }, { command = "editor.move_right", args = { wrap = false } }]
+
+[[bind]]
+mode = "normal"
+keys = "X"
+run = [{ command = "vim.begin_operator", args = { op = "delete" } }, { command = "editor.move_left", args = { wrap = false } }]
+
+[[bind]]
+mode = "normal"
+keys = "D"
+run = [{ command = "vim.begin_operator", args = { op = "delete" } }, { command = "editor.move_line_end" }]
+
+[[bind]]
+mode = "normal"
+keys = "C"
+run = [{ command = "vim.begin_operator", args = { op = "change" } }, { command = "editor.move_line_end" }]
+
+[[bind]]
+mode = "normal"
+keys = "s"
+run = [{ command = "vim.begin_operator", args = { op = "change" } }, { command = "editor.move_right", args = { wrap = false } }]
+
+[[bind]]
+mode = "normal"
+keys = "S"
+run = [{ command = "vim.begin_operator", args = { op = "change" } }, { command = "vim.operator_line" }]
+
+[[bind]]
+mode = "normal"
+keys = "Y"
+run = [{ command = "vim.begin_operator", args = { op = "yank" } }, { command = "vim.operator_line" }]
+
+# deviation: `~` toggles case but does not move the cursor right.
+[[bind]]
+mode = "normal"
+keys = "~"
+run = [{ command = "vim.begin_operator", args = { op = "toggle_case" } }, { command = "editor.move_right", args = { wrap = false } }]
+
+[[bind]]
+mode = "normal"
+keys = "r<char>"
+command = "vim.replace_char"
+
+[[bind]]
+mode = "normal"
+keys = "J"
+command = "vim.join_lines"
+
+[[bind]]
+mode = "normal"
+keys = "p"
+command = "editor.paste"
+args = { before = false, cursor_on_last = true }
+
+[[bind]]
+mode = "normal"
+keys = "P"
+command = "editor.paste"
+args = { before = true, cursor_on_last = true }
+
+[[bind]]
+mode = "normal"
+keys = "u"
+command = "editor.undo"
+
+[[bind]]
+mode = "normal"
+keys = "<C-r>"
+command = "editor.redo"
+
+[[bind]]
+mode = "normal"
+keys = "."
+command = "vim.repeat"
+
+[[bind]]
+mode = "normal"
+keys = "q<char>"
+command = "vim.macro_record"
+label = "record macro"
+
+[[bind]]
+mode = "normal"
+keys = "q"
+command = "vim.macro_record"
+when = "vim.recording"
+nowait = true
+
+[[bind]]
+mode = "normal"
+keys = "@<char>"
+command = "vim.macro_play"
+label = "play macro"
+
+[[bind]]
+mode = "normal"
+keys = "<Esc>"
+command = "editor.collapse_selection"
+
+# ---- entering insert mode ----
+
+[[bind]]
+mode = "normal"
+keys = "i"
+command = "editor.set_mode"
+args = { mode = "insert" }
+
+[[bind]]
+mode = "normal"
+keys = "<Insert>"
+command = "editor.set_mode"
+args = { mode = "insert" }
+
+[[bind]]
+mode = "normal"
+keys = "a"
+run = [{ command = "editor.move_right", args = { wrap = false } }, { command = "editor.set_mode", args = { mode = "insert" } }]
+
+[[bind]]
+mode = "normal"
+keys = "I"
+run = [{ command = "editor.move_first_nonblank" }, { command = "editor.set_mode", args = { mode = "insert" } }]
+
+[[bind]]
+mode = "normal"
+keys = "A"
+run = [{ command = "editor.move_line_end" }, { command = "editor.set_mode", args = { mode = "insert" } }]
+
+[[bind]]
+mode = "normal"
+keys = "o"
+run = [{ command = "vim.open_line" }, { command = "editor.set_mode", args = { mode = "insert" } }]
+
+[[bind]]
+mode = "normal"
+keys = "O"
+run = [{ command = "vim.open_line", args = { above = true } }, { command = "editor.set_mode", args = { mode = "insert" } }]
+
+# ---- insert mode ----
+
+[[bind]]
+mode = "insert"
+keys = "<Esc>"
+run = [{ command = "editor.set_mode", args = { mode = "normal" } }, { command = "editor.move_left", args = { wrap = false } }]
+
+[[bind]]
+mode = "insert"
+keys = "<C-c>"
+run = [{ command = "editor.set_mode", args = { mode = "normal" } }, { command = "editor.move_left", args = { wrap = false } }]
+
+[[bind]]
+mode = "insert"
+keys = "<BS>"
+command = "editor.delete_backward"
+
+[[bind]]
+mode = "insert"
+keys = "<Del>"
+command = "editor.delete_forward"
+
+[[bind]]
+mode = "insert"
+keys = "<CR>"
+command = "editor.insert_newline"
+
+# deviation: <Tab> inserts four spaces (no 'expandtab'/'shiftwidth' settings yet).
+[[bind]]
+mode = "insert"
+keys = "<Tab>"
+command = "editor.insert_text"
+args = { text = "    " }
+
+[[bind]]
+mode = "insert"
+keys = "<Left>"
+command = "editor.move_left"
+
+[[bind]]
+mode = "insert"
+keys = "<Right>"
+command = "editor.move_right"
+
+[[bind]]
+mode = "insert"
+keys = "<Up>"
+command = "editor.move_up"
+
+[[bind]]
+mode = "insert"
+keys = "<Down>"
+command = "editor.move_down"
+
+[[bind]]
+mode = "insert"
+keys = "<Home>"
+command = "editor.move_line_start"
+
+[[bind]]
+mode = "insert"
+keys = "<End>"
+command = "editor.move_line_end"
+
+# ---- visual modes ----
+
+[[bind]]
+mode = "normal"
+keys = "v"
+command = "editor.set_mode"
+args = { mode = "visual" }
+
+[[bind]]
+mode = "normal visual"
+keys = "V"
+command = "editor.set_mode"
+args = { mode = "visual_line" }
+
+[[bind]]
+mode = "visual_line"
+keys = "v"
+command = "editor.set_mode"
+args = { mode = "visual" }
+
+[[bind]]
+mode = "visual visual_line"
+keys = "<Esc>"
+run = [{ command = "editor.collapse_selection" }, { command = "editor.set_mode", args = { mode = "normal" } }]
+
+[[bind]]
+mode = "visual"
+keys = "v"
+run = [{ command = "editor.collapse_selection" }, { command = "editor.set_mode", args = { mode = "normal" } }]
+
+[[bind]]
+mode = "visual_line"
+keys = "V"
+run = [{ command = "editor.collapse_selection" }, { command = "editor.set_mode", args = { mode = "normal" } }]
+
+[[bind]]
+mode = "visual visual_line"
+keys = "o"
+command = "vim.flip_selection"
+
+[[bind]]
+mode = "visual visual_line"
+keys = "h"
+command = "editor.move_left"
+args = { wrap = false, extend = true }
+
+[[bind]]
+mode = "visual visual_line"
+keys = "l"
+command = "editor.move_right"
+args = { wrap = false, extend = true }
+
+[[bind]]
+mode = "visual visual_line"
+keys = "j"
+command = "editor.move_down"
+args = { extend = true }
+
+[[bind]]
+mode = "visual visual_line"
+keys = "k"
+command = "editor.move_up"
+args = { extend = true }
+
+[[bind]]
+mode = "visual visual_line"
+keys = "w"
+command = "editor.move_word_next"
+args = { extend = true }
+
+[[bind]]
+mode = "visual visual_line"
+keys = "b"
+command = "editor.move_word_prev"
+args = { extend = true }
+
+[[bind]]
+mode = "visual visual_line"
+keys = "e"
+command = "editor.move_word_end"
+args = { extend = true }
+
+[[bind]]
+mode = "visual visual_line"
+keys = "0"
+command = "editor.move_line_start"
+args = { extend = true }
+
+[[bind]]
+mode = "visual visual_line"
+keys = "^"
+command = "editor.move_first_nonblank"
+args = { extend = true }
+
+[[bind]]
+mode = "visual visual_line"
+keys = "$"
+command = "editor.move_line_end"
+args = { extend = true }
+
+[[bind]]
+mode = "visual visual_line"
+keys = "gg"
+command = "editor.move_doc_start"
+args = { extend = true }
+
+[[bind]]
+mode = "visual visual_line"
+keys = "G"
+command = "editor.move_doc_end"
+args = { extend = true }
+
+[[bind]]
+mode = "visual visual_line"
+keys = "f<char>"
+command = "vim.find_char"
+args = { extend = true }
+
+[[bind]]
+mode = "visual visual_line"
+keys = "%"
+command = "vim.match_bracket"
+args = { extend = true }
+
+[[bind]]
+mode = "visual visual_line"
+keys = "d"
+command = "vim.apply_operator"
+args = { op = "delete" }
+
+[[bind]]
+mode = "visual visual_line"
+keys = "x"
+command = "vim.apply_operator"
+args = { op = "delete" }
+
+[[bind]]
+mode = "visual visual_line"
+keys = "c"
+command = "vim.apply_operator"
+args = { op = "change" }
+
+[[bind]]
+mode = "visual visual_line"
+keys = "s"
+command = "vim.apply_operator"
+args = { op = "change" }
+
+[[bind]]
+mode = "visual visual_line"
+keys = "y"
+command = "vim.apply_operator"
+args = { op = "yank" }
+
+[[bind]]
+mode = "visual visual_line"
+keys = ">"
+command = "vim.apply_operator"
+args = { op = "indent" }
+
+[[bind]]
+mode = "visual visual_line"
+keys = "<lt>"
+command = "vim.apply_operator"
+args = { op = "outdent" }
+
+[[bind]]
+mode = "visual visual_line"
+keys = "u"
+command = "vim.apply_operator"
+args = { op = "lower" }
+
+[[bind]]
+mode = "visual visual_line"
+keys = "U"
+command = "vim.apply_operator"
+args = { op = "upper" }
+
+[[bind]]
+mode = "visual visual_line"
+keys = "~"
+command = "vim.apply_operator"
+args = { op = "toggle_case" }
+
+[[bind]]
+mode = "visual visual_line"
+keys = "D"
+command = "vim.apply_operator"
+args = { op = "delete", linewise = true }
+
+# ---- command line and search ----
+
+[[bind]]
+mode = "normal visual visual_line"
+keys = ":"
+command = "vim.cmdline_open"
+args = { prefix = ":" }
+
+[[bind]]
+mode = "normal"
+keys = "/"
+command = "vim.cmdline_open"
+args = { prefix = "/" }
+
+[[bind]]
+mode = "normal"
+keys = "?"
+command = "vim.cmdline_open"
+args = { prefix = "?" }
+
+[[bind]]
+mode = "normal"
+keys = "ZZ"
+command = "vim.ex"
+args = { text = "x" }
+
+[[bind]]
+mode = "normal"
+keys = "ZQ"
+command = "vim.ex"
+args = { text = "q!" }
+
+[[bind]]
+mode = "cmdline"
+keys = "<Esc>"
+command = "vim.cmdline_cancel"
+
+[[bind]]
+mode = "cmdline"
+keys = "<C-c>"
+command = "vim.cmdline_cancel"
+
+[[bind]]
+mode = "cmdline"
+keys = "<CR>"
+command = "vim.cmdline_submit"
+
+[[bind]]
+mode = "cmdline"
+keys = "<BS>"
+command = "vim.cmdline_backspace"
