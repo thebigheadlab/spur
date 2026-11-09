@@ -28,12 +28,37 @@ pub struct Doc {
     pub path: Option<PathBuf>,
     /// Version last saved or loaded.
     pub saved: Version,
+    /// Text as last saved or loaded, so undoing back to it clears `modified`.
+    pub saved_text: Snapshot,
 }
 
 impl Doc {
     /// True if the text changed since it was loaded or saved.
     pub fn modified(&self) -> bool {
         self.buffer.version() != self.saved
+    }
+
+    /// Marks the doc saved again if its text equals the saved text (after an undo, say).
+    /// Cheap unless the lengths match.
+    pub fn recheck_saved(&mut self) {
+        if !self.modified() || self.buffer.len() != self.saved_text.len() {
+            return;
+        }
+        let now = self.buffer.snapshot();
+        let same = now
+            .chunks(0..now.len())
+            .into_iter()
+            .flatten()
+            .flat_map(str::bytes)
+            .eq(self
+                .saved_text
+                .chunks(0..self.saved_text.len())
+                .into_iter()
+                .flatten()
+                .flat_map(str::bytes));
+        if same {
+            self.saved = self.buffer.version();
+        }
     }
 }
 
@@ -133,12 +158,14 @@ impl Editor {
     pub fn add_doc(&mut self, buffer: Buffer, path: Option<PathBuf>) -> DocId {
         let id = DocId(self.next());
         let saved = buffer.version();
+        let saved_text = buffer.snapshot();
         self.docs.insert(
             id,
             Doc {
                 buffer,
                 path,
                 saved,
+                saved_text,
             },
         );
         id

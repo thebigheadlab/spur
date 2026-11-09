@@ -177,7 +177,9 @@ fn edit(
         .enumerate()
         .filter_map(|(i, r)| per_range(&snap, *r).map(|(range, text)| (i, range, text)))
         .collect();
-    hunks.sort_by_key(|(_, r, _)| (r.start, r.end));
+    // Longest first among hunks with the same start, so a selection's edit wins over a
+    // cursor at its start.
+    hunks.sort_by_key(|(_, r, _)| (r.start, std::cmp::Reverse(r.end)));
     // Two cursors touching the same text: keep the first hunk.
     let mut last_end = None;
     hunks.retain(|(_, r, _)| {
@@ -190,6 +192,12 @@ fn edit(
     if hunks.is_empty() {
         return Ok(Value::Null);
     }
+    // One copy per cursor, so bound the total, not each piece.
+    let total = hunks
+        .iter()
+        .map(|(_, _, t)| t.len())
+        .fold(0, usize::saturating_add);
+    repeat_check(total, 1)?;
     let changes = ChangeSet::new(
         snap.len(),
         hunks
@@ -335,7 +343,13 @@ fn undo_redo(cx: C<'_, '_>, redo: bool) -> Result<Value, CommandError> {
                     .selection
                     .clone()
                     .unwrap_or_else(|| view.selection.map(&applied.changes));
-                let snap = cx.state.docs[&doc_id].buffer.snapshot();
+                let doc = cx
+                    .state
+                    .docs
+                    .get_mut(&doc_id)
+                    .unwrap_or_else(|| unreachable!());
+                doc.recheck_saved();
+                let snap = doc.buffer.snapshot();
                 let view = cx
                     .state
                     .views
@@ -392,18 +406,54 @@ fn open(cx: C<'_, '_>, path: &Path) -> Result<Value, CommandError> {
     Ok(json!({ "view": view.0, "doc": doc.0 }))
 }
 
-/// Writes `text` to a temp file next to `path`, then renames it over `path`. A symlink is
-/// followed (the link stays a link) and the file's permissions are kept.
+/// Follows `path` through symlinks (also dangling ones) to the file a save should
+/// replace.
+fn resolve_link(path: &Path) -> PathBuf {
+    let mut p = path.to_path_buf();
+    // Bounded, like the OS, so a link cycle cannot loop forever.
+    for _ in 0..40 {
+        match std::fs::symlink_metadata(&p) {
+            Ok(m) if m.file_type().is_symlink() => match std::fs::read_link(&p) {
+                Ok(next) if next.is_absolute() => p = next,
+                Ok(next) => p = p.parent().unwrap_or(Path::new("")).join(next),
+                Err(_) => break,
+            },
+            _ => break,
+        }
+    }
+    p
+}
+
+/// Writes `text` to a new temp file next to `path`, then renames it over `path`. A
+/// symlink is followed (the link stays a link) and the file's permissions are kept. The
+/// temp file is created exclusively, so a planted file or link there is never written
+/// through.
 fn write_atomic(path: &Path, snap: &Snapshot) -> std::io::Result<()> {
-    let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let target = resolve_link(path);
     let perms = std::fs::metadata(&target).ok().map(|m| m.permissions());
     let name = target
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let tmp = target.with_file_name(format!(".{name}.spur-tmp"));
+    let (mut f, tmp) = {
+        let mut attempt = 0u32;
+        loop {
+            let tmp =
+                target.with_file_name(format!(".{name}.spur-{}-{attempt}.tmp", std::process::id()));
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&tmp)
+            {
+                Ok(f) => break (f, tmp),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && attempt < 100 => {
+                    attempt += 1;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    };
     let write = || -> std::io::Result<()> {
-        let mut f = std::fs::File::create(&tmp)?;
         for chunk in snap.chunks(0..snap.len()).into_iter().flatten() {
             f.write_all(chunk.as_bytes())?;
         }
@@ -433,7 +483,13 @@ fn save(cx: C<'_, '_>, path: Option<PathBuf>) -> Result<Value, CommandError> {
         .get_mut(&doc_id)
         .unwrap_or_else(|| unreachable!());
     doc.saved = snap.version();
+    doc.saved_text = snap.clone();
     doc.path = Some(path.clone());
+    // Saving ends the current undo step, so one undo returns to the saved text.
+    let id = focus(cx);
+    if let Some(v) = cx.state.views.get_mut(&id) {
+        v.turn += 1;
+    }
     let shown = path.display().to_string();
     cx.emit(
         ev(events::BUFFER_SAVED),
@@ -884,6 +940,60 @@ mod tests {
     }
 
     #[test]
+    fn selection_edit_wins_over_cursor_at_its_start() {
+        let mut c = core("abcd", "insert");
+        let id = c.state.focus;
+        let v = c.state.views.get_mut(&id).unwrap();
+        v.selection = Selection {
+            ranges: vec![SelRange { anchor: 0, head: 3 }, SelRange::cursor(0)],
+            primary: 0,
+        };
+        v.goals = vec![None; 2];
+        run(&mut c, "editor.delete_forward", Value::Null);
+        assert_eq!(text(&c), "d");
+    }
+
+    #[test]
+    fn insert_size_bound_counts_every_cursor() {
+        let mut c = core(&"\n".repeat(99), "insert");
+        set_cursors(&mut c, &(0..100).collect::<Vec<_>>());
+        let mut inv = Invocation::new(CommandId::new("editor.insert_text").unwrap(), Actor::User)
+            .args(json!({"text": "x".repeat(1 << 20)}));
+        inv.count = Some(1);
+        assert!(
+            c.execute(inv).is_err(),
+            "100 cursors x 1 MiB exceeds the cap"
+        );
+    }
+
+    #[test]
+    fn undo_back_to_saved_text_is_unmodified() {
+        let mut c = core("ab", "insert");
+        run(&mut c, "editor.insert_text", json!({"text": "X"}));
+        assert!(c.state.doc().modified());
+        run(&mut c, "editor.undo", Value::Null);
+        assert!(!c.state.doc().modified());
+        run(&mut c, "editor.redo", Value::Null);
+        assert!(c.state.doc().modified());
+    }
+
+    #[test]
+    fn save_ends_the_undo_step() {
+        let dir = std::env::temp_dir().join(format!("spur-core-save-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("s.txt");
+        let mut c = core("", "insert");
+        run(&mut c, "editor.open", json!({"path": path}));
+        run(&mut c, "editor.insert_text", json!({"text": "a"}));
+        run(&mut c, "buffer.save", Value::Null);
+        run(&mut c, "editor.insert_text", json!({"text": "b"}));
+        run(&mut c, "editor.undo", Value::Null);
+        assert_eq!(text(&c), "a");
+        assert!(!c.state.doc().modified());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn huge_counts_are_bounded() {
         let mut c = core("ab", "insert");
         let mut inv = Invocation::new(CommandId::new("editor.insert_text").unwrap(), Actor::User)
@@ -1072,6 +1182,36 @@ mod tests {
             assert_eq!(std::fs::read_to_string(&path).unwrap(), "L0x\r\ny");
             let mode = std::fs::metadata(&path).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o755);
+
+            // A planted temp-file link is never written through.
+            let victim = dir.join("victim");
+            std::fs::write(&victim, "precious").unwrap();
+            for n in 0..3 {
+                let planted = dir.join(format!(".f.txt.spur-{}-{n}.tmp", std::process::id()));
+                std::os::unix::fs::symlink(&victim, planted).unwrap();
+            }
+            run(&mut l, "editor.insert_text", json!({"text": "M"}));
+            run(&mut l, "buffer.save", Value::Null);
+            assert_eq!(std::fs::read_to_string(&victim).unwrap(), "precious");
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), "LM0x\r\ny");
+
+            // A dangling link stays a link; the save creates its target.
+            let dangling = dir.join("dangling.txt");
+            std::os::unix::fs::symlink("not-here.txt", &dangling).unwrap();
+            let mut d = core("", "insert");
+            run(&mut d, "editor.open", json!({"path": dangling}));
+            run(&mut d, "editor.insert_text", json!({"text": "D"}));
+            run(&mut d, "buffer.save", Value::Null);
+            assert!(
+                std::fs::symlink_metadata(&dangling)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+            assert_eq!(
+                std::fs::read_to_string(dir.join("not-here.txt")).unwrap(),
+                "D"
+            );
         }
         let missing = dir.join("new.txt");
         run(&mut c, "editor.open", json!({"path": missing}));
