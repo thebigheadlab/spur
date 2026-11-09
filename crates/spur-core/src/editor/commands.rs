@@ -485,6 +485,11 @@ fn save(cx: C<'_, '_>, path: Option<PathBuf>) -> Result<Value, CommandError> {
     doc.saved = snap.version();
     doc.saved_text = snap.clone();
     doc.path = Some(path.clone());
+    // Saving ends the current undo step, so one undo returns to the saved text.
+    let id = focus(cx);
+    if let Some(v) = cx.state.views.get_mut(&id) {
+        v.turn += 1;
+    }
     let shown = path.display().to_string();
     cx.emit(
         ev(events::BUFFER_SAVED),
@@ -970,6 +975,22 @@ mod tests {
         assert!(!c.state.doc().modified());
         run(&mut c, "editor.redo", Value::Null);
         assert!(c.state.doc().modified());
+    }
+
+    #[test]
+    fn save_ends_the_undo_step() {
+        let dir = std::env::temp_dir().join(format!("spur-core-save-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("s.txt");
+        let mut c = core("", "insert");
+        run(&mut c, "editor.open", json!({"path": path}));
+        run(&mut c, "editor.insert_text", json!({"text": "a"}));
+        run(&mut c, "buffer.save", Value::Null);
+        run(&mut c, "editor.insert_text", json!({"text": "b"}));
+        run(&mut c, "editor.undo", Value::Null);
+        assert_eq!(text(&c), "a");
+        assert!(!c.state.doc().modified());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
