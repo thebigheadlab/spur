@@ -62,18 +62,27 @@ pub struct Group {
     pub sticky: bool,
 }
 
-/// Per-mode dispatch options.
+/// Per-mode dispatch options. A field a layer leaves out keeps the value from layers
+/// below; a field it sets (also to `false`) wins.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
 pub struct ModeOptions {
     /// Digits before a sequence form a count (`5dw`); `0` only continues one.
     #[serde(default)]
-    pub counts: bool,
+    pub counts: Option<bool>,
     /// `"x` before a sequence selects register `x`.
     #[serde(default)]
-    pub registers: bool,
+    pub registers: Option<bool>,
     /// Command run with `{"text": c}` for an unbound printable key (self-insert).
     #[serde(default)]
     pub fallback: Option<CommandId>,
+}
+
+/// Mode options after merging the layers.
+#[derive(Clone, Debug, Default)]
+struct Opts {
+    counts: bool,
+    registers: bool,
+    fallback: Option<CommandId>,
 }
 
 /// A layer: bindings from one source (core default, preset, user config, extension).
@@ -223,6 +232,14 @@ impl Layer {
                     args: Arc::new(args.unwrap_or(Value::Null)),
                 })
             };
+            if b.args.is_some() && b.command.is_none() {
+                return Err(err(
+                    "args go with command (use args inside run steps)".into()
+                ));
+            }
+            if b.mode.split_whitespace().next().is_none() {
+                return Err(err("mode is empty".into()));
+            }
             let action = match (b.command, b.run.is_empty(), b.unbind) {
                 (Some(c), true, false) => Action::Run(Arc::from([step(&c, b.args)?])),
                 (None, false, false) => Action::Run(
@@ -256,6 +273,12 @@ impl Layer {
                 at: format!("group[{i}]"),
                 message: e.to_string(),
             })?;
+            if g.mode.split_whitespace().next().is_none() {
+                return Err(LayerError {
+                    at: format!("group[{i}]"),
+                    message: "mode is empty".into(),
+                });
+            }
             for mode in g.mode.split_whitespace() {
                 layer.groups.push(Group {
                     mode: mode.into(),
@@ -294,6 +317,20 @@ struct Node {
 impl Node {
     fn has_children(&self) -> bool {
         !self.children.is_empty() || self.any_char.is_some()
+    }
+
+    /// Removes dead subtrees; true if this node is still useful.
+    fn prune(&mut self) -> bool {
+        self.children.retain(|_, n| n.prune());
+        if self.any_char.as_mut().is_some_and(|n| !n.prune()) {
+            self.any_char = None;
+        }
+        self.has_children()
+            || self.label.is_some()
+            || self
+                .candidates
+                .iter()
+                .any(|c| matches!(c.binding.action, Action::Run(_)))
     }
 
     fn child(&self, key: Key) -> Option<(&Node, Option<char>)> {
@@ -398,6 +435,10 @@ struct Pending {
     timed: Option<(Instant, Arc<Candidate>)>,
     /// Prefix of an active sticky group.
     sticky: Option<Vec<Key>>,
+    /// In a mode with a fallback: when to give up on the prefix and type its keys.
+    flush: Option<(Instant, CommandId)>,
+    /// Mode the pending keys belong to.
+    mode: Option<Arc<str>>,
 }
 
 /// One row of a which-key menu.
@@ -468,7 +509,7 @@ type Def = (usize, Option<String>);
 pub struct Keymap {
     layers: Vec<Layer>,
     tries: HashMap<Arc<str>, Node>,
-    options: HashMap<Arc<str>, ModeOptions>,
+    options: HashMap<Arc<str>, Opts>,
     pending: Pending,
     /// Wait for a longer binding.
     pub timeout: Duration,
@@ -521,8 +562,12 @@ impl Keymap {
         for (li, layer) in self.layers.iter().enumerate() {
             for (mode, opts) in &layer.modes {
                 let o = self.options.entry(mode.clone()).or_default();
-                o.counts |= opts.counts;
-                o.registers |= opts.registers;
+                if let Some(v) = opts.counts {
+                    o.counts = v;
+                }
+                if let Some(v) = opts.registers {
+                    o.registers = v;
+                }
                 if opts.fallback.is_some() {
                     o.fallback.clone_from(&opts.fallback);
                 }
@@ -551,6 +596,11 @@ impl Keymap {
                     }),
                 );
             }
+        }
+        // Unbinds leave nodes nothing can fire; drop them so they neither delay a
+        // shorter binding nor show up as conflicts.
+        for root in self.tries.values_mut() {
+            root.prune();
         }
     }
 
@@ -584,19 +634,47 @@ impl Keymap {
         !p.keys.is_empty() || p.count.is_some() || p.register.is_some() || p.awaiting_register
     }
 
-    /// When [`Keymap::tick`] should be called to fire a timed-out shorter binding.
+    /// When [`Keymap::tick`] should be called: a timed-out shorter binding fires, or an
+    /// unfinished prefix in a typing mode is typed as text.
     pub fn deadline(&self) -> Option<Instant> {
-        self.pending.timed.as_ref().map(|(t, _)| *t)
+        let p = &self.pending;
+        match (p.timed.as_ref().map(|t| t.0), p.flush.as_ref().map(|f| f.0)) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
     }
 
-    /// Fires a shorter binding whose timeout passed.
+    /// Fires a shorter binding whose timeout passed, or types an abandoned prefix.
     pub fn tick(&mut self, now: Instant) -> Option<Dispatch> {
-        let (at, _) = self.pending.timed.as_ref()?;
+        if let Some((at, _)) = &self.pending.timed {
+            if now < *at {
+                return None;
+            }
+            let (_, cand) = self.pending.timed.take()?;
+            return Some(self.fire(&cand));
+        }
+        let (at, _) = self.pending.flush.as_ref()?;
         if now < *at {
             return None;
         }
-        let (_, cand) = self.pending.timed.take()?;
-        Some(self.fire(&cand))
+        let (_, cmd) = self.pending.flush.take()?;
+        let p = std::mem::take(&mut self.pending);
+        Self::typed(&cmd, &p, &p.keys)
+    }
+
+    /// A fallback dispatch typing the printable keys in `keys`, if any.
+    fn typed(cmd: &CommandId, p: &Pending, keys: &[Key]) -> Option<Dispatch> {
+        let text: String = keys.iter().filter_map(|k| k.text()).collect();
+        (!text.is_empty()).then(|| Dispatch {
+            steps: Arc::from([Step {
+                command: cmd.clone(),
+                args: Arc::new(serde_json::json!({ "text": text })),
+            }]),
+            count: p.count,
+            register: p.register,
+            chars: Vec::new(),
+            keys: keys.to_vec(),
+        })
     }
 
     /// Drops any pending keys, count and register (keeps nothing sticky).
@@ -626,16 +704,32 @@ impl Keymap {
     /// Feeds one key in `mode`. `now` drives the timeout for ambiguous prefixes.
     pub fn feed(&mut self, key: Key, mode: &str, cx: &impl ContextLookup, now: Instant) -> Feed {
         let mut run = Vec::new();
+        // Keys pending in another mode (a sticky group whose binding switched modes, say)
+        // do not carry over.
+        if self.pending.mode.as_deref().is_some_and(|m| m != mode) {
+            self.pending = Pending::default();
+        }
         // A key after an ambiguous prefix: continue if it extends the sequence, else fire
-        // the shorter binding and handle this key from the start.
+        // the shorter binding and handle this key from the start. `<Esc>` cancels.
         if let Some((_, cand)) = self.pending.timed.take() {
             let mut keys = self.pending.keys.clone();
             keys.push(key);
             if self.node(mode, &keys).is_none() {
+                if key.code == KeyCode::Esc {
+                    self.pending = Pending::default();
+                    return Feed {
+                        run,
+                        status: Status::Cancelled,
+                    };
+                }
                 run.push(self.fire(&cand));
             }
         }
+        self.pending.flush = None;
         let status = self.step(key, mode, cx, now, &mut run);
+        if self.is_pending() || self.pending.sticky.is_some() {
+            self.pending.mode = Some(mode.into());
+        }
         Feed { run, status }
     }
 
@@ -647,6 +741,7 @@ impl Keymap {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn step(
         &mut self,
         key: Key,
@@ -683,31 +778,37 @@ impl Keymap {
         }
         let mut keys = p.keys.clone();
         keys.push(key);
-        let found = self
-            .node(mode, &keys[..keys.len() - 1])
-            .and_then(|n| n.child(key));
+        let parent = self.node(mode, &keys[..keys.len() - 1]);
+        let mut found = parent.and_then(|n| n.child(key));
+        // An exact child that can never fire must not hide `<char>` capture.
+        if let (Some((n, None)), Some(par), Some(c)) = (found, parent, key.text())
+            && n.select(cx).is_none()
+            && !n.has_children()
+            && let Some(any) = par.any_char.as_deref()
+        {
+            found = Some((any, Some(c)));
+        }
         let Some((node, captured)) = found else {
             let sticky = self.pending.sticky.clone();
+            if sticky.is_none()
+                && let Some(cmd) = &opts.fallback
+            {
+                let p = std::mem::take(&mut self.pending);
+                if at_root {
+                    if let Some(d) = Self::typed(cmd, &p, &[key]) {
+                        run.push(d);
+                        return Status::Idle;
+                    }
+                } else {
+                    // A prefix that led nowhere: type it, then handle this key afresh.
+                    run.extend(Self::typed(cmd, &p, &p.keys));
+                    return self.step(key, mode, cx, now, run);
+                }
+                self.pending = p;
+            }
             if key.code == KeyCode::Esc && (self.is_pending() || sticky.is_some()) {
                 self.pending = Pending::default();
                 return Status::Cancelled;
-            }
-            if at_root
-                && sticky.is_none()
-                && let (Some(cmd), Some(c)) = (&opts.fallback, key.text())
-            {
-                let p = std::mem::take(&mut self.pending);
-                run.push(Dispatch {
-                    steps: Arc::from([Step {
-                        command: cmd.clone(),
-                        args: Arc::new(serde_json::json!({ "text": c.to_string() })),
-                    }]),
-                    count: p.count,
-                    register: p.register,
-                    chars: Vec::new(),
-                    keys: vec![key],
-                });
-                return Status::Idle;
             }
             // Unbound: drop the sequence (a sticky group stays active).
             self.pending = Pending {
@@ -737,8 +838,26 @@ impl Keymap {
                 p.timed = Some((now + self.timeout, c));
                 Status::Pending
             }
-            (None, true) => Status::Pending,
+            (None, true) => {
+                if p.sticky.is_none()
+                    && let Some(cmd) = &opts.fallback
+                {
+                    p.flush = Some((now + self.timeout, cmd.clone()));
+                }
+                Status::Pending
+            }
             (None, false) => {
+                if p.sticky.is_none()
+                    && let Some(cmd) = &opts.fallback
+                {
+                    // Nothing fires here (a failing `when`, say): type the keys instead.
+                    let p = std::mem::take(&mut self.pending);
+                    if let Some(d) = Self::typed(cmd, &p, &keys) {
+                        run.push(d);
+                        return Status::Idle;
+                    }
+                }
+                let p = &mut self.pending;
                 let sticky = p.sticky.clone();
                 self.pending = Pending {
                     keys: sticky.clone().unwrap_or_default(),
