@@ -127,10 +127,21 @@ pub enum Class {
     Punct,
 }
 
+/// Combining marks, joiners and variation selectors: they belong to the char before.
+fn is_mark(c: char) -> bool {
+    matches!(c as u32,
+        0x0300..=0x036F | 0x0483..=0x0489 | 0x0591..=0x05BD | 0x0610..=0x061A
+        | 0x064B..=0x065F | 0x0900..=0x0903 | 0x093A..=0x094F | 0x1AB0..=0x1AFF
+        | 0x1DC0..=0x1DFF | 0x200C..=0x200D | 0x20D0..=0x20FF | 0xFE00..=0xFE0F
+        | 0xFE20..=0xFE2F | 0xE0100..=0xE01EF)
+}
+
 /// Class of `c`; `big` treats punctuation as word chars.
 pub fn class(c: char, big: bool) -> Class {
     match c {
         '\n' | '\r' => Class::Newline,
+        // Close enough for word motion: a mark rides with a word char base.
+        c if is_mark(c) => Class::Word,
         c if c.is_whitespace() => Class::Space,
         _ if big => Class::Word,
         c if c.is_alphanumeric() || c == '_' => Class::Word,
@@ -316,6 +327,13 @@ mod tests {
         assert_eq!(vertical(&s, 0, -5, 0), 0);
         assert_eq!(vertical(&s, 0, 99, 2), 11);
         assert_eq!(char_col(&snap("äb"), 2), 1);
+    }
+
+    #[test]
+    fn combining_marks_stay_in_the_word() {
+        let s = snap("nai\u{308}ve cafe\u{301} ok");
+        assert_eq!(word_next(&s, 0, false), 8);
+        assert_eq!(word_prev(&s, 8, false), 0);
     }
 
     #[test]

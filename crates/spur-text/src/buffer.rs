@@ -391,7 +391,7 @@ impl Buffer {
         };
         let rev = &self.history.revs[child];
         let (changes, selection) = (rev.changes.clone(), rev.selection_after.clone());
-        self.commit_over(author, &changes, selection, &path, None)
+        self.commit_over(author, &changes, selection, &path, None, false)
     }
 
     /// Reverts revision `rev` (on the head path) by rebasing its inverse over later edits.
@@ -400,11 +400,24 @@ impl Buffer {
             return Ok(None);
         };
         let r = &self.history.revs[rev];
-        // `selection_before` is in the coordinates before `rev`; move it past `rev` so it
-        // can follow the later edits, then past the rebased inverse (in `commit_over`).
-        let selection = r.selection_before.as_ref().map(|s| s.map(&r.changes));
         let inverse = r.inverse.clone();
-        self.commit_over(author, &inverse, selection, &path, Some(rev))
+        // `selection_before` is in the coordinates before `rev`. The result is that text
+        // plus the later edits, so map it through each later edit rebased over the
+        // (progressively rebased) inverse. If that does not rebase cleanly, fall back to
+        // mapping it past `rev`, the later edits and the inverse, which stays valid but
+        // can collapse ranges.
+        let mut premapped = r.selection_before.clone();
+        let mut inv = inverse.clone();
+        for &later in &path {
+            let over = &self.history.revs[later].changes;
+            let (Ok(over_pre), Ok(inv_next)) = (over.rebase(&inv), inv.rebase(over)) else {
+                let selection = r.selection_before.as_ref().map(|s| s.map(&r.changes));
+                return self.commit_over(author, &inverse, selection, &path, Some(rev), false);
+            };
+            premapped = premapped.map(|s| s.map(&over_pre));
+            inv = inv_next;
+        }
+        self.commit_over(author, &inverse, premapped, &path, Some(rev), true)
     }
 
     /// Rebases `changes` over the revisions in `path`, then commits it as a new revision.
@@ -415,6 +428,7 @@ impl Buffer {
         selection: Option<Selection>,
         path: &[usize],
         reverts: Option<usize>,
+        premapped: bool,
     ) -> Result<Option<Applied>, UndoError> {
         let mut selection = selection;
         let mut tagged: Vec<(usize, Change)> =
@@ -434,11 +448,13 @@ impl Buffer {
                     .collect(),
             })?;
             len = over.new_len();
-            selection = selection.map(|s| s.map(over));
+            if !premapped {
+                selection = selection.map(|s| s.map(over));
+            }
         }
         let changes = ChangeSet::new(len, tagged.into_iter().map(|(_, c)| c))
             .expect("rebased hunks stay sorted and in bounds");
-        if reverts.is_some() {
+        if reverts.is_some() && !premapped {
             selection = selection.map(|s| s.map(&changes));
         }
         let inverse = self.commit(&changes);

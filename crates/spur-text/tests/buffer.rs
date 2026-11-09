@@ -331,12 +331,9 @@ fn undo_selection_follows_the_reverted_edit_and_later_ones() {
     let undone = buf.undo(&AuthorId::User).unwrap().unwrap();
     let snap = buf.snapshot();
     assert_eq!(text(&snap), "zz\nhello worldéééé");
-    for r in &undone.selection.unwrap().ranges {
-        for o in [r.anchor, r.head] {
-            assert!((3..=9).contains(&o), "{r:?}");
-            assert!(snap.is_boundary(o));
-        }
-    }
+    // The selection the user had before deleting comes back whole.
+    let sel = undone.selection.unwrap();
+    assert_eq!((sel.ranges[0].anchor, sel.ranges[0].head), (3, 9));
     // The next edit at the restored cursor works.
     buf.apply(insert(&buf, AuthorId::User, buf.version(), 3, "!"))
         .unwrap();
