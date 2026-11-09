@@ -1,8 +1,8 @@
 //! Scenario tests for the buffer API.
 
 use spur_text::{
-    AnchorError, AuthorId, Bias, Buffer, Change, ChangeSet, EditError, GroupKey, Point, Selection,
-    Snapshot, Transaction, UndoError, Version,
+    AnchorError, AuthorId, Bias, Buffer, Change, ChangeSet, EditError, GroupKey, Point, SelRange,
+    Selection, Snapshot, Transaction, UndoError, Version,
 };
 
 fn text(s: &Snapshot) -> String {
@@ -308,4 +308,33 @@ fn rebased_transaction_keeps_mapped_selection_before() {
     let undone = buf.undo(&agent()).unwrap().unwrap();
     assert_eq!(undone.selection, Some(Selection::cursor(5)));
     assert_eq!(text(&buf.snapshot()), "__abc");
+}
+
+#[test]
+fn undo_selection_follows_the_reverted_edit_and_later_ones() {
+    let mut buf = Buffer::new("zz\nhello world");
+    let del = Transaction::new(
+        AuthorId::User,
+        buf.version(),
+        ChangeSet::new(buf.len(), [Change::new(3..9, "")]).unwrap(),
+    )
+    .with_selections(
+        Selection {
+            ranges: vec![SelRange { anchor: 3, head: 9 }],
+            primary: 0,
+        },
+        Selection::cursor(3),
+    );
+    buf.apply(del).unwrap();
+    buf.apply(insert(&buf, agent(), buf.version(), buf.len(), "éééé"))
+        .unwrap();
+    let undone = buf.undo(&AuthorId::User).unwrap().unwrap();
+    let snap = buf.snapshot();
+    assert_eq!(text(&snap), "zz\nhello worldéééé");
+    // The selection the user had before deleting comes back whole.
+    let sel = undone.selection.unwrap();
+    assert_eq!((sel.ranges[0].anchor, sel.ranges[0].head), (3, 9));
+    // The next edit at the restored cursor works.
+    buf.apply(insert(&buf, AuthorId::User, buf.version(), 3, "!"))
+        .unwrap();
 }
