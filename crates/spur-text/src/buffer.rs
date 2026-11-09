@@ -410,16 +410,12 @@ impl Buffer {
         let mut inv = inverse.clone();
         for &later in &path {
             let over = &self.history.revs[later].changes;
-            match (over.rebase(&inv), inv.rebase(over)) {
-                (Ok(over_pre), Ok(inv_next)) => {
-                    premapped = premapped.map(|s| s.map(&over_pre));
-                    inv = inv_next;
-                }
-                _ => {
-                    let selection = r.selection_before.as_ref().map(|s| s.map(&r.changes));
-                    return self.commit_over(author, &inverse, selection, &path, Some(rev), false);
-                }
-            }
+            let (Ok(over_pre), Ok(inv_next)) = (over.rebase(&inv), inv.rebase(over)) else {
+                let selection = r.selection_before.as_ref().map(|s| s.map(&r.changes));
+                return self.commit_over(author, &inverse, selection, &path, Some(rev), false);
+            };
+            premapped = premapped.map(|s| s.map(&over_pre));
+            inv = inv_next;
         }
         self.commit_over(author, &inverse, premapped, &path, Some(rev), true)
     }
