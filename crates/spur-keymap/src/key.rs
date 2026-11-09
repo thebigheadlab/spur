@@ -84,12 +84,20 @@ pub struct Key {
 }
 
 impl Key {
-    /// A key with modifiers, normalized: chars carry their case, so Shift is dropped from
-    /// them; Ctrl/Alt letters are lowercased unless Shift was given.
+    /// A key with modifiers, normalized: letters carry their case, so Shift is dropped from
+    /// them; Ctrl/Alt letters are lowercased unless Shift was given. Chars without case
+    /// (space, digits, punctuation) keep Shift as a modifier.
     pub fn new(code: KeyCode, mods: Mods) -> Self {
         match code {
             KeyCode::Char(c) => {
                 let shifted = mods.contains(Mods::SHIFT);
+                // Only letters carry Shift as case; `<S-Space>` keeps it as a modifier.
+                if shifted && !c.is_lowercase() && !c.is_uppercase() {
+                    return Self {
+                        code: KeyCode::Char(c),
+                        mods,
+                    };
+                }
                 let c = if !mods.without(Mods::SHIFT).is_empty() && !shifted {
                     c.to_ascii_lowercase()
                 } else if shifted {
@@ -301,6 +309,9 @@ pub fn parse_brackets(s: &str) -> Result<Vec<Key>, KeyParseError> {
             } else {
                 named(name).ok_or_else(|| err(i, &format!("unknown key <{inner}>")))?
             };
+            if code == KeyCode::AnyChar && !mods.is_empty() {
+                return Err(err(i, "<char> takes no modifiers"));
+            }
             out.push(Key::new(code, mods));
             i += close + 1;
             continue;
@@ -387,6 +398,8 @@ mod tests {
             ("ctrl++", "ctrl+plus"),
             ("a {char}", "a {char}"),
             ("A", "A"),
+            ("shift+space", "shift+space"),
+            ("ctrl+shift+space", "ctrl+shift+space"),
         ] {
             let keys = parse_keys(src).unwrap_or_else(|e| panic!("{src}: {e}"));
             assert_eq!(format_keys(&keys), canon, "{src}");
@@ -418,6 +431,10 @@ mod tests {
             ("<F12>", "f12"),
             ("<S-a>", "A"),
             ("<", "<"),
+            ("<C-gt>", "ctrl+>"),
+            ("<A-bar>", "alt+|"),
+            ("<S-Space>", "shift+space"),
+            ("<C-S-Space>", "ctrl+shift+space"),
         ] {
             let keys = parse_keys(src).unwrap_or_else(|e| panic!("{src}: {e}"));
             assert_eq!(format_keys(&keys), canon, "{src}");
@@ -426,6 +443,11 @@ mod tests {
         assert!(parse_keys("<nope>").is_err());
         assert!(parse_keys("<X-a>").is_err());
         assert!(parse_keys("<F99>").is_err());
+        assert!(parse_keys("<C-char>").is_err());
+        assert_ne!(
+            parse_keys("<S-Space>").unwrap(),
+            parse_keys("<Space>").unwrap()
+        );
     }
 
     #[test]

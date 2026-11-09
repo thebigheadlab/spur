@@ -365,3 +365,217 @@ fn duplicate_in_one_layer_reported() {
     k.push_layer(Layer::from_toml("t", Source::Core, toml).unwrap());
     assert_eq!(k.conflicts()[0].kind, ConflictKind::Duplicate);
 }
+
+/// Feeds keys in `mode` of a keymap built from `toml`; returns what ran, as
+/// `command` or `command:text` for typed text, then the last status.
+fn feed_all(k: &mut Keymap, mode: &str, keys: &str, now: Instant) -> (Vec<String>, Status) {
+    let c = cx(false);
+    let mut ran = Vec::new();
+    let mut status = Status::Idle;
+    for key in parse_keys(keys).unwrap() {
+        let f = k.feed(key, mode, &c, now);
+        for d in f.run {
+            ran.push(describe(&d));
+        }
+        status = f.status;
+    }
+    (ran, status)
+}
+
+fn describe(d: &spur_keymap::Dispatch) -> String {
+    let cmd = d.steps[0].command.to_string();
+    match d.steps[0].args.get("text").and_then(|t| t.as_str()) {
+        Some(t) => format!("{cmd}:{t}"),
+        None => cmd,
+    }
+}
+
+fn km(toml: &str) -> Keymap {
+    let mut k = Keymap::new();
+    k.push_layer(Layer::from_toml("t", Source::Core, toml).unwrap());
+    k
+}
+
+const TYPING: &str = r#"
+[mode.insert]
+fallback = "editor.insert_text"
+
+[[bind]]
+mode = "insert"
+keys = "jk"
+command = "x.leave"
+
+[[bind]]
+mode = "insert"
+keys = "a"
+command = "x.a"
+when = "buffer.modified"
+
+[[bind]]
+mode = "insert"
+keys = "<Esc>"
+command = "x.esc"
+"#;
+
+#[test]
+fn typing_mode_never_loses_keys() {
+    let now = t0();
+    let mut k = km(TYPING);
+    // A prefix that leads nowhere is typed, then the next key is handled afresh.
+    assert_eq!(
+        feed_all(&mut k, "insert", "jx", now).0,
+        ["editor.insert_text:j", "editor.insert_text:x"]
+    );
+    assert_eq!(
+        feed_all(&mut k, "insert", "j<Esc>", now).0,
+        ["editor.insert_text:j", "x.esc"]
+    );
+    // A pending prefix is typed when its timeout passes.
+    let (ran, status) = feed_all(&mut k, "insert", "j", now);
+    assert!(ran.is_empty());
+    assert_eq!(status, Status::Pending);
+    let due = k.deadline().expect("typing prefix has a deadline");
+    assert_eq!(describe(&k.tick(due).unwrap()), "editor.insert_text:j");
+    // A key whose binding's `when` fails types itself.
+    assert_eq!(
+        feed_all(&mut k, "insert", "a", now).0,
+        ["editor.insert_text:a"]
+    );
+    assert_eq!(feed_all(&mut k, "insert", "jk", now).0, ["x.leave"]);
+}
+
+#[test]
+fn dead_exact_child_does_not_hide_char_capture() {
+    let mut k = km(r#"
+[[bind]]
+mode = "n"
+keys = "f<char>"
+command = "x.find"
+
+[[bind]]
+mode = "n"
+keys = "fa"
+command = "x.fa"
+when = "buffer.modified"
+"#);
+    let c = cx(false);
+    let now = t0();
+    k.feed(parse_keys("f").unwrap()[0], "n", &c, now);
+    let f = k.feed(parse_keys("a").unwrap()[0], "n", &c, now);
+    assert_eq!(f.run[0].steps[0].command.as_str(), "x.find");
+    assert_eq!(f.run[0].chars, ['a']);
+}
+
+#[test]
+fn unbind_leaves_no_phantom_prefix() {
+    let mut k = km(r#"
+[[bind]]
+mode = "n"
+keys = "g"
+command = "x.g"
+
+[[bind]]
+mode = "n"
+keys = "gg"
+command = "x.gg"
+
+[[bind]]
+mode = "n"
+keys = "x"
+command = "x.x"
+"#);
+    k.push_layer(
+        Layer::from_toml(
+            "user",
+            Source::Core,
+            r#"
+[[bind]]
+mode = "n"
+keys = "gg"
+unbind = true
+
+[[bind]]
+mode = "n"
+keys = "xy"
+unbind = true
+"#,
+        )
+        .unwrap(),
+    );
+    let now = t0();
+    assert_eq!(feed_all(&mut k, "n", "g", now).0, ["x.g"]);
+    assert_eq!(feed_all(&mut k, "n", "x", now).0, ["x.x"]);
+    assert!(k.deadline().is_none());
+    assert!(
+        !k.conflicts()
+            .iter()
+            .any(|c| c.kind == spur_keymap::ConflictKind::PrefixShadow)
+    );
+}
+
+#[test]
+fn esc_after_ambiguous_prefix_cancels() {
+    let mut k = km(r#"
+[[bind]]
+mode = "n"
+keys = "g"
+command = "x.g"
+
+[[bind]]
+mode = "n"
+keys = "gg"
+command = "x.gg"
+"#);
+    let (ran, status) = feed_all(&mut k, "n", "g<Esc>", t0());
+    assert!(ran.is_empty(), "{ran:?}");
+    assert_eq!(status, Status::Cancelled);
+}
+
+#[test]
+fn higher_layer_can_turn_options_off() {
+    let mut k = km("[mode.n]\ncounts = true\n");
+    k.push_layer(
+        Layer::from_toml(
+            "user",
+            Source::Core,
+            "[mode.n]\ncounts = false\n\n[[bind]]\nmode = \"n\"\nkeys = \"3\"\ncommand = \"x.three\"\n",
+        )
+        .unwrap(),
+    );
+    assert_eq!(feed_all(&mut k, "n", "3", t0()).0, ["x.three"]);
+}
+
+#[test]
+fn sticky_group_ends_when_the_mode_changes() {
+    let mut k = km(r#"
+[mode.i]
+fallback = "editor.insert_text"
+
+[[group]]
+mode = "n"
+keys = "<C-w>"
+label = "+w"
+sticky = true
+
+[[bind]]
+mode = "n"
+keys = "<C-w>i"
+command = "x.to_insert"
+"#);
+    let now = t0();
+    assert_eq!(feed_all(&mut k, "n", "<C-w>i", now).0, ["x.to_insert"]);
+    assert_eq!(feed_all(&mut k, "i", "a", now).0, ["editor.insert_text:a"]);
+}
+
+#[test]
+fn layer_validation() {
+    for bad in [
+        "[[bind]]\nmode = \"\"\nkeys = \"a\"\ncommand = \"x.a\"\n",
+        "[[bind]]\nmode = \"n\"\nkeys = \"a\"\nrun = [{ command = \"x.a\" }]\nargs = { y = 1 }\n",
+        "[[bind]]\nmode = \"n\"\nkeys = \"a\"\nunbind = true\nargs = { y = 1 }\n",
+        "[[bind]]\nmode = \"n\"\nkeys = \"<C-char>\"\ncommand = \"x.a\"\n",
+        "[[group]]\nmode = \" \"\nkeys = \"a\"\nlabel = \"g\"\n",
+    ] {
+        assert!(Layer::from_toml("t", Source::Core, bad).is_err(), "{bad}");
+    }
+}
