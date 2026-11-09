@@ -343,7 +343,13 @@ fn undo_redo(cx: C<'_, '_>, redo: bool) -> Result<Value, CommandError> {
                     .selection
                     .clone()
                     .unwrap_or_else(|| view.selection.map(&applied.changes));
-                let snap = cx.state.docs[&doc_id].buffer.snapshot();
+                let doc = cx
+                    .state
+                    .docs
+                    .get_mut(&doc_id)
+                    .unwrap_or_else(|| unreachable!());
+                doc.recheck_saved();
+                let snap = doc.buffer.snapshot();
                 let view = cx
                     .state
                     .views
@@ -477,6 +483,7 @@ fn save(cx: C<'_, '_>, path: Option<PathBuf>) -> Result<Value, CommandError> {
         .get_mut(&doc_id)
         .unwrap_or_else(|| unreachable!());
     doc.saved = snap.version();
+    doc.saved_text = snap.clone();
     doc.path = Some(path.clone());
     let shown = path.display().to_string();
     cx.emit(
@@ -952,6 +959,17 @@ mod tests {
             c.execute(inv).is_err(),
             "100 cursors x 1 MiB exceeds the cap"
         );
+    }
+
+    #[test]
+    fn undo_back_to_saved_text_is_unmodified() {
+        let mut c = core("ab", "insert");
+        run(&mut c, "editor.insert_text", json!({"text": "X"}));
+        assert!(c.state.doc().modified());
+        run(&mut c, "editor.undo", Value::Null);
+        assert!(!c.state.doc().modified());
+        run(&mut c, "editor.redo", Value::Null);
+        assert!(c.state.doc().modified());
     }
 
     #[test]
