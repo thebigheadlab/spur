@@ -68,7 +68,7 @@ fn ask_runs_a_command_by_name() {
     let ask = s.core.state.ask.clone().unwrap();
     assert_eq!(ask.kind, AskKind::Ask);
     assert!(!ask.items.is_empty(), "featured rows before typing");
-    typ(&mut s, "select every");
+    typ(&mut s, "select everything");
     assert_eq!(
         s.core.state.ask.as_ref().unwrap().items[0].title,
         "Select everything"
@@ -353,4 +353,19 @@ fn paste_goes_where_typing_goes() {
     s.paste("save\nmore");
     assert_eq!(s.core.state.ask.as_ref().unwrap().text, "save");
     assert_eq!(text(&s), "ab\ncdx");
+}
+
+#[test]
+fn every_match_changes_together() {
+    let mut s = session("let total = 0;\ntotal += 1;\nprint(total);\n", 0);
+    press(&mut s, "ctrl+f");
+    typ(&mut s, "total");
+    press(&mut s, "alt+enter");
+    assert_eq!(&*s.mode(), "edit");
+    assert_eq!(s.core.state.view().selection.ranges.len(), 3);
+    typ(&mut s, "sum");
+    assert_eq!(text(&s), "let sum = 0;\nsum += 1;\nprint(sum);\n");
+    // One undo step brings every name back.
+    press(&mut s, "ctrl+z");
+    assert_eq!(text(&s), "let total = 0;\ntotal += 1;\nprint(total);\n");
 }

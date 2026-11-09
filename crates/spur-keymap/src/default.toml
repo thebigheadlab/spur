@@ -198,6 +198,11 @@ label = "Select everything"
 
 [[bind]]
 mode = "edit"
+keys = "alt+enter"
+command = "editor.select_matches"
+
+[[bind]]
+mode = "edit"
 keys = "alt+up"
 command = "editor.grow_selection"
 label = "Grow selection"
@@ -264,6 +269,11 @@ args = { backward = true }
 mode = "ask"
 keys = "ctrl+f"
 command = "ask.accept"
+
+[[bind]]
+mode = "ask"
+keys = "alt+enter"
+command = "editor.select_matches"
 
 [[bind]]
 mode = "ask"

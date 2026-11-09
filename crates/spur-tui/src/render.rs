@@ -14,6 +14,8 @@ use crossterm::style::{
 };
 use spur_core::editor::{AskKind, Viewport};
 use spur_keymap::Session;
+
+use crate::syntax::{self, Tok};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -71,8 +73,16 @@ mod theme {
     pub const FAINT: Color = Color::Rgb(0x45, 0x49, 0x54);
     pub const COPPER: Color = Color::Rgb(0xd9, 0x8b, 0x48);
     pub const COPPER_DIM: Color = Color::Rgb(0x8a, 0x5a, 0x33);
-    pub const SELECT: Color = Color::Rgb(0x4a, 0x35, 0x25);
-    pub const MATCH: Color = Color::Rgb(0x23, 0x41, 0x3f);
+    pub const SELECT: Color = Color::Rgb(0x5e, 0x40, 0x26);
+    pub const MATCH: Color = Color::Rgb(0x26, 0x4a, 0x47);
+    // Syntax: quiet by default; copper marks structure, the rest stays close to bone.
+    pub const KEYWORD: Color = Color::Rgb(0xd9, 0x8b, 0x48);
+    pub const STRING: Color = Color::Rgb(0xa8, 0xbf, 0x86);
+    pub const NUMBER: Color = Color::Rgb(0xd6, 0xa8, 0xc8);
+    pub const TYPE: Color = Color::Rgb(0x8f, 0xc1, 0xc4);
+    pub const CALL: Color = Color::Rgb(0xf2, 0xec, 0xe0);
+    pub const PUNCT: Color = Color::Rgb(0x8c, 0x8a, 0x86);
+    pub const COMMENT: Color = Color::Rgb(0x75, 0x7a, 0x86);
     pub const ERROR: Color = Color::Rgb(0xe8, 0x6a, 0x5c);
 }
 
@@ -247,6 +257,20 @@ pub struct UiState {
     pub pending_since: Option<Instant>,
     /// The message on the rail, the input it followed and when it first showed.
     pub message: Option<(String, u64, Instant)>,
+}
+
+/// Foreground for a syntax token.
+fn tok_color(t: Tok) -> Color {
+    match t {
+        Tok::Plain => theme::BONE,
+        Tok::Comment => theme::COMMENT,
+        Tok::Str => theme::STRING,
+        Tok::Num => theme::NUMBER,
+        Tok::Keyword => theme::KEYWORD,
+        Tok::Type => theme::TYPE,
+        Tok::Call => theme::CALL,
+        Tok::Punct => theme::PUNCT,
+    }
 }
 
 /// Display layout of one line: for each grapheme, (char index, display column, width,
@@ -467,12 +491,19 @@ pub fn render(s: &mut Session, width: u16, height: u16, ui: &mut UiState, now: I
             .any(|(a, b)| (line_no, ch) >= (a.line, a.column) && (line_no, ch) < (b.line, b.column))
     };
 
+    let lang = vp.path.as_deref().and_then(syntax::lang_for);
+    let mut in_block = false;
     for row in 0..rows {
         let y = top_row + u16::try_from(row).unwrap_or(u16::MAX);
         let line_no = vp.top_line + row;
         let Some(text) = vp.lines.get(row) else {
             continue;
         };
+        // The empty "line" after a final newline is not a line people wrote.
+        if line_no + 1 == vp.line_count && line_no > 0 && text.is_empty() && here != Some(line_no) {
+            continue;
+        }
+        let toks = lang.map(|l| syntax::line(l, text, &mut in_block));
         let is_here = here == Some(line_no) && vp.selections.is_empty();
         let base = if is_here { TEXT_LINE } else { TEXT };
         if is_here {
@@ -494,6 +525,11 @@ pub fn render(s: &mut Session, width: u16, height: u16, ui: &mut UiState, now: I
                 SELECTION
             } else if in_range(line_no, *ch, &vp.highlights) {
                 MATCH
+            } else if let Some(t) = toks.as_ref().and_then(|t| t.get(*ch)) {
+                Style {
+                    fg: tok_color(*t),
+                    ..base
+                }
             } else {
                 base
             };
@@ -565,8 +601,38 @@ pub fn render(s: &mut Session, width: u16, height: u16, ui: &mut UiState, now: I
     rail(&mut grid, s, &vp, message);
 
     let caret = cursor.unwrap_or((x0, top_row));
-    // The Ask card, at the caret.
-    if let Some(a) = &vp.ask {
+    // Find lives in the rail, so the card never hides the matches it lights up.
+    if let Some(a) = vp.ask.as_ref().filter(|a| a.kind == AskKind::Find) {
+        grid.fill(0, 0, width, RAIL);
+        let mut x = grid.put(1, 0, "\u{25c6} ", RAIL_MARK);
+        x = grid.put(x, 0, "find \u{203a} ", RAIL_MARK);
+        let note = a.note.clone().unwrap_or_default();
+        let keys = "enter next \u{b7} alt+enter every match \u{b7} esc done";
+        let right_w = note.width() + 2 + keys.width() + 3;
+        let room = usize::from(width.saturating_sub(x + 1));
+        let show_keys = room > right_w + 12;
+        let field = room.saturating_sub(if show_keys { right_w } else { note.width() + 2 });
+        let end = grid.put(x, 0, &tail_fit(&a.text, field.max(1)), RAIL_NAME);
+        if a.text.is_empty() {
+            grid.put(end + 1, 0, &fit("text to find", field), RAIL);
+        }
+        let mut rx = width.saturating_sub(
+            u16::try_from(if show_keys { right_w } else { note.width() + 2 }).unwrap_or(0),
+        );
+        if !note.is_empty() {
+            let st = if a.note.as_deref() == Some("no matches") {
+                RAIL_ERROR
+            } else {
+                RAIL_NAME
+            };
+            rx = grid.put(rx, 0, &note, st);
+        }
+        if show_keys {
+            grid.put(rx + 3, 0, keys, RAIL);
+        }
+        cursor = Some((end, 0));
+    } else if let Some(a) = &vp.ask {
+        // The Ask card, at the caret.
         let w = width.saturating_sub(2).clamp(20.min(width), 60);
         let inner = usize::from(w.saturating_sub(4));
         let input = a.kind != AskKind::Confirm;

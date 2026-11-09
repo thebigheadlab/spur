@@ -4,6 +4,7 @@
 
 pub mod input;
 pub mod render;
+pub mod syntax;
 
 use std::io::{self, Write as _};
 use std::time::{Duration, Instant};

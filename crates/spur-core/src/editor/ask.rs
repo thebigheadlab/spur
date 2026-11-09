@@ -135,6 +135,7 @@ const TITLES: &[(&str, &str)] = &[
     ("editor.move_file_end", "Go to bottom"),
     ("ask.find", "Find in file"),
     ("editor.find_next", "Find next match"),
+    ("editor.select_matches", "Select every match"),
     ("editor.goto_line", "Go to line"),
 ];
 
@@ -826,6 +827,54 @@ pub(super) fn register(core: &mut Core<Editor>) -> Result<(), RegisterError> {
                 return Ok(Value::Null);
             };
             cx.execute(&it.command, &it.args)
+        },
+    )?;
+    reg(
+        "editor.select_matches",
+        "Select every match of the text on the Find card (or the last find), so typing changes them all.",
+        |cx, _| {
+            let typed = cx
+                .state
+                .ask
+                .as_ref()
+                .filter(|a| !a.text.is_empty())
+                .map(|a| a.text.clone());
+            let Some(text) = typed.or_else(|| cx.state.find_text.clone()) else {
+                return Err(CommandError::failed("nothing to find yet"));
+            };
+            let snap = cx.state.snapshot();
+            let hay = snap.slice(0..snap.len()).unwrap_or_default();
+            let all = matches(&hay, &text);
+            if all.is_empty() {
+                return Err(CommandError::failed("no matches"));
+            }
+            // Keep the match the caret is on as the primary one.
+            let r = cx.state.primary();
+            let at = r.anchor.min(r.head);
+            let primary = all.iter().position(|m| m.start >= at).unwrap_or(0);
+            if cx.state.ask.is_some() {
+                close(cx)?;
+            }
+            cx.state.find_text = Some(text);
+            let n = all.len();
+            set_selection(
+                cx,
+                Selection {
+                    ranges: all
+                        .into_iter()
+                        .map(|m| SelRange {
+                            anchor: m.start,
+                            head: m.end,
+                        })
+                        .collect(),
+                    primary,
+                },
+            )?;
+            cx.state.message = Some(super::Message {
+                text: format!("{n} selected: type to change them all"),
+                error: false,
+            });
+            Ok(json!({ "matches": n }))
         },
     )?;
     reg(
