@@ -2,7 +2,7 @@
 
 A native, modal, agent-first editor and development environment, with a terminal (TUI) and a desktop (GUI) frontend.
 
-> Status: pre-alpha. Scaffolding only. The plan lives in the [epic](https://github.com/thebigheadlab/spur/issues/1).
+> Status: pre-alpha. An editor server, a terminal frontend and one experience pack work end to end. The plan lives in the [epic](https://github.com/thebigheadlab/spur/issues/1).
 
 ## Vision
 
@@ -22,11 +22,12 @@ A native, modal, agent-first editor and development environment, with a terminal
 | `crates/spur-core` | Buffers, views, commands, events, config |
 | `crates/spur-keymap` | Keymap and mode engine |
 | `crates/spur-ext` | Extension host and capabilities |
-| `crates/spur-rpc` | Session server protocol and transports |
-| `crates/spur-tui` | Terminal frontend |
+| `crates/spur-server` | The editor server: sessions, per-client state, UI model, experience packs |
+| `crates/spur-rpc` | Client/server protocol and transports |
+| `crates/spur-tui` | Terminal frontend: draws what the server sends |
 | `crates/spur-gui` | Desktop frontend (winit + wgpu) |
-| `crates/spur` | The `spur` binary |
-| `extensions/` | Bundled first-party extensions |
+| `crates/spur` | The `spur` launcher |
+| `extensions/` | Bundled first-party extensions, including the default experience pack |
 | `docs/adr/` | Architecture decision records |
 
 ## Build
@@ -36,6 +37,17 @@ cargo build
 cargo test
 cargo run
 ```
+
+## Try it
+
+```sh
+cargo run -- src/main.rs          # edit a file; ctrl+space opens Ask, ctrl+q quits
+cargo run -- serve                # run a session without a UI...
+cargo run -- attach               # ...and attach to it from any number of terminals
+cargo run -- --ux my-pack.toml .  # use your own keys, colours and layout
+```
+
+The core is a server and never draws. What the editor looks like and which keys it uses come from an experience pack, a single TOML file: copy [`extensions/ux_fresh/pack.toml`](extensions/ux_fresh/pack.toml) and edit it. See [ADR 0006](docs/adr/0006-server-core-and-experience-packs.md).
 
 The toolchain is pinned in `rust-toolchain.toml`; `rustup` installs it automatically.
 
