@@ -1,6 +1,6 @@
 [package]
 name = "spur-rpc"
-description = "Session server protocol and transports (local and remote)."
+description = "Client/server protocol and transports. Frontends depend on this crate only."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,4 +12,5 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-spur-core.workspace = true
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
