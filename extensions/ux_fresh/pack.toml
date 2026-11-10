@@ -288,10 +288,12 @@ kind = "row"
 style = "bar"
 height = 1
 pad = [2, 0, 2, 0]
-children = ["crumbs", "topbar_fill", "attached"]
+children = ["crumbs", "attached"]
 
+# The left side fills and is cut first when space runs out; the right side always fits.
 [node.crumbs]
 kind = "text"
+width = "fill"
 spans = [
   { text = "{workspace.name}" },
   { text = "  /  {buffer.dir}", when = "buffer.dir" },
@@ -299,9 +301,6 @@ spans = [
   { text = "{buffer.name}", style = "text.strong" },
   { text = " ●", style = "warn", when = "buffer.modified" },
 ]
-
-[node.topbar_fill]
-kind = "spacer"
 
 [node.attached]
 kind = "text"
@@ -348,10 +347,11 @@ kind = "row"
 style = "bar"
 height = 1
 pad = [2, 0, 2, 0]
-children = ["hints", "footer_fill", "position"]
+children = ["hints", "position"]
 
 [node.hints]
 kind = "text"
+width = "fill"
 spans = [
   { key = "files.activate", text = " Open    ", style = "kbd.label" },
   { key = "ui.focus", text = " Editor    ", style = "kbd.label" },
@@ -362,15 +362,12 @@ spans = [
   { key = "client.quit", text = " Quit", style = "kbd.label" },
 ]
 
-[node.footer_fill]
-kind = "spacer"
-
 [node.position]
 kind = "text"
 align = "end"
 spans = [
-  { text = "{cursor.count} cursors    ", style = "accent", when = "cursor.count > 1" },
-  { text = "Ln {cursor.line}, Col {cursor.col}    {buffer.language}" },
+  { text = "   {cursor.count} cursors    ", style = "accent", when = "cursor.count > 1" },
+  { text = "   Ln {cursor.line}, Col {cursor.col}    {buffer.language}" },
 ]
 
 # The Ask card: a float near the top, with everything behind it dimmed.

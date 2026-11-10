@@ -119,32 +119,40 @@ fn workspace(name: &str) -> PathBuf {
 #[test]
 fn the_fresh_pack_draws_a_workspace() {
     let root = workspace("fresh");
-    let (_s, mut tui) = Tui::start(&root, "src/lib.rs", FRESH, (80, 12));
+    let (_s, mut tui) = Tui::start(&root, "src/lib.rs", FRESH, (110, 10));
     let f = tui.frame();
     let name = root.file_name().unwrap().to_string_lossy();
-    let expect = format!(
-        "  {name}  /  src  /  lib.rs
-
-  Files                          1  pub fn add(a: u8) -> u8 {{
-                                 2      a + 1 // 日本
-  ▾ src                          3  }}
-      lib.rs                     4
-    README.md
-
-
-
-
-  ctrl space Ask    ctrl e Files    ctrl s Save    ctrl z Undo    ctrl q Quit   Ln 1, Col 1    Rust"
+    let rows: Vec<String> = f.grid.text().lines().map(str::to_owned).collect();
+    assert_eq!(rows[0], format!("  {name}  /  src  /  lib.rs"));
+    assert_eq!(
+        rows[1..9],
+        [
+            "",
+            "  Files                          1  pub fn add(a: u8) -> u8 {",
+            "                                 2      a + 1 // 日本",
+            "  ▾ src                          3  }",
+            "      lib.rs                     4",
+            "    README.md",
+            "",
+            "",
+        ]
     );
-    // The footer is wider than 80 columns here; compare what fits.
-    let got = f.grid.text();
-    for (g, e) in got.lines().zip(expect.lines()) {
-        let e: String = e.chars().take(g.chars().count().max(40)).collect();
-        assert!(
-            g.starts_with(e.trim_end()) || e.starts_with(g),
-            "\n got: {g:?}\nwant: {e:?}\n{got}"
-        );
-    }
+    let footer = "  ctrl space Ask    ctrl e Files    ctrl s Save    ctrl z Undo    ctrl q Quit";
+    assert!(rows[9].starts_with(footer), "{:?}", rows[9]);
+    assert!(rows[9].ends_with("Ln 1, Col 1    Rust"), "{:?}", rows[9]);
+    assert_eq!(
+        rows[9].chars().count(),
+        108,
+        "the position is right-aligned with padding"
+    );
+
+    // When space runs out the left side is cut and the right side stays whole.
+    tui.size = (60, 10);
+    let narrow = tui.frame();
+    assert!(narrow.grid.row_text(9).ends_with("Ln 1, Col 1    Rust"));
+    assert!(!narrow.grid.row_text(9).contains("Quit"));
+    tui.size = (110, 10);
+
     assert_eq!(
         f.cursor,
         Some((36, 2)),
