@@ -1,0 +1,21 @@
+[package]
+name = "spur-server"
+description = "The editor server: sessions, per-client state, the UI model and experience packs."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+spur-text.workspace = true
+spur-core.workspace = true
+spur-keymap.workspace = true
+spur-rpc.workspace = true
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }

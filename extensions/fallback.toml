@@ -1,0 +1,65 @@
+# The fallback experience: used when the chosen pack does not load, so the editor is
+# never unusable. One text view, one status line, the essential keys.
+
+id = "ux_fallback"
+name = "Fallback"
+
+[theme]
+"bar" = { fg = "#15161c", bg = "#b4b8c9" }
+"selection" = { bg = "#2c3158" }
+
+[keymap.mode.insert]
+fallback = "editor.insert_text"
+
+[[keymap.bind]]
+mode = "insert"
+keys = "<C-q>"
+command = "client.quit"
+[[keymap.bind]]
+mode = "insert"
+keys = "<C-s>"
+command = "buffer.save"
+[[keymap.bind]]
+mode = "insert"
+keys = "<C-z>"
+command = "editor.undo"
+[[keymap.bind]]
+mode = "insert"
+keys = "<CR>"
+command = "editor.insert_newline"
+[[keymap.bind]]
+mode = "insert"
+keys = "<BS>"
+command = "editor.delete_backward"
+[[keymap.bind]]
+mode = "insert"
+keys = "<Left>"
+command = "editor.move_left"
+[[keymap.bind]]
+mode = "insert"
+keys = "<Right>"
+command = "editor.move_right"
+[[keymap.bind]]
+mode = "insert"
+keys = "<Up>"
+command = "editor.move_up"
+[[keymap.bind]]
+mode = "insert"
+keys = "<Down>"
+command = "editor.move_down"
+
+[layout]
+root = "app"
+
+[node.app]
+kind = "column"
+children = ["editor", "status"]
+
+[node.editor]
+kind = "surface"
+
+[node.status]
+kind = "text"
+style = "bar"
+width = "fill"
+text = " {buffer.name}  Ln {cursor.line}, Col {cursor.col}  {ui.toast}"

@@ -1,0 +1,446 @@
+# Fresh: Spur's default experience.
+#
+# Everything a person sees or presses is defined here as data: theme tokens, keys and
+# the UI tree. The server evaluates it; the terminal, desktop and web frontends only draw
+# the result. Copy this file, change it, and run `spur --ux your-pack.toml`.
+
+id = "ux_fresh"
+name = "Fresh"
+description = "Quiet surfaces separated by tone, one accent, keys shown where they work."
+
+# ── Theme tokens ───────────────────────────────────────────────────────────────────────
+# Nodes and spans name a token; frontends map tokens to colours. One accent (periwinkle);
+# amber means warning, red means error. Surfaces differ by background tone, not borders.
+
+[theme]
+"base" = { fg = "#d5d8e3", bg = "#15161c" }
+"bar" = { fg = "#8a8ea3", bg = "#0d0e12" }
+"panel" = { fg = "#b4b8c9", bg = "#111217" }
+"float" = { fg = "#d5d8e3", bg = "#1f212b" }
+"text.strong" = { fg = "#f1f2f7", bold = true }
+"text.muted" = { fg = "#8a8ea3" }
+"text.faint" = { fg = "#565a6e" }
+"accent" = { fg = "#8d96f9" }
+"tab.active" = { fg = "#f1f2f7", bold = true, underline = true }
+"warn" = { fg = "#e6b566" }
+"error" = { fg = "#ef7f8a" }
+"kbd" = { fg = "#e4e6ee", bold = true }
+"kbd.label" = { fg = "#6f7389" }
+
+# Editor surface.
+"gutter" = { fg = "#454859" }
+"gutter.current" = { fg = "#d5d8e3" }
+"line.current" = { bg = "#1b1c25" }
+"selection" = { bg = "#2c3158" }
+"cursor.peer" = { fg = "#15161c", bg = "#e6b566" }
+"cursor.secondary" = { fg = "#15161c", bg = "#8d96f9" }
+
+# Lists and inputs.
+"list.selected" = { fg = "#f1f2f7", bg = "#272a39" }
+"list.selected.idle" = { bg = "#191a22" }
+"list.header" = { fg = "#6f7389" }
+"list.detail" = { fg = "#565a6e" }
+"list.hint" = { fg = "#8a8ea3" }
+"list.icon" = { fg = "#6f7389" }
+"list.folder" = { fg = "#d5d8e3" }
+"match" = { fg = "#f1f2f7", bold = true }
+"input.prompt" = { fg = "#8d96f9" }
+"input.placeholder" = { fg = "#565a6e" }
+
+# Syntax.
+"syntax.keyword" = { fg = "#d6a1cf" }
+"syntax.type" = { fg = "#e5c583" }
+"syntax.function" = { fg = "#86aef5" }
+"syntax.string" = { fg = "#a5cf9a" }
+"syntax.number" = { fg = "#7fd1c1" }
+"syntax.comment" = { fg = "#636880", italic = true }
+"syntax.punctuation" = { fg = "#8a8ea3" }
+
+# ── Keys ───────────────────────────────────────────────────────────────────────────────
+# Modes follow keyboard focus: `insert` is the editor, `files` the files panel, `ask`
+# the Ask card. There is no command mode: you type, and chords do the rest.
+
+[keymap.mode.insert]
+fallback = "editor.insert_text"
+
+[keymap.mode.ask]
+fallback = "ask.insert"
+
+[[keymap.bind]]
+mode = "insert files"
+keys = "<C-Space>"
+command = "ask.open"
+[[keymap.bind]]
+mode = "insert files"
+keys = "<C-p>"
+command = "ask.open"
+[[keymap.bind]]
+mode = "insert files"
+keys = "<C-e>"
+command = "ui.toggle_files"
+[[keymap.bind]]
+mode = "insert files ask"
+keys = "<C-q>"
+command = "client.quit"
+[[keymap.bind]]
+mode = "insert"
+keys = "<C-s>"
+command = "buffer.save"
+[[keymap.bind]]
+mode = "insert"
+keys = "<C-z>"
+command = "editor.undo"
+[[keymap.bind]]
+mode = "insert"
+keys = "<C-y>"
+command = "editor.redo"
+[[keymap.bind]]
+mode = "insert"
+keys = "<C-c>"
+command = "editor.yank"
+[[keymap.bind]]
+mode = "insert"
+keys = "<C-x>"
+command = "editor.delete_selection"
+[[keymap.bind]]
+mode = "insert"
+keys = "<C-v>"
+command = "editor.paste"
+args = { before = true }
+
+[[keymap.bind]]
+mode = "insert"
+keys = "<CR>"
+command = "editor.insert_newline"
+[[keymap.bind]]
+mode = "insert"
+keys = "<Tab>"
+command = "editor.insert_text"
+args = { text = "    " }
+[[keymap.bind]]
+mode = "insert"
+keys = "<BS>"
+command = "editor.delete_backward"
+[[keymap.bind]]
+mode = "insert"
+keys = "<Del>"
+command = "editor.delete_forward"
+[[keymap.bind]]
+mode = "insert"
+keys = "<Esc>"
+command = "editor.collapse_selection"
+
+[[keymap.bind]]
+mode = "insert"
+keys = "<Left>"
+command = "editor.move_left"
+[[keymap.bind]]
+mode = "insert"
+keys = "<Right>"
+command = "editor.move_right"
+[[keymap.bind]]
+mode = "insert"
+keys = "<Up>"
+command = "editor.move_up"
+[[keymap.bind]]
+mode = "insert"
+keys = "<Down>"
+command = "editor.move_down"
+[[keymap.bind]]
+mode = "insert"
+keys = "<Home>"
+command = "editor.move_first_nonblank"
+[[keymap.bind]]
+mode = "insert"
+keys = "<End>"
+command = "editor.move_line_end"
+[[keymap.bind]]
+mode = "insert"
+keys = "<C-Left>"
+command = "editor.move_word_prev"
+[[keymap.bind]]
+mode = "insert"
+keys = "<C-Right>"
+command = "editor.move_word_next"
+[[keymap.bind]]
+mode = "insert"
+keys = "<C-Home>"
+command = "editor.move_doc_start"
+[[keymap.bind]]
+mode = "insert"
+keys = "<C-End>"
+command = "editor.move_doc_end"
+[[keymap.bind]]
+mode = "insert"
+keys = "<PageDown>"
+command = "view.page_down"
+[[keymap.bind]]
+mode = "insert"
+keys = "<PageUp>"
+command = "view.page_up"
+
+# Shift extends the selection.
+[[keymap.bind]]
+mode = "insert"
+keys = "<S-Left>"
+command = "editor.move_left"
+args = { extend = true }
+[[keymap.bind]]
+mode = "insert"
+keys = "<S-Right>"
+command = "editor.move_right"
+args = { extend = true }
+[[keymap.bind]]
+mode = "insert"
+keys = "<S-Up>"
+command = "editor.move_up"
+args = { extend = true }
+[[keymap.bind]]
+mode = "insert"
+keys = "<S-Down>"
+command = "editor.move_down"
+args = { extend = true }
+[[keymap.bind]]
+mode = "insert"
+keys = "<S-Home>"
+command = "editor.move_first_nonblank"
+args = { extend = true }
+[[keymap.bind]]
+mode = "insert"
+keys = "<S-End>"
+command = "editor.move_line_end"
+args = { extend = true }
+[[keymap.bind]]
+mode = "insert"
+keys = "<C-S-Left>"
+command = "editor.move_word_prev"
+args = { extend = true }
+[[keymap.bind]]
+mode = "insert"
+keys = "<C-S-Right>"
+command = "editor.move_word_next"
+args = { extend = true }
+
+# Files panel.
+[[keymap.bind]]
+mode = "files"
+keys = "<Down>"
+command = "files.next"
+[[keymap.bind]]
+mode = "files"
+keys = "<Up>"
+command = "files.prev"
+[[keymap.bind]]
+mode = "files"
+keys = "<CR>"
+command = "files.activate"
+[[keymap.bind]]
+mode = "files"
+keys = "<Right>"
+command = "files.expand"
+[[keymap.bind]]
+mode = "files"
+keys = "<Left>"
+command = "files.collapse"
+[[keymap.bind]]
+mode = "files"
+keys = "<Esc>"
+command = "ui.focus"
+args = { target = "editor" }
+
+# Ask card.
+[[keymap.bind]]
+mode = "ask"
+keys = "<CR>"
+command = "ask.accept"
+[[keymap.bind]]
+mode = "ask"
+keys = "<Down>"
+command = "ask.next"
+[[keymap.bind]]
+mode = "ask"
+keys = "<Up>"
+command = "ask.prev"
+[[keymap.bind]]
+mode = "ask"
+keys = "<BS>"
+command = "ask.backspace"
+[[keymap.bind]]
+mode = "ask"
+keys = "<Esc>"
+command = "ask.close"
+
+# ── UI ─────────────────────────────────────────────────────────────────────────────────
+# Named nodes. `children` refer to other nodes by name; `when` hides a node; text may use
+# {context.keys}. A span with `key = "<command>"` shows the key bound to that command in
+# the current focus, so hints are always true and vanish where the key does nothing.
+
+[layout]
+root = "app"
+
+[node.app]
+kind = "column"
+style = "base"
+children = ["topbar", "body", "footer"]
+
+[node.topbar]
+kind = "row"
+style = "bar"
+height = 1
+pad = [2, 0, 2, 0]
+children = ["crumbs", "topbar_fill", "attached"]
+
+[node.crumbs]
+kind = "text"
+spans = [
+  { text = "{workspace.name}" },
+  { text = "  /  {buffer.dir}", when = "buffer.dir" },
+  { text = "  /  " },
+  { text = "{buffer.name}", style = "text.strong" },
+  { text = " ●", style = "warn", when = "buffer.modified" },
+]
+
+[node.topbar_fill]
+kind = "spacer"
+
+[node.attached]
+kind = "text"
+align = "end"
+spans = [
+  { text = "   {ui.pending} …   ", style = "accent", when = "ui.pending" },
+  { text = "   ◆ {session.clients} attached   ", style = "accent", when = "session.clients > 1" },
+  { text = "{session.name}", when = "session.shared" },
+]
+
+[node.body]
+kind = "row"
+children = ["files_panel", "editor"]
+
+[node.files_panel]
+kind = "column"
+style = "panel"
+width = 30
+pad = [0, 1, 0, 0]
+when = "ui.files_open"
+children = ["files_title", "files_gap", "files"]
+
+[node.files_title]
+kind = "text"
+height = 1
+width = "fill"
+pad = [2, 0, 0, 0]
+spans = [{ text = "Files", style = "tab.active" }]
+
+[node.files_gap]
+kind = "spacer"
+height = 1
+
+[node.files]
+kind = "list"
+source = "files"
+
+[node.editor]
+kind = "surface"
+pad = [1, 1, 0, 0]
+
+[node.footer]
+kind = "row"
+style = "bar"
+height = 1
+pad = [2, 0, 2, 0]
+children = ["hints", "footer_fill", "position"]
+
+[node.hints]
+kind = "text"
+spans = [
+  { key = "files.activate", text = " Open    ", style = "kbd.label" },
+  { key = "ui.focus", text = " Editor    ", style = "kbd.label" },
+  { key = "ask.open", text = " Ask    ", style = "kbd.label" },
+  { key = "ui.toggle_files", text = " Files    ", style = "kbd.label" },
+  { key = "buffer.save", text = " Save    ", style = "kbd.label" },
+  { key = "editor.undo", text = " Undo    ", style = "kbd.label" },
+  { key = "client.quit", text = " Quit", style = "kbd.label" },
+]
+
+[node.footer_fill]
+kind = "spacer"
+
+[node.position]
+kind = "text"
+align = "end"
+spans = [
+  { text = "{cursor.count} cursors    ", style = "accent", when = "cursor.count > 1" },
+  { text = "Ln {cursor.line}, Col {cursor.col}    {buffer.language}" },
+]
+
+# The Ask card: a float near the top, with everything behind it dimmed.
+[[float]]
+node = "ask"
+anchor = "top"
+width = 78
+height = 24
+scrim = true
+when = "ui.focus == ask"
+
+[node.ask]
+kind = "column"
+style = "float"
+pad = [3, 1, 3, 1]
+children = ["ask_input", "ask_gap", "ask_list", "ask_gap2", "ask_hints"]
+
+[node.ask_input]
+kind = "input"
+source = "ask"
+prompt = "› "
+placeholder = "Run a command or open a file"
+
+[node.ask_gap]
+kind = "spacer"
+height = 1
+
+[node.ask_gap2]
+kind = "spacer"
+height = 1
+
+[node.ask_list]
+kind = "list"
+source = "ask"
+
+[node.ask_hints]
+kind = "text"
+spans = [
+  { key = "ask.accept", text = " Run    ", style = "kbd.label" },
+  { key = "ask.next", text = " Next    ", style = "kbd.label" },
+  { key = "ask.close", text = " Close", style = "kbd.label" },
+]
+
+# Commands Ask offers before you type anything.
+[ask]
+featured = ["buffer.save", "ui.toggle_files", "editor.undo", "editor.redo", "editor.yank", "editor.paste", "client.quit"]
+
+# Notices: a small float in the bottom right corner.
+[[float]]
+node = "toast"
+anchor = "bottom_right"
+width = 46
+height = 3
+when = "ui.toast"
+
+[node.toast]
+kind = "row"
+style = "float"
+pad = [0, 1, 2, 1]
+children = ["toast_bar", "toast_text"]
+
+[node.toast_bar]
+kind = "text"
+width = 3
+spans = [
+  { text = "▌", style = "accent", when = "!ui.toast_error" },
+  { text = "▌", style = "error", when = "ui.toast_error" },
+]
+
+[node.toast_text]
+kind = "text"
+width = "fill"
+text = "{ui.toast}"
