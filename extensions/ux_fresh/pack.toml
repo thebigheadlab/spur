@@ -290,16 +290,16 @@ height = 1
 pad = [2, 0, 2, 0]
 children = ["crumbs", "attached"]
 
-# The left side fills and is cut first when space runs out; the right side always fits.
+# The left side fills and is cut when space runs out; the right side always fits.
+# The file name comes first so it is the last thing to go.
 [node.crumbs]
 kind = "text"
 width = "fill"
 spans = [
-  { text = "{workspace.name}" },
-  { text = "  /  {buffer.dir}", when = "buffer.dir" },
-  { text = "  /  " },
   { text = "{buffer.name}", style = "text.strong" },
   { text = " ●", style = "warn", when = "buffer.modified" },
+  { text = "   {workspace.name}", style = "text.muted" },
+  { text = " / {buffer.dir}", style = "text.muted", when = "buffer.dir" },
 ]
 
 [node.attached]

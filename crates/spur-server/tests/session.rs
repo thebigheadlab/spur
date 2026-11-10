@@ -200,7 +200,7 @@ fn edit_save_and_undo_over_the_protocol() {
             "spans carry semantic names, not colours"
         );
         assert!(
-            c.text("crumbs").contains("src  /  main.rs"),
+            c.text("crumbs").starts_with("main.rs"),
             "{}",
             c.text("crumbs")
         );

@@ -123,7 +123,7 @@ fn the_fresh_pack_draws_a_workspace() {
     let f = tui.frame();
     let name = root.file_name().unwrap().to_string_lossy();
     let rows: Vec<String> = f.grid.text().lines().map(str::to_owned).collect();
-    assert_eq!(rows[0], format!("  {name}  /  src  /  lib.rs"));
+    assert_eq!(rows[0], format!("  lib.rs   {name} / src"));
     assert_eq!(
         rows[1..9],
         [
