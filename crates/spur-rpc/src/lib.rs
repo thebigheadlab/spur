@@ -63,7 +63,7 @@
 //! `caps` and `size` default to empty, off, cells and zero); each node's `id`,
 //! `kind`, `width` and `height`. Some fields are left out when empty: a node's
 //! `children`, `Line.truncated`, `Cursor.peer`, `Span.hl`; `path` is `null` for a
-//! document with no file. `path` is the path as it was opened. `version` is the
+//! document with no file, else absolute. `version` is the
 //! document's text version, rising with every edit; `line_count` counts the empty
 //! line after a final newline.
 //!

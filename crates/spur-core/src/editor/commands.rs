@@ -394,7 +394,14 @@ fn undo_redo(cx: C<'_, '_>, redo: bool) -> Result<Value, CommandError> {
     Ok(last.unwrap_or(Value::Bool(false)))
 }
 
+/// `path` made absolute against the current directory, so documents have one
+/// spelling and clients elsewhere can place them. The file need not exist.
+fn absolute(path: &Path) -> Result<PathBuf, CommandError> {
+    std::path::absolute(path).map_err(|e| CommandError::failed(format!("{}: {e}", path.display())))
+}
+
 fn open(cx: C<'_, '_>, path: &Path) -> Result<Value, CommandError> {
+    let path = &absolute(path)?;
     let existing = cx
         .state
         .docs
@@ -427,8 +434,7 @@ fn open(cx: C<'_, '_>, path: &Path) -> Result<Value, CommandError> {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
             Err(e) => return Err(CommandError::failed(format!("{}: {e}", path.display()))),
         };
-        cx.state
-            .add_doc(Buffer::new(&text), Some(path.to_path_buf()))
+        cx.state.add_doc(Buffer::new(&text), Some(path.clone()))
     };
     // Reuse a view only if the caller owns it, so two clients never share one.
     let owner = cx.client();
@@ -518,6 +524,7 @@ fn save(cx: C<'_, '_>, path: Option<PathBuf>) -> Result<Value, CommandError> {
     let path = path
         .or_else(|| doc.path.clone())
         .ok_or_else(|| CommandError::failed("no file name"))?;
+    let path = absolute(&path)?;
     let snap = doc.buffer.snapshot();
     write_atomic(&path, &snap)
         .map_err(|e| CommandError::failed(format!("{}: {e}", path.display())))?;
@@ -1468,5 +1475,23 @@ mod tests {
         let turn = c.state.views[&v].turn;
         c.state.end_undo_step(v);
         assert_eq!(c.state.views[&v].turn, turn + 1);
+    }
+
+    #[test]
+    fn open_stores_an_absolute_path() {
+        let mut c = core("", "insert");
+        let name = format!("spur-not-a-file-{}.txt", std::process::id());
+        run(&mut c, "editor.open", json!({ "path": name }));
+        let doc = c.state.view().doc;
+        let path = c.state.docs[&doc].path.clone().unwrap();
+        assert!(path.is_absolute(), "{}", path.display());
+        assert!(path.ends_with(&name));
+        // Another spelling of the same path finds the same document.
+        run(
+            &mut c,
+            "editor.open",
+            json!({ "path": format!("./{name}") }),
+        );
+        assert_eq!(c.state.view().doc, doc);
     }
 }

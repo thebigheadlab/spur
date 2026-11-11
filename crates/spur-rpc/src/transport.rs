@@ -59,7 +59,9 @@ impl<S, R> Endpoint<S, R> {
         }
     }
 
-    /// Sends one message. Waits while the queue is full ([`QUEUE`] batches).
+    /// Sends one message. Waits while the queue is full ([`QUEUE`] batches). Over a
+    /// stream, a message larger than [`MAX_FRAME`] once encoded is dropped by the
+    /// writer, so split big pastes.
     ///
     /// # Errors
     ///

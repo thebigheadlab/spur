@@ -523,7 +523,18 @@ fn leaving_removes_the_clients_views_and_peer_cursor() {
     assert!(a.cursor(CursorKind::Peer).is_some());
     b.send(ClientMsg::Bye);
     // The server closes B's connection once B is gone.
-    while b.end.recv_timeout(WAIT).is_ok() {}
+    let mut closed = false;
+    for _ in 0..1000 {
+        match b.end.recv_timeout(WAIT) {
+            Err(_) => {
+                closed = true;
+                break;
+            }
+            Ok(None) => break,
+            Ok(Some(_)) => {}
+        }
+    }
+    assert!(closed, "the server never closed B's connection");
     drop(b);
     a.sync();
     assert_eq!(views(), before + 1);

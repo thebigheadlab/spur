@@ -453,7 +453,7 @@ pub struct SurfaceView {
     /// This client's non-empty selections.
     #[serde(default)]
     pub selections: Vec<Sel>,
-    /// File path as it was opened, if any. Clients shorten it for display.
+    /// Absolute file path, if any. Clients shorten it for display.
     #[serde(default)]
     pub path: Option<String>,
     /// Unsaved changes.

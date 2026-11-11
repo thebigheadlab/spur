@@ -7,6 +7,9 @@ use spur_rpc::{Cursor, CursorKind, Dim, Line, Node, NodeKind, Pos, Sel, Span, Su
 pub const SURFACE: &str = "editor";
 /// Longest line prefix sent, in chars.
 pub const MAX_LINE: usize = 4000;
+/// Most cursors and most selections sent per surface. With the row cap, this keeps a
+/// surface under the frame limit even when every char needs a 6-byte JSON escape.
+pub const MAX_MARKS: usize = 10_000;
 
 /// The slice 1 tree: one editor surface filling the client's area. UX packs replace it
 /// from slice 2.
@@ -62,7 +65,8 @@ pub fn surface(ed: &Editor, view: ViewId, rows: usize, peers: &[(u64, ViewId)]) 
             peer: None,
         })
         .collect();
-    for &(peer, pv) in peers {
+    cursors.truncate(MAX_MARKS);
+    for &(peer, pv) in peers.iter().take(MAX_MARKS) {
         if ed.views.get(&pv).is_none_or(|p| p.doc != v.doc) {
             continue;
         }
@@ -90,12 +94,13 @@ pub fn surface(ed: &Editor, view: ViewId, rows: usize, peers: &[(u64, ViewId)]) 
         selections: vp
             .selections
             .iter()
+            .take(MAX_MARKS)
             .map(|(a, b)| Sel {
                 start: pos(*a),
                 end: pos(*b),
             })
             .collect(),
-        // The path as opened. Clients shorten it for people.
+        // Absolute (the core stores it so). Clients shorten it for people.
         path: vp.path.as_deref().map(|p| p.display().to_string()),
         modified: vp.modified,
         mode: vp.mode.to_string(),

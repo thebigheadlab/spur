@@ -209,8 +209,10 @@ impl Session {
         }
     }
 
-    /// Attaches a client over a byte stream. `close` runs after the last message is
-    /// written (use it to shut a socket down).
+    /// Attaches a client over a byte stream. `close` shuts the stream down (a socket's
+    /// `shutdown`). It runs once: after the last message is written, or on the session
+    /// thread when the client stops reading, while writes may be pending. It must not
+    /// block.
     ///
     /// # Errors
     ///
@@ -465,19 +467,39 @@ impl State {
         }
     }
 
-    /// Handles one inbox message; a panic is reported to the client that sent it and
-    /// the session goes on.
+    /// Handles one inbox message, guarding each client message on its own: a panic
+    /// is reported to the client that sent it, and the rest of its batch and the
+    /// session go on.
     fn handle_guarded(&mut self, msg: In) {
-        let conn = match &msg {
-            In::First { conn, .. } | In::Msgs { conn, .. } | In::Gone { conn } => Some(*conn),
-            _ => None,
-        };
-        if catch_unwind(AssertUnwindSafe(|| self.handle(msg))).is_err() {
+        match msg {
+            In::Msgs { conn, msgs } => {
+                for m in msgs {
+                    self.guarded(Some(conn), |s| s.client_msg(conn, m));
+                }
+            }
+            In::First { conn, .. } | In::Gone { conn } => {
+                self.guarded(Some(conn), |s| s.handle(msg));
+            }
+            msg => self.guarded(None, |s| s.handle(msg)),
+        }
+    }
+
+    fn guarded(&mut self, conn: Option<u64>, f: impl FnOnce(&mut Self)) {
+        if catch_unwind(AssertUnwindSafe(|| f(self))).is_err() {
             self.core.state.focus = self.anchor;
             if let Some(conn) = conn {
                 self.error(conn, PANIC_MESSAGE.into());
                 self.mark_peers(conn, None);
             }
+        }
+    }
+
+    /// One message from a connection: its hello, or anything after.
+    fn client_msg(&mut self, conn: u64, m: ClientMsg) {
+        if self.clients.contains_key(&conn) {
+            self.message(conn, m);
+        } else if self.waiting.contains_key(&conn) {
+            self.hello(conn, m);
         }
     }
 
@@ -489,14 +511,7 @@ impl State {
             In::First { conn, value } => self.first(conn, &value),
             In::Msgs { conn, msgs } => {
                 for m in msgs {
-                    if !self.clients.contains_key(&conn) {
-                        if self.waiting.contains_key(&conn) {
-                            self.hello(conn, m);
-                            continue;
-                        }
-                        return;
-                    }
-                    self.message(conn, m);
+                    self.client_msg(conn, m);
                 }
             }
             In::Gone { conn } => {
@@ -665,8 +680,12 @@ impl State {
 
     /// Sends what is queued for the client, then removes it.
     fn drop_client(&mut self, conn: u64) {
-        if let Some(c) = self.clients.get_mut(&conn) {
-            let _ = c.send_batch();
+        if let Some(c) = self.clients.get_mut(&conn)
+            && let Err(SendFail::Full) = c.send_batch()
+            && let Some(s) = &c.shutter
+        {
+            // Its writer may be stuck on a peer that stopped reading.
+            s.close();
         }
         self.leave(conn);
     }
@@ -689,14 +708,20 @@ impl State {
                 }),
             },
         };
-        let reply = if serde_json::to_vec(&reply).map_or(true, |b| b.len() > MAX_RESULT) {
-            Reply::Error(WireError {
+        // Stream clients have a frame limit; in-process ones do not.
+        let streamed = self.clients.get(&conn).is_some_and(|c| c.shutter.is_some());
+        let reply = match streamed.then(|| serde_json::to_vec(&reply).map(|b| b.len())) {
+            Some(Ok(len)) if len > MAX_RESULT => Reply::Error(WireError {
                 code: "too_large".into(),
                 message: format!("the result is over {MAX_RESULT} bytes"),
                 data: None,
-            })
-        } else {
-            reply
+            }),
+            Some(Err(e)) => Reply::Error(WireError {
+                code: "internal".into(),
+                message: format!("the result does not encode: {e}"),
+                data: None,
+            }),
+            _ => reply,
         };
         if let Some(c) = self.clients.get_mut(&conn) {
             c.batch.push(ServerMsg::CommandResult { req, reply });

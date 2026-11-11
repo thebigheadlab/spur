@@ -20,9 +20,9 @@ Terms: a *slice* is one step of the build plan in the epic (#1): slice 1 is this
 
 ### Session thread
 
-One thread owns the editor state; nothing else touches it. Each connection has a reader thread that decodes frames into the session inbox (one channel message per read, so a burst arrives as one batch) and a writer thread that drains the client's outbox. Per loop iteration the session handles at most 64 inbox batches, runs due keymap timeouts, renders every dirty frontend, then hands each client one batch. A client whose outbox (1,024 batches) is full is dropped.
+One thread owns the editor state; nothing else touches it. Each connection has a reader thread that decodes messages into the session inbox (one channel message per read, so a burst arrives as one batch). A stream connection also has a writer thread that drains the client's outbox; an in-process client's outbox is its endpoint's own queue. Per loop iteration the session handles at most 64 inbox batches, runs due keymap timeouts, renders every dirty frontend, then hands each client one batch. A client whose outbox (1,024 batches) is full is dropped.
 
-A panic while handling a client's message, running its command or drawing its frame is caught: the client gets an `error` (and a `command` still gets its `result`, with code `internal`) and the session keeps serving. A client removed during a pass (it left, stalled or its frame failed) makes the session render again before it waits, so peers never keep showing it. A stalled stream client's socket is shut down, which also frees a writer stuck on a peer that stopped reading.
+A panic while handling a client's message or running its command is caught per message: the client gets an `error` (and a `command` still gets its `result`, with code `internal`), and the rest of its input and the session go on. A panic while drawing a client's frame drops that client with `bye`; the others keep being served. A client removed during a pass (it left, stalled or its frame failed) makes the session render again before it waits, so peers never keep showing it. A stalled stream client's socket is shut down, which also frees a writer stuck on a peer that stopped reading.
 
 ### Per-client state
 
@@ -36,7 +36,7 @@ Core changes for this:
 2. Each view numbers its undo turns from `view_id << 32`, so two clients' edits never join one undo step. Undo restores a recorded selection only in the view that made the edit; other views only shift.
 3. Edits keep other views' first visible line on the same text, using the pre-edit snapshot.
 4. `viewport_of`, `scroll_view`, `remove_view` and `view_keys` address any view, not only the focused one. `viewport_of` cuts each line to a width while reading it, so a huge line never costs more than the width.
-5. `editor.open` refuses folders and files over 64 MiB.
+5. `editor.open` refuses folders and files over 64 MiB, and `open` and `save` store absolute paths, so one file has one document whatever spelling opened it.
 
 Undo stays per person and document, as with split views in other editors: a human is `User` from every client (ADR 0005), and undo takes that person's newest step, which may have been made in another window. Per-window undo needs a selective undo in `spur-text` and is left as a follow-up decision.
 
@@ -55,7 +55,7 @@ Messages are JSON objects tagged by `type`.
 
 Order: the first message must be `hello`; over a stream the server reads only its `protocols` field first, so a hello from a newer client with fields this server cannot decode still gets a clear `bye` instead of a parse failure. The server answers with `welcome`, then the first frame. A frame is any `ui` and `surface` messages followed by `flush {frame}`; frames are sent only when something changed.
 
-The UI tree is a fixed bare tree in this slice (one editor surface); UX packs replace it from slice 2. A surface carries the visible lines (at most 500 rows of at most 4,000 chars, with a `truncated` flag), cursors (primary, secondary, and peers' cursors with their client id), selections, the path as opened (clients shorten it), modified flag, mode and document version.
+The UI tree is a fixed bare tree in this slice (one editor surface); UX packs replace it from slice 2. A surface carries the visible lines (at most 500 rows of at most 4,000 chars, with a `truncated` flag), cursors (primary, secondary, and peers' cursors with their client id), selections, the absolute path (clients shorten it), modified flag, mode and document version.
 
 A frontend is redrawn when its own input or a peer's changes what it shows, and also whenever its document's version differs from the one in its last frame, so an edit nobody announced (a tool editing by id, later) still reaches it.
 
@@ -71,7 +71,7 @@ The server keeps at most two frames unacked per client; `ack {frame}` is cumulat
 
 ### Transports
 
-In-process channels (tests, embedding) and length-prefixed JSON over any byte stream, with a Unix socket helper that shuts the socket down when either side leaves. Every queue is bounded (1,024 batches each way); the server drops a client whose queue is full. Listening sockets, a daemon and reconnect come in slice 4.
+In-process channels (tests, embedding) and length-prefixed JSON over any byte stream, with a Unix socket helper that shuts the socket down when either side leaves. Outboxes and client-side queues are bounded (1,024 batches); the server drops a client whose outbox is full. The session inbox is not bounded yet; it needs a limit before slice 4 accepts remote connections. Listening sockets, a daemon and reconnect come in slice 4.
 
 ## Latency
 
