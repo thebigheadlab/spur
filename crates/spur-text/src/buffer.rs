@@ -76,6 +76,13 @@ pub struct Applied {
     pub changes: ChangeSet,
     /// Selection to show after the edit, if known.
     pub selection: Option<Selection>,
+    /// Undo group of the edit: the transaction's own group, or for an undo or redo the
+    /// group of the edit it undoes or redoes. Lets a caller tell whose edit it was.
+    pub group: Option<GroupKey>,
+}
+
+fn with_group(applied: Option<Applied>, group: Option<GroupKey>) -> Option<Applied> {
+    applied.map(|a| Applied { group, ..a })
 }
 
 /// An incoming hunk that overlaps a committed one.
@@ -302,13 +309,14 @@ impl Buffer {
                 version: self.version,
                 changes,
                 selection: selection_after,
+                group: txn.group,
             });
         }
         let inverse = self.commit(&changes);
         self.history.clear_redo(&txn.author);
         self.history.push(NewRevision {
             author: txn.author.clone(),
-            group: txn.group,
+            group: txn.group.clone(),
             changes: changes.clone(),
             inverse,
             selection_before,
@@ -322,6 +330,7 @@ impl Buffer {
             version: self.version,
             changes,
             selection: selection_after,
+            group: txn.group,
         })
     }
 
@@ -338,10 +347,11 @@ impl Buffer {
             UndoTarget::TreeMove(rev) => {
                 let inverse = self.history.revs[rev].inverse.clone();
                 let selection = self.history.revs[rev].selection_before.clone();
+                let group = self.source_group(rev);
                 self.commit(&inverse);
                 self.history.head = self.history.revs[rev].parent;
                 self.history.push_redo(author, RedoEntry::TreeMove(rev));
-                Ok(Some(self.applied(author, inverse, selection)))
+                Ok(Some(self.applied(author, inverse, selection, group)))
             }
             UndoTarget::Revert(rev) => {
                 let applied = self.revert(author, rev)?;
@@ -381,9 +391,10 @@ impl Buffer {
         if self.history.head == parent {
             let changes = self.history.revs[child].changes.clone();
             let selection = self.history.revs[child].selection_after.clone();
+            let group = self.source_group(child);
             self.commit(&changes);
             self.history.head = child;
-            return Ok(Some(self.applied(author, changes, selection)));
+            return Ok(Some(self.applied(author, changes, selection, group)));
         }
         // Others edited since the undo: re-apply the child over their edits.
         let Some(path) = self.history.path_after(parent) else {
@@ -391,7 +402,9 @@ impl Buffer {
         };
         let rev = &self.history.revs[child];
         let (changes, selection) = (rev.changes.clone(), rev.selection_after.clone());
+        let group = self.source_group(child);
         self.commit_over(author, &changes, selection, &path, None, false)
+            .map(|a| with_group(a, group))
     }
 
     /// Reverts revision `rev` (on the head path) by rebasing its inverse over later edits.
@@ -399,6 +412,7 @@ impl Buffer {
         let Some(path) = self.history.path_after(rev) else {
             return Ok(None);
         };
+        let group = self.source_group(rev);
         let r = &self.history.revs[rev];
         let inverse = r.inverse.clone();
         // `selection_before` is in the coordinates before `rev`. The result is that text
@@ -412,12 +426,24 @@ impl Buffer {
             let over = &self.history.revs[later].changes;
             let (Ok(over_pre), Ok(inv_next)) = (over.rebase(&inv), inv.rebase(over)) else {
                 let selection = r.selection_before.as_ref().map(|s| s.map(&r.changes));
-                return self.commit_over(author, &inverse, selection, &path, Some(rev), false);
+                return self
+                    .commit_over(author, &inverse, selection, &path, Some(rev), false)
+                    .map(|a| with_group(a, group));
             };
             premapped = premapped.map(|s| s.map(&over_pre));
             inv = inv_next;
         }
         self.commit_over(author, &inverse, premapped, &path, Some(rev), true)
+            .map(|a| with_group(a, group))
+    }
+
+    /// The undo group of revision `rev`, or for a revision that reverts another, the
+    /// group of the reverted one.
+    fn source_group(&self, rev: usize) -> Option<GroupKey> {
+        let r = &self.history.revs[rev];
+        r.group
+            .clone()
+            .or_else(|| r.reverts.and_then(|o| self.history.revs[o].group.clone()))
     }
 
     /// Rebases `changes` over the revisions in `path`, then commits it as a new revision.
@@ -476,7 +502,7 @@ impl Buffer {
             version: self.version,
             time: SystemTime::now(),
         });
-        Ok(Some(self.applied(author, changes, selection)))
+        Ok(Some(self.applied(author, changes, selection, None)))
     }
 
     fn applied(
@@ -484,12 +510,14 @@ impl Buffer {
         author: &AuthorId,
         changes: ChangeSet,
         selection: Option<Selection>,
+        group: Option<GroupKey>,
     ) -> Applied {
         Applied {
             author: author.clone(),
             version: self.version,
             changes,
             selection,
+            group,
         }
     }
 

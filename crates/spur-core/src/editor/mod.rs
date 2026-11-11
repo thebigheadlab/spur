@@ -10,6 +10,8 @@ use std::sync::Arc;
 
 use spur_text::{Buffer, Point, SelRange, Selection, Snapshot, Version};
 
+use crate::{ClientId, CtxValue};
+
 pub use commands::register_editor_commands;
 
 /// Identifies a document.
@@ -73,10 +75,20 @@ pub struct View {
     pub goals: Vec<Option<usize>>,
     /// Current mode name.
     pub mode: Arc<str>,
-    /// Undo turn for non-agent edits made in this view.
+    /// Undo turn for non-agent edits made in this view. Each view numbers its turns
+    /// from `id << 32`, so two views never share a turn and their edits never join
+    /// one undo step; [`turn_view`] recovers the view from a turn.
     pub turn: u64,
     /// First visible line.
     pub top_line: usize,
+    /// Client that owns this view, if any. `editor.open` reuses only views owned by the
+    /// calling client, so clients never share a view.
+    pub owner: Option<ClientId>,
+}
+
+/// The view whose turn numbering `turn` comes from (see [`View::turn`]).
+pub fn turn_view(turn: u64) -> ViewId {
+    ViewId(turn >> 32)
 }
 
 /// A mode, as data. Presets add their own.
@@ -173,6 +185,11 @@ impl Editor {
 
     /// Adds a view of `doc` with a cursor at the start, in the default mode.
     pub fn add_view(&mut self, doc: DocId) -> ViewId {
+        self.add_view_for(doc, None)
+    }
+
+    /// Adds a view of `doc` owned by `owner`.
+    pub fn add_view_for(&mut self, doc: DocId, owner: Option<ClientId>) -> ViewId {
         let id = ViewId(self.next());
         self.views.insert(
             id,
@@ -181,11 +198,29 @@ impl Editor {
                 selection: Selection::cursor(0),
                 goals: vec![None],
                 mode: self.default_mode.clone(),
-                turn: 0,
+                turn: id.0 << 32,
                 top_line: 0,
+                owner,
             },
         );
         id
+    }
+
+    /// Removes a view. Refuses (returns `false`) for the focused view or an unknown id.
+    pub fn remove_view(&mut self, view: ViewId) -> bool {
+        view != self.focus && self.views.remove(&view).is_some()
+    }
+
+    /// Context keys that describe `view`: its mode and its document's state. The core
+    /// publishes them for the focused view; a server publishes them per client.
+    pub fn view_keys(&self, view: ViewId) -> Option<[(&'static str, CtxValue); 3]> {
+        let v = self.views.get(&view)?;
+        let doc = self.docs.get(&v.doc)?;
+        Some([
+            ("editor.mode", CtxValue::Str(v.mode.clone())),
+            ("buffer.modified", CtxValue::Bool(doc.modified())),
+            ("buffer.has_path", CtxValue::Bool(doc.path.is_some())),
+        ])
     }
 
     /// The focused view.
@@ -213,14 +248,19 @@ impl Editor {
 
     /// Scrolls the focused view so the primary cursor is visible with `margin` lines.
     pub fn scroll_to_cursor(&mut self, rows: usize, margin: usize) {
+        self.scroll_view(self.focus, rows, margin);
+    }
+
+    /// Scrolls `view` so its primary cursor is visible with `margin` lines.
+    pub fn scroll_view(&mut self, view: ViewId, rows: usize, margin: usize) {
         if rows == 0 {
             return;
         }
-        let snap = self.snapshot();
-        let view = self
-            .views
-            .get_mut(&self.focus)
-            .unwrap_or_else(|| unreachable!());
+        let Some(doc) = self.views.get(&view).map(|v| v.doc) else {
+            return;
+        };
+        let snap = self.docs[&doc].buffer.snapshot();
+        let view = self.views.get_mut(&view).unwrap_or_else(|| unreachable!());
         let head = view.selection.ranges[view.selection.primary].head;
         let line = motion::line_of(&snap, head);
         let margin = margin.min(rows.saturating_sub(1) / 2);
@@ -235,8 +275,15 @@ impl Editor {
 
     /// What a frontend needs to draw `rows` lines of the focused view. Cost is O(rows).
     pub fn viewport(&self, rows: usize) -> Viewport {
-        let view = self.view();
-        let doc = self.doc();
+        self.viewport_of(self.focus, rows)
+            .unwrap_or_else(|| unreachable!("the focused view exists"))
+    }
+
+    /// What a frontend needs to draw `rows` lines of `view`, or `None` for an unknown
+    /// view. Cost is O(rows).
+    pub fn viewport_of(&self, view: ViewId, rows: usize) -> Option<Viewport> {
+        let view = self.views.get(&view)?;
+        let doc = self.docs.get(&view.doc)?;
         let snap = doc.buffer.snapshot();
         let end = (view.top_line + rows).min(snap.line_count());
         let lines = (view.top_line..end)
@@ -255,7 +302,7 @@ impl Editor {
                 selections.push((point(a), point(b)));
             }
         }
-        Viewport {
+        Some(Viewport {
             top_line: view.top_line,
             line_count: snap.line_count(),
             lines,
@@ -264,7 +311,7 @@ impl Editor {
             mode: view.mode.clone(),
             path: doc.path.clone(),
             modified: doc.modified(),
-        }
+        })
     }
 
     /// The focused view's primary range.

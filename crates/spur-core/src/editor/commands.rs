@@ -8,10 +8,10 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use spur_text::{
-    Applied, Buffer, Change, ChangeSet, EditError, SelRange, Selection, Snapshot, Transaction,
+    Applied, Bias, Buffer, Change, ChangeSet, EditError, SelRange, Selection, Snapshot, Transaction,
 };
 
-use super::{Editor, Register, ViewId, motion};
+use super::{Editor, Register, ViewId, motion, turn_view};
 use crate::command::{CommandError, CommandMeta, ErrorCode, RemoteSide, parse_args};
 use crate::core::{Core, Cx, RegisterError};
 use crate::name::{CommandId, EventName, events};
@@ -26,6 +26,9 @@ fn ev(name: &str) -> EventName {
 const MAX_COUNT: usize = 100_000;
 /// Largest text one command may insert.
 const MAX_INSERT: usize = 64 << 20;
+/// Largest file `editor.open` reads. Reading blocks the editor, so bigger files wait for
+/// the large-file support of ADR 0004.
+const MAX_OPEN: u64 = 64 << 20;
 
 fn count(cx: &Cx<'_, Editor>) -> usize {
     cx.count().map_or(1, |c| (c.max(1) as usize).min(MAX_COUNT))
@@ -86,14 +89,13 @@ fn focus(cx: &Cx<'_, Editor>) -> ViewId {
 
 /// Publishes context keys that `when` clauses and statuslines read.
 fn sync_context(cx: C<'_, '_>) {
-    let ed = &*cx.state;
-    let mode = ed.view().mode.clone();
-    let doc = ed.doc();
-    let (modified, has_path) = (doc.modified(), doc.path.is_some());
-    // Keys are valid names, so `set` cannot fail.
-    let _ = cx.context.set("editor.mode", &*mode);
-    let _ = cx.context.set("buffer.modified", modified);
-    let _ = cx.context.set("buffer.has_path", has_path);
+    let Some(keys) = cx.state.view_keys(cx.state.focus) else {
+        return;
+    };
+    for (key, value) in keys {
+        // Keys are valid names, so `set` cannot fail.
+        let _ = cx.context.set(key, value);
+    }
 }
 
 fn after_selection_change(cx: C<'_, '_>) -> Result<(), CommandError> {
@@ -254,15 +256,27 @@ fn edit(
         .unwrap_or_else(|| unreachable!());
     view.selection = after;
     view.goals = goals;
-    committed(cx, id, &applied)
+    committed(cx, id, &snap, &applied)
 }
 
-/// Maps other views of the same document and emits `buffer.changed`.
-fn committed(cx: C<'_, '_>, id: ViewId, applied: &Applied) -> Result<Value, CommandError> {
+/// Maps other views of the same document and emits `buffer.changed`. `old` is the text
+/// before the edit.
+fn committed(
+    cx: C<'_, '_>,
+    id: ViewId,
+    old: &Snapshot,
+    applied: &Applied,
+) -> Result<Value, CommandError> {
     let doc = cx.state.views[&id].doc;
+    let new = cx.state.docs[&doc].buffer.snapshot();
     for (vid, v) in &mut cx.state.views {
         if *vid != id && v.doc == doc {
             v.selection = v.selection.map(&applied.changes);
+            // Keep the first visible line on the same text, so a peer's screen does
+            // not jump when lines are added or removed above it.
+            let start = motion::line_start(old, v.top_line);
+            let mapped = applied.changes.map_offset(start, Bias::Left);
+            v.top_line = motion::line_of(&new, mapped);
         }
     }
     cx.emit(
@@ -320,6 +334,7 @@ fn undo_redo(cx: C<'_, '_>, redo: bool) -> Result<Value, CommandError> {
             .get_mut(&doc_id)
             .unwrap_or_else(|| unreachable!())
             .buffer;
+        let old = buffer.snapshot();
         let r = if redo {
             buffer.redo(&author)
         } else {
@@ -339,10 +354,15 @@ fn undo_redo(cx: C<'_, '_>, redo: bool) -> Result<Value, CommandError> {
                     .views
                     .get_mut(&id)
                     .unwrap_or_else(|| unreachable!());
-                view.selection = applied
-                    .selection
-                    .clone()
-                    .unwrap_or_else(|| view.selection.map(&applied.changes));
+                // Restore the recorded selection only for an edit made in this view;
+                // another view's edit (another client's) just shifts this cursor.
+                let ours = applied.group.as_ref().is_none_or(|g| {
+                    g.actor != spur_text::AuthorId::User || turn_view(g.turn) == id
+                });
+                view.selection = match &applied.selection {
+                    Some(sel) if ours => sel.clone(),
+                    _ => view.selection.map(&applied.changes),
+                };
                 let doc = cx
                     .state
                     .docs
@@ -361,7 +381,7 @@ fn undo_redo(cx: C<'_, '_>, redo: bool) -> Result<Value, CommandError> {
                 }
                 view.goals = vec![None; view.selection.ranges.len()];
                 view.turn += 1;
-                last = Some(committed(cx, id, &applied)?);
+                last = Some(committed(cx, id, &old, &applied)?);
             }
         }
     }
@@ -378,6 +398,22 @@ fn open(cx: C<'_, '_>, path: &Path) -> Result<Value, CommandError> {
     let doc = if let Some(doc) = existing {
         doc
     } else {
+        match std::fs::metadata(path) {
+            Ok(m) if m.is_dir() => {
+                return Err(CommandError::failed(format!(
+                    "{} is a folder",
+                    path.display()
+                )));
+            }
+            Ok(m) if m.len() > MAX_OPEN => {
+                return Err(CommandError::failed(format!(
+                    "{} is larger than {} MiB",
+                    path.display(),
+                    MAX_OPEN >> 20
+                )));
+            }
+            _ => {}
+        }
         let text = match std::fs::read(path) {
             Ok(bytes) => String::from_utf8(bytes).map_err(|_| {
                 CommandError::failed(format!("{} is not valid UTF-8", path.display()))
@@ -388,15 +424,17 @@ fn open(cx: C<'_, '_>, path: &Path) -> Result<Value, CommandError> {
         cx.state
             .add_doc(Buffer::new(&text), Some(path.to_path_buf()))
     };
+    // Reuse a view only if the caller owns it, so two clients never share one.
+    let owner = cx.client();
     let view = cx
         .state
         .views
         .iter()
-        .find(|(_, v)| v.doc == doc)
+        .find(|(_, v)| v.doc == doc && v.owner == owner)
         .map(|(id, _)| *id);
     let view = match view {
         Some(v) => v,
-        None => cx.state.add_view(doc),
+        None => cx.state.add_view_for(doc, owner),
     };
     cx.state.focus = view;
     cx.emit(
@@ -1250,5 +1288,114 @@ mod tests {
         run(&mut c, "editor.move_doc_start", Value::Null);
         c.state.scroll_to_cursor(10, 2);
         assert_eq!(c.state.viewport(10).top_line, 0);
+    }
+
+    /// Runs `id` as client `client` in `view`, the way a server does.
+    fn run_in(c: &mut Core<Editor>, view: ViewId, client: u64, id: &str, args: Value) {
+        c.state.focus = view;
+        let inv = Invocation::new(CommandId::new(id).unwrap(), Actor::User)
+            .args(args)
+            .client(crate::ClientId(client));
+        c.execute(inv).unwrap_or_else(|e| panic!("{id}: {e}"));
+    }
+
+    #[test]
+    fn two_views_keep_separate_undo_steps() {
+        let mut c = core("\n\n\n", "insert");
+        let a = c.state.focus;
+        let doc = c.state.views[&a].doc;
+        let b = c.state.add_view(doc);
+        run_in(&mut c, b, 2, "editor.move_down", Value::Null);
+        run_in(&mut c, b, 2, "editor.move_down", Value::Null);
+        // Interleaved typing in insert mode, where each view groups its own edits.
+        for (wa, wb) in ["he", "ll", "o"].iter().zip(["wo", "rl", "d"]) {
+            run_in(&mut c, a, 1, "editor.insert_text", json!({ "text": wa }));
+            run_in(&mut c, b, 2, "editor.insert_text", json!({ "text": wb }));
+        }
+        assert_eq!(text(&c), "hello\n\nworld\n");
+        // Steps never merge across views: six steps, undone newest first. Undo is per
+        // person and document (as in other editors' split views), so A's undo takes
+        // B's newest step, but A's cursor only shifts; it never jumps to B's.
+        let a_head = c.state.views[&a].selection.ranges[0].head;
+        run_in(&mut c, a, 1, "editor.undo", Value::Null);
+        assert_eq!(text(&c), "hello\n\nworl\n");
+        assert_eq!(c.state.views[&a].selection.ranges[0].head, a_head);
+        assert_eq!(c.state.views[&b].selection.ranges[0].head, 11);
+        run_in(&mut c, a, 1, "editor.undo", Value::Null);
+        assert_eq!(text(&c), "hell\n\nworl\n");
+        assert_eq!(c.state.views[&a].selection.ranges[0].head, 4);
+        assert_eq!(c.state.views[&b].selection.ranges[0].head, 10);
+        assert_ne!(c.state.views[&a].turn >> 32, c.state.views[&b].turn >> 32);
+    }
+
+    #[test]
+    fn open_reuses_only_the_callers_view() {
+        let dir = std::env::temp_dir().join(format!("spur-open-owner-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("f.txt");
+        std::fs::write(&path, "x\n").unwrap();
+        let mut c = core("", "insert");
+        let start = c.state.focus;
+        let p = json!({ "path": path });
+        run_in(&mut c, start, 1, "editor.open", p.clone());
+        let va = c.state.focus;
+        run_in(&mut c, start, 2, "editor.open", p.clone());
+        let vb = c.state.focus;
+        assert_ne!(va, vb);
+        assert_eq!(c.state.views[&va].owner, Some(crate::ClientId(1)));
+        assert_eq!(c.state.views[&vb].owner, Some(crate::ClientId(2)));
+        run_in(&mut c, start, 1, "editor.open", p);
+        assert_eq!(c.state.focus, va);
+        let inv = Invocation::new(CommandId::new("editor.open").unwrap(), Actor::User)
+            .args(json!({ "path": dir }));
+        assert!(c.execute(inv).is_err(), "a folder is refused");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn lines_added_above_keep_other_views_on_their_text() {
+        let body = (0..40).fold(String::new(), |s, i| s + &format!("line {i}\n"));
+        let mut c = core(&body, "insert");
+        let a = c.state.focus;
+        let doc = c.state.views[&a].doc;
+        let b = c.state.add_view(doc);
+        c.state.views.get_mut(&b).unwrap().top_line = 20;
+        run_in(
+            &mut c,
+            a,
+            1,
+            "editor.insert_text",
+            json!({ "text": "x\ny\nz\n" }),
+        );
+        assert_eq!(c.state.views[&b].top_line, 23);
+        assert_eq!(c.state.viewport_of(b, 1).unwrap().lines, vec!["line 20"]);
+        // An edit below the top line does not scroll it.
+        c.state.views.get_mut(&a).unwrap().selection = Selection::cursor(c.state.snapshot().len());
+        run_in(
+            &mut c,
+            a,
+            1,
+            "editor.insert_text",
+            json!({ "text": "tail\n" }),
+        );
+        assert_eq!(c.state.views[&b].top_line, 23);
+    }
+
+    #[test]
+    fn view_helpers_address_any_view() {
+        let mut c = core("a\nb\nc\n", "insert");
+        let a = c.state.focus;
+        let doc = c.state.views[&a].doc;
+        let b = c.state.add_view(doc);
+        assert_eq!(c.state.viewport_of(a, 2), Some(c.state.viewport(2)));
+        assert!(!c.state.remove_view(a), "focused view stays");
+        let keys = c.state.view_keys(b).unwrap();
+        assert_eq!(
+            keys[0],
+            ("editor.mode", crate::CtxValue::Str("insert".into()))
+        );
+        assert!(c.state.remove_view(b));
+        assert!(c.state.viewport_of(b, 2).is_none());
+        assert!(!c.state.remove_view(b));
     }
 }
