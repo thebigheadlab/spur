@@ -605,7 +605,8 @@ dependencies = [
 name = "spur-rpc"
 version = "0.0.0"
 dependencies = [
- "spur-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
