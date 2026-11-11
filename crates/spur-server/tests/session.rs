@@ -392,7 +392,9 @@ fn tools_run_commands_as_their_own_principal_and_draw_nothing() {
     let r = t.command("editor.insert_text", json!({ "text": "T" }));
     assert_eq!(r, Reply::Ok(json!(1)));
     let r = t.command("nope.nothing", Value::Null);
-    let Reply::Error(err) = r else { panic!("{r:?}") };
+    let Reply::Error(err) = r else {
+        panic!("{r:?}")
+    };
     assert_eq!(err.code, "unknown_command");
     let r = t.command("Not An Id", Value::Null);
     assert!(matches!(r, Reply::Error(_)));

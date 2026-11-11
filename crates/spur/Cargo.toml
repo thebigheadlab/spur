@@ -17,6 +17,7 @@ spur-core.workspace = true
 spur-keymap.workspace = true
 spur-ext.workspace = true
 spur-rpc.workspace = true
+spur-server.workspace = true
 spur-tui = { workspace = true, optional = true }
 spur-gui = { workspace = true, optional = true }
 

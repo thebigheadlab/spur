@@ -561,6 +561,7 @@ dependencies = [
  "spur-gui",
  "spur-keymap",
  "spur-rpc",
+ "spur-server",
  "spur-text",
  "spur-tui",
 ]

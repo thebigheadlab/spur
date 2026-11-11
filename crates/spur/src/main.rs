@@ -29,6 +29,7 @@ fn crates() -> Vec<&'static str> {
         spur_keymap::NAME,
         spur_ext::NAME,
         spur_rpc::NAME,
+        spur_server::NAME,
     ];
     #[cfg(feature = "tui")]
     v.push(spur_tui::NAME);
