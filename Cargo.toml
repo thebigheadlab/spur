@@ -16,6 +16,7 @@ spur-core = { path = "crates/spur-core" }
 spur-keymap = { path = "crates/spur-keymap" }
 spur-ext = { path = "crates/spur-ext" }
 spur-rpc = { path = "crates/spur-rpc" }
+spur-server = { path = "crates/spur-server" }
 spur-tui = { path = "crates/spur-tui" }
 spur-gui = { path = "crates/spur-gui" }
 

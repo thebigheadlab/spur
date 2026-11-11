@@ -610,6 +610,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "spur-server"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "spur-core",
+ "spur-keymap",
+ "spur-rpc",
+ "spur-text",
+]
+
+[[package]]
 name = "spur-text"
 version = "0.0.0"
 dependencies = [
