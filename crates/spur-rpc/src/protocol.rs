@@ -108,7 +108,8 @@ pub enum ClientMsg {
         #[serde(default)]
         size: Size,
     },
-    /// A key press in key notation: `a`, `<C-s>`, `<S-Left>`, `<Space>`, `<lt>`.
+    /// One or more keys in key notation, fed one by one: `a`, `<C-s>`, `<S-Left>`,
+    /// `<Space>`, `<lt>` (see the crate docs).
     Key {
         /// The key.
         key: String,
@@ -439,7 +440,7 @@ pub struct Line {
 pub struct SurfaceView {
     /// Document id.
     pub doc: u64,
-    /// Text version shown.
+    /// Text version shown; it rises with every edit of the document.
     pub version: u64,
     /// First line shown.
     pub top_line: u32,
@@ -452,7 +453,7 @@ pub struct SurfaceView {
     /// This client's non-empty selections.
     #[serde(default)]
     pub selections: Vec<Sel>,
-    /// Absolute file path, if any. Clients shorten it for display.
+    /// File path as it was opened, if any. Clients shorten it for display.
     #[serde(default)]
     pub path: Option<String>,
     /// Unsaved changes.

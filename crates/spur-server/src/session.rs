@@ -708,11 +708,17 @@ impl State {
             // `Filter::new([])` would match every event.
             None
         } else {
-            self.core
+            match self
+                .core
                 .bus_mut()
                 .subscribe(Filter::new(filters), DEFAULT_QUEUE, None)
-                .ok()
-                .map(|(_, s)| s)
+            {
+                Ok((_, s)) => Some(s),
+                Err(e) => {
+                    self.error(conn, format!("bad subscribe: {e}"));
+                    None
+                }
+            }
         };
         if let Some(c) = self.clients.get_mut(&conn) {
             c.sub = sub;

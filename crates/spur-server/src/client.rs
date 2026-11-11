@@ -11,7 +11,7 @@ use spur_rpc::{Caps, ClientKind, Node, ServerMsg, Size, SurfaceView};
 /// Frames a client may have in flight without acking.
 pub const MAX_UNACKED: u64 = 2;
 /// Most surface rows drawn for one client, whatever size it claims.
-pub const MAX_ROWS: u32 = 1000;
+pub const MAX_ROWS: u32 = 500;
 /// Pings kept waiting for a frame; more are dropped (a client that never acks).
 const MAX_PINGS: usize = 1024;
 

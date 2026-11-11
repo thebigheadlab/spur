@@ -2,11 +2,13 @@
 
 - Status: proposed
 - Date: 2026-11-11
-- Builds on: ADR 0003 (text model), ADR 0005 (commands, events, context). Architecture #3.
+- Builds on: ADR 0003 (text model), ADR 0005 (commands, events, context). Architecture: issue #3.
 
 ## Context
 
 The core is an editor server. Every UI (terminal, desktop, web) and every tool is a client of it, locally or remotely, and the server holds no look: no colours, glyphs or key bindings. `main` had an editor state (`spur-core::editor`) that no client could reach. This slice adds the server and the first wire protocol, with no UX pack, frontend, daemon or reconnect yet.
+
+Terms: a *slice* is one step of the build plan in the epic (#1): slice 1 is this server, slice 2 the first UX pack and terminal client, slice 4 a daemon with listening sockets and reconnect. A *UX pack* is an extension that supplies the look, layout (the UI tree) and key bindings. An undo *turn* is the number that groups edits into one undo step (ADR 0005). The *anchor view* is the editor's own first view, where `editor.focus` rests between client commands.
 
 ## Decisions
 
@@ -48,12 +50,12 @@ Frontends run commands as `Actor::User`. Tools run as `Actor::Remote { client: "
 
 Messages are JSON objects tagged by `type`.
 
-- Client: `hello {protocols, kind, name, caps, size}`, `key {key}` (key notation), `paste {text}` (one edit and one undo step, never read as keys), `mouse {node, action, line, col, lines}`, `resize`, `layout {surfaces}`, `command {req, id, args}`, `subscribe {filters}`, `ack {frame}`, `ping {id}`, `bye`.
-- Server: `welcome {protocol, server, client, session, features}`, `ui {root, focus}`, `surface {node, view}`, `flush {frame}`, `event {seq, name, actor, payload}`, `lagged`, `result {req, ok | error}`, `error {message}`, `pong {id, frame}`, `bye {reason}`.
+- Client: `hello {protocols, kind, name, caps, size}`, `key {key}` (one or more keys in key notation, fed one by one), `paste {text}` (one edit and one undo step, never read as keys), `mouse {node, action, line, col, lines}`, `resize {size}`, `layout {surfaces}`, `command {req, id, args}`, `subscribe {filters}`, `ack {frame}`, `ping {id}`, `bye`.
+- Server: `welcome {protocol, server, client, session, features}`, `ui {root, focus}`, `surface {node, view}`, `flush {frame}`, `event {seq, name, actor, payload}`, `lagged {missed, first_missed_seq}`, `result {req, ok | error}`, `error {message}`, `pong {id, frame}`, `bye {reason}`.
 
-Order: the first message must be `hello`; the server reads only its `protocols` field first, so a hello from a newer client with fields this server cannot decode still gets a clear `bye` instead of a parse failure. The server answers with `welcome`, then the first frame. A frame is any `ui` and `surface` messages followed by `flush {frame}`; frames are sent only when something changed.
+Order: the first message must be `hello`; over a stream the server reads only its `protocols` field first, so a hello from a newer client with fields this server cannot decode still gets a clear `bye` instead of a parse failure. The server answers with `welcome`, then the first frame. A frame is any `ui` and `surface` messages followed by `flush {frame}`; frames are sent only when something changed.
 
-The UI tree is a fixed bare tree in this slice (one editor surface); UX packs replace it from slice 2. A surface carries the visible lines (at most 1,000 rows of at most 4,000 chars, with a `truncated` flag), cursors (primary, secondary, and peers' cursors with their client id), selections, the absolute path (clients shorten it), modified flag, mode and document version.
+The UI tree is a fixed bare tree in this slice (one editor surface); UX packs replace it from slice 2. A surface carries the visible lines (at most 500 rows of at most 4,000 chars, with a `truncated` flag), cursors (primary, secondary, and peers' cursors with their client id), selections, the path as opened (clients shorten it), modified flag, mode and document version.
 
 A frontend is redrawn when its own input or a peer's changes what it shows, and also whenever its document's version differs from the one in its last frame, so an edit nobody announced (a tool editing by id, later) still reaches it.
 
@@ -73,7 +75,7 @@ In-process channels (tests, embedding) and length-prefixed JSON over any byte st
 
 ## Latency
 
-`cargo run --release -p spur-server --example latency` sends 10,000 keys per scenario over Unix socket pairs, each key written together with a `ping`, and times each key to its `pong` (the frame has arrived and been decoded). Server time is measured on the session thread, from taking the first message to handing the batch to the writer. Budget: 0.2 ms.
+`cargo run --release -p spur-server --example latency` sends 10,000 keys per scenario over Unix socket pairs, each key written together with a `ping`, and times each key to its `pong` (the frame has arrived and been decoded). Server time is measured on the session thread, from taking the first message to handing the batch to the writer. Budget: 0.2 ms at p50; p99 is reported alongside.
 
 Measured on a 4-core cloud Linux VM, release build (run-to-run spread on this shared machine is about ±10%):
 

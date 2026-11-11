@@ -95,8 +95,7 @@ pub fn surface(ed: &Editor, view: ViewId, rows: usize, peers: &[(u64, ViewId)]) 
                 end: pos(*b),
             })
             .collect(),
-        // Clients shorten paths for people; the server's directory means nothing to a
-        // remote client.
+        // The path as opened. Clients shorten it for people.
         path: vp.path.as_deref().map(|p| p.display().to_string()),
         modified: vp.modified,
         mode: vp.mode.to_string(),

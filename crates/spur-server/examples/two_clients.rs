@@ -110,7 +110,7 @@ mod demo {
             b.sync();
             self.step += 1;
             let mut s = String::from("\x1b[2J\x1b[H");
-            s.push_str("spur slice 1: protocol debug view (not the Spur look)\n\n");
+            s.push_str("spur server: protocol debug view (not the Spur look)\n\n");
             let left = panel("A", a);
             let right = panel("B", b);
             for (l, r) in left.iter().zip(&right) {
@@ -122,9 +122,9 @@ mod demo {
             let _ = out.write_all(s.as_bytes());
             let _ = out.flush();
             self.pause(Duration::from_millis(if caption.starts_with("both") {
-                180
+                250
             } else {
-                1400
+                2200
             }));
         }
     }

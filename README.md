@@ -22,7 +22,7 @@ A native, modal, agent-first editor and development environment, with a terminal
 | `crates/spur-core` | Buffers, views, commands, events, config |
 | `crates/spur-keymap` | Keymap and mode engine |
 | `crates/spur-ext` | Extension host and capabilities |
-| `crates/spur-rpc` | Session server protocol and transports |
+| `crates/spur-rpc` | Client protocol (v0) and transports |
 | `crates/spur-server` | The editor server: one editor state, many clients |
 | `crates/spur-tui` | Terminal frontend |
 | `crates/spur-gui` | Desktop frontend (winit + wgpu) |

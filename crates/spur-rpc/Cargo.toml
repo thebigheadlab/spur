@@ -1,6 +1,6 @@
 [package]
 name = "spur-rpc"
-description = "Spur's client protocol (v0) and its transports. Depends only on serde."
+description = "Spur's client protocol (v0) and its transports. Depends only on serde and serde_json."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
