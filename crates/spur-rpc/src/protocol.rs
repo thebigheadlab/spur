@@ -190,13 +190,33 @@ pub struct WireError {
 }
 
 /// The outcome of a command: `"ok": value` or `"error": {...}`.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Reply {
     /// The command's result.
     Ok(Value),
     /// Why it failed.
     Error(WireError),
+    /// An outcome this version does not know. Never sent.
+    #[serde(skip_serializing)]
+    Unknown,
+}
+
+impl<'de> Deserialize<'de> for Reply {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        // Read as a map so that an outcome added later decodes as `Unknown`; a derived
+        // flattened enum would fail the whole message instead.
+        let mut fields = serde_json::Map::<String, Value>::deserialize(d)?;
+        if let Some(v) = fields.remove("ok") {
+            return Ok(Self::Ok(v));
+        }
+        match fields.remove("error") {
+            Some(e) => serde_json::from_value(e)
+                .map(Self::Error)
+                .map_err(serde::de::Error::custom),
+            None => Ok(Self::Unknown),
+        }
+    }
 }
 
 /// Server to client.
@@ -432,7 +452,7 @@ pub struct SurfaceView {
     /// This client's non-empty selections.
     #[serde(default)]
     pub selections: Vec<Sel>,
-    /// File path, if any.
+    /// Absolute file path, if any. Clients shorten it for display.
     #[serde(default)]
     pub path: Option<String>,
     /// Unsaved changes.
@@ -651,6 +671,16 @@ mod tests {
         assert_eq!(m, ServerMsg::Unknown);
         let m: ClientMsg = serde_json::from_str(r#"{"type":"telepathy"}"#).unwrap();
         assert_eq!(m, ClientMsg::Unknown);
+        // A command outcome added later decodes as Unknown.
+        let m: ServerMsg =
+            serde_json::from_str(r#"{"type":"result","req":4,"pending":{"eta":3}}"#).unwrap();
+        assert_eq!(
+            m,
+            ServerMsg::CommandResult {
+                req: 4,
+                reply: Reply::Unknown
+            }
+        );
         // Unknown nested variants decode without failing the message, and an unknown
         // container keeps its children.
         let m: ServerMsg = serde_json::from_str(

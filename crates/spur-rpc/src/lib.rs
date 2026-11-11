@@ -18,12 +18,15 @@
 //!    showing it are sent. A key still waiting for a longer binding (a pending
 //!    prefix) is handled when it resolves, which may be after the pong.
 //! 5. Tool clients (scripts) get no `ui`, `surface` or `flush`.
+//! 6. A pixel-layout client gets surfaces with no lines until its `layout` message
+//!    says how many rows and columns each surface holds; send it after `welcome`.
 //!
 //! # Compatibility
 //!
 //! Receivers ignore unknown fields, and every enum has an `Unknown` catch-all: an
 //! unknown message is ignored, an unknown node kind is laid out as a column of its
-//! children, an unknown size as `fill`, an unknown cursor kind as a peer cursor.
+//! children, an unknown size as `fill`, an unknown cursor kind as a peer cursor, an
+//! unknown command outcome as `Reply::Unknown`.
 //! Adding fields, messages or variants needs no new version.
 //!
 //! # Framing
@@ -40,7 +43,7 @@ pub use protocol::{
     WireError, peek_hello,
 };
 pub use transport::{
-    ClientEnd, Closed, Endpoint, FrameReader, FrameWriter, MAX_FRAME, ServerEnd, in_process,
+    ClientEnd, Closed, Endpoint, FrameReader, FrameWriter, MAX_FRAME, QUEUE, ServerEnd, in_process,
     pump_writes, read_frame, write_frame,
 };
 

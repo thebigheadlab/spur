@@ -40,8 +40,6 @@ mod demo {
         std::fs::create_dir_all(&dir).expect("temp dir");
         let path = dir.join("notes.txt");
         std::fs::write(&path, "# notes\n\n\n\n\n\n\n").expect("temp file");
-        // Paths are shown relative to the current directory.
-        std::env::set_current_dir(&dir).expect("cd");
 
         let session = Session::spawn(SessionConfig {
             name: "demo".into(),
@@ -147,9 +145,15 @@ mod demo {
         while rows.len() < ROWS as usize + 1 {
             rows.push(pad(String::from("~"), 1));
         }
+        // The server sends full paths; a client shortens them for people.
+        let name = v
+            .path
+            .as_deref()
+            .and_then(|p| p.rsplit(['/', '\\']).next())
+            .unwrap_or("[scratch]");
         let status = format!(
             "{} {} {} v{}",
-            v.path.as_deref().unwrap_or("[scratch]"),
+            name,
             if v.modified { "[+]" } else { "" },
             v.mode,
             v.version

@@ -466,24 +466,37 @@ fn a_client_that_does_not_ack_gets_at_most_two_frames() {
     let s = session("flow", "");
     let mut slow = Client::attach(&s, ClientKind::Frontend);
     slow.ack = false;
-    // The welcome frame was acked; now stop acking.
-    for ch in ["a", "b", "c", "d"] {
-        slow.send(ClientMsg::Key { key: ch.into() });
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    let mut a = Client::attach(&s, ClientKind::Frontend);
-    a.sync();
-    assert_eq!(a.text(), "abcd");
-    // Read what the slow client got so far without pinging.
+    // The welcome frame was acked; now stop acking. Each of the first two keys gets
+    // its own frame.
     let mut flushes = Vec::new();
-    while let Ok(Some(m)) = slow.end.recv_timeout(Duration::from_millis(200)) {
-        if let ServerMsg::Flush { frame } = &m {
-            flushes.push(*frame);
+    for ch in ["a", "b"] {
+        slow.send(ClientMsg::Key { key: ch.into() });
+        loop {
+            let m = slow.end.recv_timeout(WAIT).unwrap().unwrap();
+            let done = matches!(m, ServerMsg::Flush { .. });
+            if let ServerMsg::Flush { frame } = &m {
+                flushes.push(*frame);
+            }
+            slow.take(m);
+            if done {
+                break;
+            }
         }
-        slow.take(m);
     }
-    assert_eq!(flushes.len(), 2, "{flushes:?}");
-    assert_ne!(slow.text(), "abcd");
+    assert_eq!(slow.text(), "ab");
+    // At the limit: more keys change the text but send no frame.
+    slow.send(ClientMsg::Key { key: "c".into() });
+    slow.send(ClientMsg::Key { key: "d".into() });
+    let mut a = Client::attach(&s, ClientKind::Frontend);
+    // The slow client's keys arrive on its own connection; wait until they are in.
+    for _ in 0..1000 {
+        a.sync();
+        if a.text() == "abcd" {
+            break;
+        }
+    }
+    assert_eq!(a.text(), "abcd");
+    assert!(matches!(slow.end.try_recv(), Ok(None)));
     // One cumulative ack releases the latest state.
     slow.ack = true;
     slow.send(ClientMsg::Ack {
@@ -500,13 +513,18 @@ fn leaving_removes_the_clients_views_and_peer_cursor() {
     let before = views();
     let mut a = Client::attach(&s, ClientKind::Frontend);
     let mut b = Client::attach(&s, ClientKind::Frontend);
+    // B owns a second view, on another file, but stays on A's document.
     let path = temp_file("leave-2", "other\n");
     b.command("editor.open", json!({ "path": path }));
     assert_eq!(views(), before + 3);
+    let first = temp_file("leave", "abc\n");
+    b.command("editor.open", json!({ "path": first }));
     a.sync();
+    assert!(a.cursor(CursorKind::Peer).is_some());
     b.send(ClientMsg::Bye);
+    // The server closes B's connection once B is gone.
+    while b.end.recv_timeout(WAIT).is_ok() {}
     drop(b);
-    a.sync();
     a.sync();
     assert_eq!(views(), before + 1);
     assert_eq!(a.cursor(CursorKind::Peer), None);
@@ -573,6 +591,14 @@ fn bad_input_and_panics_are_reported_and_the_session_goes_on() {
         got_panic
             .iter()
             .any(|m| matches!(m, ServerMsg::Error { message } if message.contains("internal"))),
+        "{got_panic:?}"
+    );
+    // The request still gets its result, so a caller waiting on it is not stuck.
+    assert!(
+        got_panic.iter().any(|m| matches!(
+            m,
+            ServerMsg::CommandResult { req: 1, reply: Reply::Error(e) } if e.code == "internal"
+        )),
         "{got_panic:?}"
     );
     let focus_is_anchor = s
@@ -665,5 +691,71 @@ mod over_sockets {
             Ok(Some(ServerMsg::Bye { .. }))
         ));
         assert_eq!(end.recv_timeout(WAIT), Err(spur_rpc::Closed));
+    }
+
+    #[test]
+    fn a_client_that_stops_reading_is_dropped_and_its_socket_closed() {
+        let s = session("stall", "");
+        let views = || s.inspect(|core| core.state.views.len()).unwrap();
+        let before = views();
+        let (mut tool, theirs) = UnixStream::pair().unwrap();
+        s.attach_unix(theirs).unwrap();
+        for msg in [
+            r#"{"type":"hello","protocols":[0],"kind":"tool","name":"t","size":{"cols":1,"rows":1}}"#,
+            r#"{"type":"subscribe","filters":["buffer.*"]}"#,
+        ] {
+            let mut frame = u32::try_from(msg.len()).unwrap().to_le_bytes().to_vec();
+            frame.extend_from_slice(msg.as_bytes());
+            std::io::Write::write_all(&mut tool, &frame).unwrap();
+        }
+        let mut a = Client::attach(&s, ClientKind::Frontend);
+        while views() < before + 2 {
+            a.sync();
+        }
+        let keys = format!("{}<CR>", "x".repeat(49));
+        // The tool reads nothing while edits keep producing events for it.
+        let mut dropped = false;
+        for _ in 0..5000 {
+            a.keys(&keys);
+            if views() == before + 1 {
+                dropped = true;
+                break;
+            }
+        }
+        assert!(dropped, "the stalled tool was never dropped");
+        // Its socket was shut down: reading drains what was sent, then ends.
+        tool.set_read_timeout(Some(WAIT)).unwrap();
+        let mut rest = Vec::new();
+        std::io::Read::read_to_end(&mut tool, &mut rest).unwrap();
+    }
+
+    #[test]
+    fn edits_nobody_announced_still_reach_frontends() {
+        let s = session("stale", "abc\n");
+        let mut a = Client::attach(&s, ClientKind::Frontend);
+        let view = s
+            .inspect(|core| {
+                core.state
+                    .views
+                    .iter()
+                    .find(|(_, v)| v.owner.is_some())
+                    .map(|(id, _)| *id)
+            })
+            .unwrap()
+            .unwrap();
+        // An edit made on the session thread with no client behind it.
+        s.inspect(move |core| {
+            let anchor = core.state.focus;
+            core.state.focus = view;
+            let id = CommandId::new("editor.insert_text").unwrap();
+            let actor = Actor::System {
+                source: "test".into(),
+            };
+            core.execute(spur_core::Invocation::new(id, actor).args(json!({ "text": "Z" })))
+                .unwrap();
+            core.state.focus = anchor;
+        });
+        a.sync();
+        assert_eq!(a.text(), "Zabc\n");
     }
 }

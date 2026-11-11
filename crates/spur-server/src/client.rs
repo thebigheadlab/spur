@@ -1,6 +1,7 @@
 //! Per-client state.
 
 use std::sync::mpsc::{SyncSender, TrySendError};
+use std::sync::{Arc, Mutex};
 
 use spur_core::editor::{Editor, ViewId};
 use spur_core::{Actor, ClientId, Context, Subscription};
@@ -9,6 +10,29 @@ use spur_rpc::{Caps, ClientKind, Node, ServerMsg, Size, SurfaceView};
 
 /// Frames a client may have in flight without acking.
 pub const MAX_UNACKED: u64 = 2;
+/// Most surface rows drawn for one client, whatever size it claims.
+pub const MAX_ROWS: u32 = 1000;
+/// Pings kept waiting for a frame; more are dropped (a client that never acks).
+const MAX_PINGS: usize = 1024;
+
+/// Shuts a connection down once, from whichever side gets there first.
+#[derive(Clone)]
+pub struct Shutter(Arc<Mutex<Option<Close>>>);
+
+type Close = Box<dyn FnOnce() + Send>;
+
+impl Shutter {
+    pub fn new(close: impl FnOnce() + Send + 'static) -> Self {
+        Self(Arc::new(Mutex::new(Some(Box::new(close)))))
+    }
+
+    pub fn close(&self) {
+        let f = self.0.lock().ok().and_then(|mut f| f.take());
+        if let Some(f) = f {
+            f();
+        }
+    }
+}
 
 /// One attached client.
 pub struct Client {
@@ -28,15 +52,17 @@ pub struct Client {
     pub last_ui: Option<Node>,
     pub last_view: Option<SurfaceView>,
     /// Last frame number sent, and last acked.
-    pub sent: u64,
-    pub acked: u64,
+    sent: u64,
+    acked: u64,
     /// Something it shows may have changed.
     pub dirty: bool,
     /// Pings to answer once its frames are sent.
-    pub pings: Vec<u64>,
+    pings: Vec<u64>,
     /// Messages for the batch sent at the end of this loop iteration.
     pub batch: Vec<ServerMsg>,
     out: SyncSender<Vec<ServerMsg>>,
+    /// Shuts a stream connection down when the client is dropped as stalled.
+    pub shutter: Option<Shutter>,
 }
 
 /// Why sending to a client failed.
@@ -88,6 +114,7 @@ impl Client {
             pings: Vec::new(),
             batch: Vec::new(),
             out,
+            shutter: None,
         }
     }
 
@@ -106,14 +133,40 @@ impl Client {
         self.acked = self.acked.max(frame.min(self.sent));
     }
 
-    /// Text rows of the surface.
+    /// Numbers the next frame.
+    pub fn next_frame(&mut self) -> u64 {
+        self.sent += 1;
+        self.sent
+    }
+
+    /// Queues a ping for an answer after the frames it waits for.
+    pub fn ping(&mut self, id: u64) {
+        if self.pings.len() < MAX_PINGS {
+            self.pings.push(id);
+        }
+    }
+
+    /// Answers every queued ping. False if there were none.
+    pub fn pong(&mut self) -> bool {
+        if self.pings.is_empty() {
+            return false;
+        }
+        let frame = self.sent;
+        for id in self.pings.drain(..) {
+            self.batch.push(ServerMsg::Pong { id, frame });
+        }
+        true
+    }
+
+    /// Text rows of the surface (at most [`MAX_ROWS`]). A pixel-layout client has none
+    /// until its `layout` message says how many fit.
     pub fn rows(&self) -> usize {
         let rows = match self.surface {
             Some((rows, _)) => rows,
             None if self.caps.layout == spur_rpc::Layout::Pixels => 0,
             None => self.size.rows,
         };
-        rows as usize
+        rows.min(MAX_ROWS) as usize
     }
 
     /// Refreshes the client's context keys from its active view.

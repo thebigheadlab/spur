@@ -1,70 +1,14 @@
-//! Input from clients: keys, paste, mouse, size; and the server's own commands.
+//! Input from clients: keys, paste, mouse and size.
 
 use std::time::Instant;
 
-use serde::Deserialize;
-use serde_json::{Value, json};
-use spur_core::editor::{Editor, motion};
-use spur_core::{
-    CommandError, CommandId, CommandMeta, Core, EventName, Invocation, RegisterError, Scoped,
-    events, parse_args,
-};
+use serde_json::json;
+use spur_core::{CommandId, Invocation, Scoped};
 use spur_keymap::{Dispatch, parse_keys};
 use spur_rpc::{MouseAction, ServerMsg, Size, SurfaceSize};
-use spur_text::Selection;
 
 use crate::frame::SURFACE;
 use crate::session::{SCROLL_MARGIN, State};
-
-#[derive(Deserialize)]
-struct MoveTo {
-    line: usize,
-    col: usize,
-}
-
-/// Registers `view.move_to`, which puts the focused view's cursor at a line and char
-/// column (a mouse press). It ends the current undo step, like any cursor move.
-///
-/// # Errors
-///
-/// If the id is taken.
-pub fn register_server_commands(core: &mut Core<Editor>) -> Result<(), RegisterError> {
-    let meta = CommandMeta::new(
-        CommandId::new("view.move_to").unwrap_or_else(|e| unreachable!("{e}")),
-        "Put the cursor at a line and column, dropping other cursors.",
-    )
-    .args_schema(json!({
-        "type": "object",
-        "properties": {
-            "line": { "type": "integer", "minimum": 0 },
-            "col": { "type": "integer", "minimum": 0 }
-        },
-        "required": ["line", "col"]
-    }));
-    core.register_fn(meta, |cx, args| {
-        let a: MoveTo = parse_args(args)?;
-        let id = cx.state.focus;
-        let snap = cx.state.snapshot();
-        let line = a.line.min(snap.line_count().saturating_sub(1));
-        let at = motion::offset_at_col(&snap, line, a.col);
-        let depth = cx.depth();
-        let view = cx
-            .state
-            .views
-            .get_mut(&id)
-            .ok_or_else(|| CommandError::failed("no view"))?;
-        view.selection = Selection::cursor(at);
-        view.goals = vec![None];
-        if depth == 0 {
-            view.turn += 1;
-        }
-        let name =
-            EventName::new(events::SELECTION_CHANGED).unwrap_or_else(|e| unreachable!("{e}"));
-        cx.emit(name, json!({ "view": id.0 }))?;
-        Ok(Value::Null)
-    })?;
-    Ok(())
-}
 
 impl State {
     pub(crate) fn key(&mut self, conn: u64, notation: &str) {
@@ -110,6 +54,7 @@ impl State {
     pub(crate) fn paste(&mut self, conn: u64, text: &str) {
         self.end_step(conn);
         let id = CommandId::new("editor.insert_text").unwrap_or_else(|e| unreachable!("{e}"));
+        // `run_as` replaces the actor with the client's.
         let inv = Invocation::new(id, spur_core::Actor::User).args(json!({ "text": text }));
         if let Some(Err(e)) = self.run_as(conn, inv) {
             self.error(conn, e.message);
@@ -119,11 +64,8 @@ impl State {
 
     /// Ends the undo step of `conn`'s active view, so the next edit starts a new one.
     fn end_step(&mut self, conn: u64) {
-        let Some(c) = self.clients.get(&conn) else {
-            return;
-        };
-        if let Some(v) = self.core.state.views.get_mut(&c.active) {
-            v.turn += 1;
+        if let Some(c) = self.clients.get(&conn) {
+            self.core.state.end_undo_step(c.active);
         }
     }
 
@@ -144,19 +86,15 @@ impl State {
                 let id = CommandId::new("view.move_to").unwrap_or_else(|e| unreachable!("{e}"));
                 let inv = Invocation::new(id, spur_core::Actor::User)
                     .args(json!({ "line": line, "col": col }));
-                self.run_as(conn, inv);
+                if let Some(Err(e)) = self.run_as(conn, inv) {
+                    self.error(conn, e.message);
+                }
             }
             MouseAction::Scroll => {
                 let Some(c) = self.clients.get_mut(&conn) else {
                     return;
                 };
-                let ed = &mut self.core.state;
-                let Some(v) = ed.views.get_mut(&c.active) else {
-                    return;
-                };
-                let count = ed.docs[&v.doc].buffer.snapshot().line_count();
-                let top = v.top_line.saturating_add_signed(lines as isize);
-                v.top_line = top.min(count.saturating_sub(1));
+                self.core.state.scroll_by(c.active, lines as isize);
                 c.dirty = true;
             }
             MouseAction::Unknown => {}

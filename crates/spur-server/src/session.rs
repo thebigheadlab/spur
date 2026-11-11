@@ -19,11 +19,11 @@ use spur_core::{
 };
 use spur_keymap::{Keymap, Layer};
 use spur_rpc::{
-    ClientKind, ClientMsg, FrameReader, PROTOCOL_VERSION, Reply, ServerEnd, ServerMsg, WireError,
-    peek_hello, pump_writes,
+    ClientKind, ClientMsg, FrameReader, MAX_FRAME, PROTOCOL_VERSION, QUEUE, Reply, ServerEnd,
+    ServerMsg, WireError, peek_hello, pump_writes,
 };
 
-use crate::client::{Client, SendFail};
+use crate::client::{Client, SendFail, Shutter};
 use crate::frame::{self, bare_ui};
 
 /// Lines kept between the cursor and the edge of the surface.
@@ -31,7 +31,9 @@ pub const SCROLL_MARGIN: usize = 3;
 /// Inbox batches handled before the next render.
 const MAX_BATCHES: usize = 64;
 /// Batches a client's outbox holds before the client counts as stalled.
-const OUTBOX: usize = 1024;
+const OUTBOX: usize = QUEUE;
+/// Largest command result sent; a bigger one is replaced by a `too_large` error.
+const MAX_RESULT: usize = MAX_FRAME - 4096;
 /// Server-time samples kept for [`Session::stats`].
 const MAX_SAMPLES: usize = 100_000;
 
@@ -92,6 +94,7 @@ enum In {
     Attach {
         conn: u64,
         out: SyncSender<Vec<ServerMsg>>,
+        shutter: Option<Shutter>,
     },
     /// The first frame of a stream connection, undecoded, so the session can read its
     /// protocol versions whatever its shape.
@@ -128,6 +131,14 @@ impl fmt::Debug for Session {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Ended;
 
+impl fmt::Display for Ended {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("the session has ended")
+    }
+}
+
+impl std::error::Error for Ended {}
+
 impl Session {
     /// Starts a session.
     ///
@@ -162,26 +173,40 @@ impl Session {
     /// [`Ended`] if the session has ended.
     pub fn attach(&self, end: ServerEnd) -> Result<(), Ended> {
         let conn = self.conn();
-        let (to_client, from_client) = end.split();
-        let (out, out_rx) = mpsc::sync_channel::<Vec<ServerMsg>>(OUTBOX);
-        self.tx.send(In::Attach { conn, out }).map_err(|_| Ended)?;
-        spawn("spur-attach-out", move || {
-            for batch in out_rx {
-                if to_client.send(batch).is_err() {
-                    break;
-                }
-            }
-        });
+        // The endpoint's own bounded sender is the outbox, so a client that stops
+        // reading fills it and is dropped.
+        let (out, from_client) = end.split();
+        self.tx
+            .send(In::Attach {
+                conn,
+                out,
+                shutter: None,
+            })
+            .map_err(|_| Ended)?;
         let tx = self.tx.clone();
-        spawn("spur-attach-in", move || {
+        self.reader(conn, "spur-attach-in", move || {
             for msgs in from_client {
                 if tx.send(In::Msgs { conn, msgs }).is_err() {
                     return;
                 }
             }
-            let _ = tx.send(In::Gone { conn });
         });
         Ok(())
+    }
+
+    /// Starts a connection's reader thread, which reports the connection gone when `f`
+    /// returns (or at once if the thread cannot start).
+    fn reader(&self, conn: u64, name: &str, f: impl FnOnce() + Send + 'static) {
+        let tx = self.tx.clone();
+        let started = std::thread::Builder::new()
+            .name(name.into())
+            .spawn(move || {
+                f();
+                let _ = tx.send(In::Gone { conn });
+            });
+        if started.is_err() {
+            let _ = self.tx.send(In::Gone { conn });
+        }
     }
 
     /// Attaches a client over a byte stream. `close` runs after the last message is
@@ -198,15 +223,27 @@ impl Session {
     {
         let conn = self.conn();
         let (out, out_rx) = mpsc::sync_channel::<Vec<ServerMsg>>(OUTBOX);
-        self.tx.send(In::Attach { conn, out }).map_err(|_| Ended)?;
-        spawn("spur-conn-write", move || {
-            pump_writes(&out_rx, writer);
-            close();
-        });
+        let shutter = Shutter::new(close);
+        self.tx
+            .send(In::Attach {
+                conn,
+                out,
+                shutter: Some(shutter.clone()),
+            })
+            .map_err(|_| Ended)?;
+        let writer_thread = std::thread::Builder::new()
+            .name("spur-conn-write".into())
+            .spawn(move || {
+                pump_writes(&out_rx, writer);
+                shutter.close();
+            });
+        if writer_thread.is_err() {
+            let _ = self.tx.send(In::Gone { conn });
+            return Ok(());
+        }
         let tx = self.tx.clone();
-        spawn("spur-conn-read", move || {
+        self.reader(conn, "spur-conn-read", move || {
             read_stream(conn, reader, &tx);
-            let _ = tx.send(In::Gone { conn });
         });
         Ok(())
     }
@@ -215,14 +252,16 @@ impl Session {
     ///
     /// # Errors
     ///
-    /// [`Ended`] if the session has ended or the socket cannot be cloned.
+    /// The socket's error if it cannot be cloned, or a `BrokenPipe` error wrapping
+    /// [`Ended`] if the session has ended.
     #[cfg(unix)]
-    pub fn attach_unix(&self, stream: std::os::unix::net::UnixStream) -> Result<(), Ended> {
-        let reader = stream.try_clone().map_err(|_| Ended)?;
-        let closer = stream.try_clone().map_err(|_| Ended)?;
+    pub fn attach_unix(&self, stream: std::os::unix::net::UnixStream) -> std::io::Result<()> {
+        let reader = stream.try_clone()?;
+        let closer = stream.try_clone()?;
         self.attach_stream(reader, stream, move || {
             let _ = closer.shutdown(std::net::Shutdown::Both);
         })
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::BrokenPipe, e))
     }
 
     /// Server time per loop iteration that answered a ping: from taking the first
@@ -247,7 +286,8 @@ impl Session {
         rx.recv().ok()
     }
 
-    /// Waits until the session thread ends (it ends when shut down).
+    /// Shuts the session down and waits for its thread to end. Clients' connections
+    /// close without a `bye`. Dropping the session does the same.
     pub fn join(mut self) {
         let _ = self.tx.send(In::Shutdown);
         if let Some(t) = self.thread.take() {
@@ -263,11 +303,6 @@ impl Drop for Session {
             let _ = t.join();
         }
     }
-}
-
-fn spawn(name: &str, f: impl FnOnce() + Send + 'static) {
-    // Without the thread the connection simply never works; the client sees it close.
-    let _ = std::thread::Builder::new().name(name.into()).spawn(f);
 }
 
 /// Reads frames and pushes them into the inbox: the first undecoded, the rest in
@@ -289,6 +324,9 @@ fn read_stream<R: Read>(conn: u64, reader: R, tx: &Sender<In>) {
         }
     }
 }
+
+/// What a client is told when the server caught a panic on its behalf.
+const PANIC_MESSAGE: &str = "internal error while running a command; save your work to a new file";
 
 fn cmd(id: &str) -> CommandId {
     CommandId::new(id).unwrap_or_else(|e| unreachable!("{e}"))
@@ -318,12 +356,14 @@ pub(crate) struct State {
     pub(crate) core: Core<Editor>,
     layers: Vec<Layer>,
     /// Connections that have not said hello yet.
-    waiting: BTreeMap<u64, SyncSender<Vec<ServerMsg>>>,
+    waiting: BTreeMap<u64, (SyncSender<Vec<ServerMsg>>, Option<Shutter>)>,
     pub(crate) clients: BTreeMap<u64, Client>,
     /// The editor's own first view: `focus` rests here between commands.
     pub(crate) anchor: ViewId,
     home: DocId,
     samples: Arc<Mutex<Vec<Duration>>>,
+    /// A client was removed since this was last cleared.
+    removed: bool,
 }
 
 impl State {
@@ -341,8 +381,6 @@ impl State {
         }
         let mut core = Core::new(Editor::new());
         register_editor_commands(&mut core).map_err(|e| SessionError::Register(e.to_string()))?;
-        crate::input::register_server_commands(&mut core)
-            .map_err(|e| SessionError::Register(e.to_string()))?;
         if let Some(setup) = cfg.setup {
             setup(&mut core);
         }
@@ -369,6 +407,7 @@ impl State {
             anchor,
             home,
             samples,
+            removed: false,
         })
     }
 
@@ -391,7 +430,7 @@ impl State {
             while let Some(msg) = next {
                 match msg {
                     In::Shutdown => return,
-                    msg => self.handle(msg),
+                    msg => self.handle_guarded(msg),
                 }
                 handled += 1;
                 next = if handled < MAX_BATCHES {
@@ -401,8 +440,17 @@ impl State {
                 };
             }
             self.tick(Instant::now());
-            let ponged = self.render_all();
-            self.send_all();
+            // Removing a client changes what its peers show, so render again until no
+            // client leaves (each pass removes at least one, so this ends).
+            let mut ponged = false;
+            loop {
+                self.removed = false;
+                ponged |= self.render_all();
+                self.send_all();
+                if !self.removed {
+                    break;
+                }
+            }
             if ponged {
                 self.sample(started.elapsed());
             }
@@ -417,10 +465,26 @@ impl State {
         }
     }
 
+    /// Handles one inbox message; a panic is reported to the client that sent it and
+    /// the session goes on.
+    fn handle_guarded(&mut self, msg: In) {
+        let conn = match &msg {
+            In::First { conn, .. } | In::Msgs { conn, .. } | In::Gone { conn } => Some(*conn),
+            _ => None,
+        };
+        if catch_unwind(AssertUnwindSafe(|| self.handle(msg))).is_err() {
+            self.core.state.focus = self.anchor;
+            if let Some(conn) = conn {
+                self.error(conn, PANIC_MESSAGE.into());
+                self.mark_peers(conn, None);
+            }
+        }
+    }
+
     fn handle(&mut self, msg: In) {
         match msg {
-            In::Attach { conn, out } => {
-                self.waiting.insert(conn, out);
+            In::Attach { conn, out, shutter } => {
+                self.waiting.insert(conn, (out, shutter));
             }
             In::First { conn, value } => self.first(conn, &value),
             In::Msgs { conn, msgs } => {
@@ -446,7 +510,7 @@ impl State {
 
     /// Refuses a connection that has not said hello.
     fn refuse(&mut self, conn: u64, reason: String) {
-        if let Some(out) = self.waiting.remove(&conn) {
+        if let Some((out, _)) = self.waiting.remove(&conn) {
             let _ = out.try_send(vec![ServerMsg::Bye { reason }]);
         }
     }
@@ -456,13 +520,7 @@ impl State {
             self.refuse(conn, "the first message must be hello".into());
             return;
         };
-        if !versions.contains(&PROTOCOL_VERSION) {
-            self.refuse(
-                conn,
-                format!(
-                    "no common protocol: client speaks {versions:?}, server speaks [{PROTOCOL_VERSION}]"
-                ),
-            );
+        if !self.speaks(conn, &versions) {
             return;
         }
         match serde_json::from_value::<ClientMsg>(value.clone()) {
@@ -483,16 +541,10 @@ impl State {
             self.refuse(conn, "the first message must be hello".into());
             return;
         };
-        if !protocols.contains(&PROTOCOL_VERSION) {
-            self.refuse(
-                conn,
-                format!(
-                    "no common protocol: client speaks {protocols:?}, server speaks [{PROTOCOL_VERSION}]"
-                ),
-            );
+        if !self.speaks(conn, &protocols) {
             return;
         }
-        let Some(out) = self.waiting.remove(&conn) else {
+        let Some((out, shutter)) = self.waiting.remove(&conn) else {
             return;
         };
         let kind = match kind {
@@ -506,6 +558,7 @@ impl State {
             keymap.push_layer(layer.clone());
         }
         let mut client = Client::new(id, kind, name, caps, size, view, keymap, out);
+        client.shutter = shutter;
         client.batch.push(ServerMsg::Welcome {
             protocol: PROTOCOL_VERSION,
             server: env!("CARGO_PKG_VERSION").into(),
@@ -524,11 +577,26 @@ impl State {
         self.mark_peers(conn, None);
     }
 
+    /// True if the client speaks this server's protocol; refuses it otherwise.
+    fn speaks(&mut self, conn: u64, versions: &[u32]) -> bool {
+        if versions.contains(&PROTOCOL_VERSION) {
+            return true;
+        }
+        self.refuse(
+            conn,
+            format!(
+                "no common protocol: client speaks {versions:?}, server speaks [{PROTOCOL_VERSION}]"
+            ),
+        );
+        false
+    }
+
     /// Removes a client and every view it owns.
     fn leave(&mut self, conn: u64) {
         let Some(client) = self.clients.remove(&conn) else {
             return;
         };
+        self.removed = true;
         let doc = self.core.state.views.get(&client.active).map(|v| v.doc);
         let owned: Vec<ViewId> = self
             .core
@@ -587,7 +655,7 @@ impl State {
             }
             ClientMsg::Ping { id } => {
                 if let Some(c) = self.clients.get_mut(&conn) {
-                    c.pings.push(id);
+                    c.ping(id);
                 }
             }
             ClientMsg::Bye => self.drop_client(conn),
@@ -610,11 +678,25 @@ impl State {
                 message: format!("{id:?} is not a command id: {e}"),
                 data: None,
             }),
+            // `run_as` replaces the actor with the client's.
             Ok(id) => match self.run_as(conn, Invocation::new(id, Actor::User).args(args)) {
                 Some(Ok(v)) => Reply::Ok(v),
                 Some(Err(e)) => Reply::Error(wire_error(&e)),
-                None => return,
+                None => Reply::Error(WireError {
+                    code: "internal".into(),
+                    message: PANIC_MESSAGE.into(),
+                    data: None,
+                }),
             },
+        };
+        let reply = if serde_json::to_vec(&reply).map_or(true, |b| b.len() > MAX_RESULT) {
+            Reply::Error(WireError {
+                code: "too_large".into(),
+                message: format!("the result is over {MAX_RESULT} bytes"),
+                data: None,
+            })
+        } else {
+            reply
         };
         if let Some(c) = self.clients.get_mut(&conn) {
             c.batch.push(ServerMsg::CommandResult { req, reply });
@@ -675,12 +757,7 @@ impl State {
         if let Ok(r) = res {
             return Some(r);
         }
-        if let Some(c) = self.clients.get_mut(&conn) {
-            c.batch.push(ServerMsg::Error {
-                message: "internal error while running a command; save your work to a new file"
-                    .into(),
-            });
-        }
+        self.error(conn, PANIC_MESSAGE.into());
         None
     }
 
@@ -717,6 +794,10 @@ impl State {
         let mut broken = Vec::new();
         for (conn, c) in &mut self.clients {
             drain_events(c);
+            if c.draws() && !c.dirty && shows_stale(&self.core.state, c) {
+                // Text changed under the client by someone else (a tool editing by id).
+                c.dirty = true;
+            }
             if c.draws() && c.dirty && c.can_send() {
                 let others: Vec<(u64, ViewId)> =
                     peers.iter().copied().filter(|(p, _)| p != conn).collect();
@@ -730,12 +811,8 @@ impl State {
                 }
             }
             let waiting_frame = c.draws() && c.dirty;
-            if !c.pings.is_empty() && !waiting_frame {
-                let frame = c.sent;
-                for id in c.pings.drain(..) {
-                    c.batch.push(ServerMsg::Pong { id, frame });
-                }
-                ponged = true;
+            if !waiting_frame {
+                ponged |= c.pong();
             }
         }
         for conn in broken {
@@ -759,9 +836,28 @@ impl State {
             }
         }
         for conn in stalled {
+            // A stream writer may be stuck writing to a peer that stopped reading.
+            if let Some(s) = self.clients.get(&conn).and_then(|c| c.shutter.clone()) {
+                s.close();
+            }
             self.leave(conn);
         }
     }
+}
+
+/// The client's last frame shows another document or an older version of it.
+fn shows_stale(ed: &Editor, c: &Client) -> bool {
+    let Some(last) = &c.last_view else {
+        return false;
+    };
+    let Some(doc) = ed
+        .views
+        .get(&c.active)
+        .and_then(|v| ed.docs.get(&v.doc).map(|d| (v.doc, d)))
+    else {
+        return false;
+    };
+    last.doc != doc.0.0 || last.version != doc.1.buffer.version().0
 }
 
 fn drain_events(c: &mut Client) {
@@ -809,7 +905,7 @@ fn render(c: &mut Client, view: spur_rpc::SurfaceView) {
         changed = true;
     }
     if changed {
-        c.sent += 1;
-        c.batch.push(ServerMsg::Flush { frame: c.sent });
+        let frame = c.next_frame();
+        c.batch.push(ServerMsg::Flush { frame });
     }
 }

@@ -273,22 +273,53 @@ impl Editor {
         view.top_line = view.top_line.min(max_top);
     }
 
+    /// Ends `view`'s current undo step, so its next edit starts a new one.
+    pub fn end_undo_step(&mut self, view: ViewId) {
+        if let Some(v) = self.views.get_mut(&view) {
+            v.turn += 1;
+        }
+    }
+
+    /// Moves `view`'s first visible line by `lines`, staying within the document.
+    pub fn scroll_by(&mut self, view: ViewId, lines: isize) {
+        let Some(v) = self.views.get_mut(&view) else {
+            return;
+        };
+        let count = self.docs[&v.doc].buffer.snapshot().line_count();
+        v.top_line = v
+            .top_line
+            .saturating_add_signed(lines)
+            .min(count.saturating_sub(1));
+    }
+
+    /// Line and char column of `view`'s primary cursor.
+    pub fn primary_point(&self, view: ViewId) -> Option<Point> {
+        let v = self.views.get(&view)?;
+        let snap = self.docs.get(&v.doc)?.buffer.snapshot();
+        let head = v.selection.ranges[v.selection.primary].head;
+        Some(Point {
+            line: motion::line_of(&snap, head),
+            column: motion::char_col(&snap, head),
+        })
+    }
+
     /// What a frontend needs to draw `rows` lines of the focused view. Cost is O(rows).
     pub fn viewport(&self, rows: usize) -> Viewport {
-        self.viewport_of(self.focus, rows)
+        self.viewport_of(self.focus, rows, usize::MAX)
             .unwrap_or_else(|| unreachable!("the focused view exists"))
     }
 
-    /// What a frontend needs to draw `rows` lines of `view`, or `None` for an unknown
-    /// view. Cost is O(rows).
-    pub fn viewport_of(&self, view: ViewId, rows: usize) -> Option<Viewport> {
+    /// What a frontend needs to draw `rows` lines of `view`, each cut to `max_cols`
+    /// chars, or `None` for an unknown view. Cost is O(rows × `max_cols`), never the
+    /// length of a long line.
+    pub fn viewport_of(&self, view: ViewId, rows: usize, max_cols: usize) -> Option<Viewport> {
         let view = self.views.get(&view)?;
         let doc = self.docs.get(&view.doc)?;
         let snap = doc.buffer.snapshot();
         let end = (view.top_line + rows).min(snap.line_count());
-        let lines = (view.top_line..end)
-            .map(|l| motion::line_text(&snap, l))
-            .collect();
+        let (lines, clipped) = (view.top_line..end)
+            .map(|l| clipped_line(&snap, l, max_cols))
+            .unzip();
         let point = |off: usize| Point {
             line: motion::line_of(&snap, off),
             column: motion::char_col(&snap, off),
@@ -306,6 +337,7 @@ impl Editor {
             top_line: view.top_line,
             line_count: snap.line_count(),
             lines,
+            clipped,
             cursors,
             selections,
             mode: view.mode.clone(),
@@ -331,6 +363,8 @@ pub struct Viewport {
     pub line_count: usize,
     /// Visible lines, without line endings.
     pub lines: Vec<String>,
+    /// Per visible line: it was cut to the requested width.
+    pub clipped: Vec<bool>,
     /// Cursor positions (line, char column) and whether each is the primary one.
     pub cursors: Vec<(Point, bool)>,
     /// Non-empty selections, start..end.
@@ -341,4 +375,21 @@ pub struct Viewport {
     pub path: Option<PathBuf>,
     /// Unsaved changes.
     pub modified: bool,
+}
+
+/// Line `line` without its ending, cut to `max_cols` chars, and whether it was cut.
+fn clipped_line(s: &Snapshot, line: usize, max_cols: usize) -> (String, bool) {
+    let start = motion::line_start(s, line);
+    let end = motion::line_end(s, line);
+    // A char is at least one byte, so a line this short needs no counting.
+    if end - start <= max_cols {
+        return (s.slice(start..end).unwrap_or_default(), false);
+    }
+    let c0 = s.byte_to_char(start).unwrap_or(0);
+    let c_end = s.byte_to_char(end).unwrap_or(c0);
+    if c_end - c0 <= max_cols {
+        return (s.slice(start..end).unwrap_or_default(), false);
+    }
+    let cut = s.char_to_byte(c0 + max_cols).unwrap_or(end);
+    (s.slice(start..cut).unwrap_or_default(), true)
 }

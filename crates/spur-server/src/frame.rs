@@ -1,8 +1,6 @@
 //! Building what a client is sent: the UI tree and surface frames.
 
-use std::path::Path;
-
-use spur_core::editor::{Editor, ViewId, motion};
+use spur_core::editor::{Editor, ViewId};
 use spur_rpc::{Cursor, CursorKind, Dim, Line, Node, NodeKind, Pos, Sel, Span, SurfaceView};
 
 /// Id of the editor surface node.
@@ -34,9 +32,9 @@ pub fn n32(n: usize) -> u32 {
 }
 
 /// What `view` shows in `rows` lines, with `peers` (client id, view) drawn as peer
-/// cursors when they show the same document. Cost is O(rows + peers).
+/// cursors when they show the same document. Cost is O(rows × [`MAX_LINE`] + peers).
 pub fn surface(ed: &Editor, view: ViewId, rows: usize, peers: &[(u64, ViewId)]) -> SurfaceView {
-    let Some(vp) = ed.viewport_of(view, rows) else {
+    let Some(vp) = ed.viewport_of(view, rows, MAX_LINE) else {
         return SurfaceView::default();
     };
     let v = &ed.views[&view];
@@ -44,17 +42,10 @@ pub fn surface(ed: &Editor, view: ViewId, rows: usize, peers: &[(u64, ViewId)]) 
     let lines = vp
         .lines
         .into_iter()
-        .map(|text| {
-            let truncated = text.chars().count() > MAX_LINE;
-            let text = if truncated {
-                text.chars().take(MAX_LINE).collect()
-            } else {
-                text
-            };
-            Line {
-                spans: vec![Span { text, hl: None }],
-                truncated,
-            }
+        .zip(vp.clipped)
+        .map(|(text, truncated)| Line {
+            spans: vec![Span { text, hl: None }],
+            truncated,
         })
         .collect();
     let mut cursors: Vec<Cursor> = vp
@@ -71,15 +62,16 @@ pub fn surface(ed: &Editor, view: ViewId, rows: usize, peers: &[(u64, ViewId)]) 
             peer: None,
         })
         .collect();
-    let snap = doc.buffer.snapshot();
     for &(peer, pv) in peers {
-        let Some(p) = ed.views.get(&pv).filter(|p| p.doc == v.doc) else {
+        if ed.views.get(&pv).is_none_or(|p| p.doc != v.doc) {
+            continue;
+        }
+        let Some(p) = ed.primary_point(pv) else {
             continue;
         };
-        let head = p.selection.ranges[p.selection.primary].head;
         cursors.push(Cursor {
-            line: n32(motion::line_of(&snap, head)),
-            col: n32(motion::char_col(&snap, head)),
+            line: n32(p.line),
+            col: n32(p.column),
             kind: CursorKind::Peer,
             peer: Some(peer),
         });
@@ -103,18 +95,10 @@ pub fn surface(ed: &Editor, view: ViewId, rows: usize, peers: &[(u64, ViewId)]) 
                 end: pos(*b),
             })
             .collect(),
-        path: vp.path.as_deref().map(display_path),
+        // Clients shorten paths for people; the server's directory means nothing to a
+        // remote client.
+        path: vp.path.as_deref().map(|p| p.display().to_string()),
         modified: vp.modified,
         mode: vp.mode.to_string(),
     }
-}
-
-/// A path for people: relative to the current directory when inside it.
-fn display_path(p: &Path) -> String {
-    std::env::current_dir()
-        .ok()
-        .and_then(|cwd| p.strip_prefix(cwd).ok().map(Path::to_path_buf))
-        .unwrap_or_else(|| p.to_path_buf())
-        .display()
-        .to_string()
 }

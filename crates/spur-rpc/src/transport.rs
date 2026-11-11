@@ -8,8 +8,8 @@
 
 use std::collections::VecDeque;
 use std::fmt;
-use std::io::{self, BufRead, BufReader, Read, Write};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
+use std::io::{self, BufReader, Read, Write};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError};
 use std::time::Duration;
 
 use serde::Serialize;
@@ -19,6 +19,10 @@ use crate::protocol::{ClientMsg, ServerMsg};
 
 /// Largest accepted frame body, in bytes. A peer that sends more is disconnected.
 pub const MAX_FRAME: usize = 16 << 20;
+
+/// Batches a connection's queue holds in each direction. A sender that finds it full
+/// waits ([`Endpoint::send`]) or, for the server, treats the reader as stalled.
+pub const QUEUE: usize = 1024;
 
 /// The other side of a connection is gone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,7 +40,7 @@ impl std::error::Error for Closed {}
 /// connection for the other side.
 #[derive(Debug)]
 pub struct Endpoint<S, R> {
-    tx: Sender<Vec<S>>,
+    tx: SyncSender<Vec<S>>,
     rx: Receiver<Vec<R>>,
     pending: VecDeque<R>,
 }
@@ -47,7 +51,7 @@ pub type ClientEnd = Endpoint<ClientMsg, ServerMsg>;
 pub type ServerEnd = Endpoint<ServerMsg, ClientMsg>;
 
 impl<S, R> Endpoint<S, R> {
-    fn new(tx: Sender<Vec<S>>, rx: Receiver<Vec<R>>) -> Self {
+    fn new(tx: SyncSender<Vec<S>>, rx: Receiver<Vec<R>>) -> Self {
         Self {
             tx,
             rx,
@@ -55,7 +59,7 @@ impl<S, R> Endpoint<S, R> {
         }
     }
 
-    /// Sends one message.
+    /// Sends one message. Waits while the queue is full ([`QUEUE`] batches).
     ///
     /// # Errors
     ///
@@ -128,17 +132,19 @@ impl<S, R> Endpoint<S, R> {
         }
     }
 
-    /// Splits into the batch sender and receiver (messages already received but not yet
-    /// read are dropped).
-    pub fn split(self) -> (Sender<Vec<S>>, Receiver<Vec<R>>) {
+    /// Splits into the bounded batch sender and the receiver, for a server that serves
+    /// the endpoint itself (messages already received but not yet read are dropped).
+    #[doc(hidden)]
+    pub fn split(self) -> (SyncSender<Vec<S>>, Receiver<Vec<R>>) {
         (self.tx, self.rx)
     }
 }
 
-/// A connected pair inside one process. Messages are moved, not serialized.
+/// A connected pair inside one process. Messages are moved, not serialized. Each
+/// direction holds at most [`QUEUE`] batches.
 pub fn in_process() -> (ClientEnd, ServerEnd) {
-    let (c2s_tx, c2s_rx) = mpsc::channel();
-    let (s2c_tx, s2c_rx) = mpsc::channel();
+    let (c2s_tx, c2s_rx) = mpsc::sync_channel(QUEUE);
+    let (s2c_tx, s2c_rx) = mpsc::sync_channel(QUEUE);
     (Endpoint::new(c2s_tx, s2c_rx), Endpoint::new(s2c_tx, c2s_rx))
 }
 
@@ -171,8 +177,8 @@ impl ClientEnd {
         Wr: Write + Send + 'static,
         F: FnOnce() + Send + 'static,
     {
-        let (out_tx, out_rx) = mpsc::channel::<Vec<ClientMsg>>();
-        let (in_tx, in_rx) = mpsc::channel::<Vec<ServerMsg>>();
+        let (out_tx, out_rx) = mpsc::sync_channel::<Vec<ClientMsg>>(QUEUE);
+        let (in_tx, in_rx) = mpsc::sync_channel::<Vec<ServerMsg>>(QUEUE);
         std::thread::Builder::new()
             .name("spur-rpc-read".into())
             .spawn(move || {
@@ -210,15 +216,21 @@ impl ClientEnd {
 }
 
 /// Writes every batch from `rx` to `writer`, merging batches that are already waiting
-/// into one write. Returns when `rx` closes or a write fails.
+/// into one write. A message that cannot be encoded (or is over [`MAX_FRAME`]) is
+/// skipped; senders that must not lose one check its size first. Returns when `rx`
+/// closes or a write fails.
 pub fn pump_writes<T: Serialize, W: Write>(rx: &Receiver<Vec<T>>, writer: W) {
     let mut frames = FrameWriter::new(writer);
     while let Ok(batch) = rx.recv() {
-        let mut ok = batch.iter().all(|m| frames.push(m).is_ok());
-        while let Ok(more) = rx.try_recv() {
-            ok &= more.iter().all(|m| frames.push(m).is_ok());
+        for m in &batch {
+            let _ = frames.push(m);
         }
-        if !ok || frames.flush().is_err() {
+        while let Ok(more) = rx.try_recv() {
+            for m in &more {
+                let _ = frames.push(m);
+            }
+        }
+        if frames.flush().is_err() {
             return;
         }
     }
@@ -279,8 +291,8 @@ impl<W: Write> FrameWriter<W> {
         res
     }
 
-    /// The wrapped writer.
-    pub fn get_mut(&mut self) -> &mut W {
+    #[cfg(test)]
+    fn get_mut(&mut self) -> &mut W {
         &mut self.writer
     }
 }
@@ -300,6 +312,8 @@ pub fn write_frame<W: Write, T: Serialize>(writer: W, msg: &T) -> io::Result<()>
 #[derive(Debug)]
 pub struct FrameReader<R> {
     reader: BufReader<R>,
+    /// An error met after a batch's first frame, returned by the next read.
+    deferred: Option<io::Error>,
 }
 
 impl<R: Read> FrameReader<R> {
@@ -307,6 +321,7 @@ impl<R: Read> FrameReader<R> {
     pub fn new(reader: R) -> Self {
         Self {
             reader: BufReader::with_capacity(64 << 10, reader),
+            deferred: None,
         }
     }
 
@@ -316,8 +331,11 @@ impl<R: Read> FrameReader<R> {
     /// # Errors
     ///
     /// The I/O error, `UnexpectedEof` inside a frame, or `InvalidData` for a length
-    /// over [`MAX_FRAME`] (checked before anything is allocated).
+    /// over [`MAX_FRAME`]. Memory grows with the bytes that arrive, not the length.
     pub fn read_body(&mut self) -> io::Result<Option<Vec<u8>>> {
+        if let Some(e) = self.deferred.take() {
+            return Err(e);
+        }
         let mut len = [0u8; 4];
         let mut got = 0;
         while got < len.len() {
@@ -336,8 +354,11 @@ impl<R: Read> FrameReader<R> {
                 "frame too large",
             ));
         }
-        let mut body = vec![0u8; len];
-        self.reader.read_exact(&mut body)?;
+        let mut body = Vec::with_capacity(len.min(64 << 10));
+        (&mut self.reader).take(len as u64).read_to_end(&mut body)?;
+        if body.len() < len {
+            return Err(io::ErrorKind::UnexpectedEof.into());
+        }
         Ok(Some(body))
     }
 
@@ -355,34 +376,37 @@ impl<R: Read> FrameReader<R> {
         }
     }
 
-    /// Waits for one frame, then also takes every frame already received, so frames
-    /// that arrived together are handed on together. `Ok(None)` at a clean end.
+    /// Waits for one frame, then also takes every complete frame already received, so
+    /// frames that arrived together are handed on together. Never waits for a frame
+    /// that has only partly arrived. `Ok(None)` at a clean end.
     ///
     /// # Errors
     ///
-    /// As [`Self::read`].
+    /// As [`Self::read`]. An error after the first frame is returned by the next call,
+    /// so the frames before it are not lost.
     pub fn read_batch<T: DeserializeOwned>(&mut self) -> io::Result<Option<Vec<T>>> {
         let Some(first) = self.read()? else {
             return Ok(None);
         };
         let mut batch = vec![first];
-        while self.has_buffered() {
-            match self.read()? {
-                Some(m) => batch.push(m),
-                None => break,
+        while self.whole_frame_buffered() {
+            match self.read() {
+                Ok(Some(m)) => batch.push(m),
+                Ok(None) => break,
+                Err(e) => {
+                    self.deferred = Some(e);
+                    break;
+                }
             }
         }
         Ok(Some(batch))
     }
 
-    /// True if bytes of a next frame are already buffered.
-    pub fn has_buffered(&self) -> bool {
-        !self.reader.buffer().is_empty()
-    }
-
-    /// The buffered reader, for callers that check what is waiting.
-    pub fn buf_reader(&mut self) -> &mut impl BufRead {
-        &mut self.reader
+    /// True if a whole next frame (length and body) is already buffered.
+    fn whole_frame_buffered(&self) -> bool {
+        let buf = self.reader.buffer();
+        buf.len() >= 4
+            && buf.len() - 4 >= u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize
     }
 }
 
@@ -408,6 +432,52 @@ mod tests {
             caps: Caps::default(),
             size: Size { cols: 80, rows: 24 },
         }
+    }
+
+    /// Yields its bytes once, then reports that nothing more is ready.
+    struct Burst(Option<Vec<u8>>);
+
+    impl Read for Burst {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            match self.0.take() {
+                Some(bytes) => {
+                    assert!(bytes.len() <= buf.len());
+                    buf[..bytes.len()].copy_from_slice(&bytes);
+                    Ok(bytes.len())
+                }
+                None => Err(io::ErrorKind::WouldBlock.into()),
+            }
+        }
+    }
+
+    #[test]
+    fn a_batch_never_waits_for_a_partial_frame() {
+        let mut w = FrameWriter::new(Vec::new());
+        w.push(&ClientMsg::Ping { id: 1 }).unwrap();
+        w.push(&ClientMsg::Ping { id: 2 }).unwrap();
+        w.push(&ClientMsg::Ping { id: 3 }).unwrap();
+        let mut bytes = std::mem::take(w.get_mut());
+        bytes.extend_from_slice(&w.buf);
+        // The third frame arrives only in part.
+        bytes.truncate(bytes.len() - 3);
+        let mut r = FrameReader::new(Burst(Some(bytes)));
+        let batch = r.read_batch::<ClientMsg>().unwrap().unwrap();
+        assert_eq!(
+            batch,
+            vec![ClientMsg::Ping { id: 1 }, ClientMsg::Ping { id: 2 }]
+        );
+    }
+
+    #[test]
+    fn a_bad_frame_does_not_lose_the_frames_before_it() {
+        let mut bytes = Vec::new();
+        write_frame(&mut bytes, &ClientMsg::Ping { id: 1 }).unwrap();
+        bytes.extend_from_slice(&5u32.to_le_bytes());
+        bytes.extend_from_slice(b"nope!");
+        let mut r = FrameReader::new(bytes.as_slice());
+        let batch = r.read_batch::<ClientMsg>().unwrap().unwrap();
+        assert_eq!(batch, vec![ClientMsg::Ping { id: 1 }]);
+        assert!(r.read_batch::<ClientMsg>().is_err());
     }
 
     #[test]

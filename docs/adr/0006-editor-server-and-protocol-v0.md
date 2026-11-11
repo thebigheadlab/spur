@@ -20,7 +20,7 @@ The core is an editor server. Every UI (terminal, desktop, web) and every tool i
 
 One thread owns the editor state; nothing else touches it. Each connection has a reader thread that decodes frames into the session inbox (one channel message per read, so a burst arrives as one batch) and a writer thread that drains the client's outbox. Per loop iteration the session handles at most 64 inbox batches, runs due keymap timeouts, renders every dirty frontend, then hands each client one batch. A client whose outbox (1,024 batches) is full is dropped.
 
-A command or render that panics is caught; the client gets an `error` and the session keeps serving.
+A panic while handling a client's message, running its command or drawing its frame is caught: the client gets an `error` (and a `command` still gets its `result`, with code `internal`) and the session keeps serving. A client removed during a pass (it left, stalled or its frame failed) makes the session render again before it waits, so peers never keep showing it. A stalled stream client's socket is shut down, which also frees a writer stuck on a peer that stopped reading.
 
 ### Per-client state
 
@@ -30,10 +30,10 @@ The core has one `editor.focus`. To run a client's command the session sets focu
 
 Core changes for this:
 
-1. Views record their owning client; `editor.open` reuses only the caller's view of a document, else adds one. Spawn-time files are opened by the system with no owner.
+1. Views record their owning client; `editor.open` reuses only the caller's view of a document, else adds one. Spawn-time files are opened by the system with no owner. `view.move_to` (a mouse press), `end_undo_step`, `scroll_by` and `primary_point` are core APIs, so the server never edits a view's fields itself.
 2. Each view numbers its undo turns from `view_id << 32`, so two clients' edits never join one undo step. Undo restores a recorded selection only in the view that made the edit; other views only shift.
 3. Edits keep other views' first visible line on the same text, using the pre-edit snapshot.
-4. `viewport_of`, `scroll_view`, `remove_view` and `view_keys` address any view, not only the focused one.
+4. `viewport_of`, `scroll_view`, `remove_view` and `view_keys` address any view, not only the focused one. `viewport_of` cuts each line to a width while reading it, so a huge line never costs more than the width.
 5. `editor.open` refuses folders and files over 64 MiB.
 
 Undo stays per person and document, as with split views in other editors: a human is `User` from every client (ADR 0005), and undo takes that person's newest step, which may have been made in another window. Per-window undo needs a selective undo in `spur-text` and is left as a follow-up decision.
@@ -53,11 +53,13 @@ Messages are JSON objects tagged by `type`.
 
 Order: the first message must be `hello`; the server reads only its `protocols` field first, so a hello from a newer client with fields this server cannot decode still gets a clear `bye` instead of a parse failure. The server answers with `welcome`, then the first frame. A frame is any `ui` and `surface` messages followed by `flush {frame}`; frames are sent only when something changed.
 
-The UI tree is a fixed bare tree in this slice (one editor surface); UX packs replace it from slice 2. A surface carries the visible lines (at most 4,000 chars each, with a `truncated` flag), cursors (primary, secondary, and peers' cursors with their client id), selections, path, modified flag, mode and document version.
+The UI tree is a fixed bare tree in this slice (one editor surface); UX packs replace it from slice 2. A surface carries the visible lines (at most 1,000 rows of at most 4,000 chars, with a `truncated` flag), cursors (primary, secondary, and peers' cursors with their client id), selections, the absolute path (clients shorten it), modified flag, mode and document version.
 
-Compatibility: every enum has an `Unknown` catch-all and every node carries `children`, so an older receiver keeps working when a newer sender adds a message, node kind or field. Unknown containers lay out as a column; an unknown size is fill.
+A frontend is redrawn when its own input or a peer's changes what it shows, and also whenever its document's version differs from the one in its last frame, so an edit nobody announced (a tool editing by id, later) still reaches it.
 
-Framing over byte streams: a 4-byte little-endian length, then the JSON body; frames over 16 MiB are refused. All messages of a batch go out in one write.
+Compatibility: every enum has an `Unknown` catch-all (a command outcome too) and every node carries `children`, so an older receiver keeps working when a newer sender adds a message, node kind or field. Unknown containers lay out as a column; an unknown size is fill.
+
+Framing over byte streams: a 4-byte little-endian length, then the JSON body; frames over 16 MiB are refused, and a command result that would exceed that becomes a `too_large` error. All messages of a batch go out in one write. A reader hands on every complete frame that arrived together and never waits for one that has only partly arrived.
 
 ### Flow control and ping
 
@@ -67,22 +69,28 @@ The server keeps at most two frames unacked per client; `ack {frame}` is cumulat
 
 ### Transports
 
-In-process channels (tests, embedding) and length-prefixed JSON over any byte stream, with a Unix socket helper that shuts the socket down when either side leaves. Listening sockets, a daemon and reconnect come in slice 4.
+In-process channels (tests, embedding) and length-prefixed JSON over any byte stream, with a Unix socket helper that shuts the socket down when either side leaves. Every queue is bounded (1,024 batches each way); the server drops a client whose queue is full. Listening sockets, a daemon and reconnect come in slice 4.
 
 ## Latency
 
 `cargo run --release -p spur-server --example latency` sends 10,000 keys per scenario over Unix socket pairs, each key written together with a `ping`, and times each key to its `pong` (the frame has arrived and been decoded). Server time is measured on the session thread, from taking the first message to handing the batch to the writer. Budget: 0.2 ms.
 
-Measured on a 4-core cloud Linux VM, release build:
+Measured on a 4-core cloud Linux VM, release build (run-to-run spread on this shared machine is about ±10%):
 
 | Scenario | p50 ms | p99 ms | server p50 | server p99 |
 |---|---|---|---|---|
-| 80x24, 1 client | 0.156 | 0.329 | 0.041 | 0.122 |
-| 80x24, 2 clients | 0.196 | 0.318 | 0.077 | 0.163 |
-| 300x100, 1 client | 0.333 | 0.605 | 0.112 | 0.271 |
-| 300x100, 2 clients | 0.443 | 0.891 | 0.236 | 0.497 |
+| 80x24, 1 client | 0.166 | 0.211 | 0.041 | 0.064 |
+| 80x24, 2 clients | 0.202 | 0.282 | 0.080 | 0.130 |
+| 300x100, 1 client | 0.327 | 0.528 | 0.103 | 0.223 |
+| 300x100, 2 clients | 0.472 | 0.793 | 0.240 | 0.484 |
 
-80x24 meets the p50 budget. 300x100 (200 lines of ~300 chars with multi-byte text, about 30 KB of JSON per frame) does not: every frame resends all visible lines, and encoding and decoding them dominates. The planned fix is to send only changed lines (line ids or a line diff in `surface`), which a later protocol version can add without breaking v0 clients. CI does not gate on these numbers; shared runners are too noisy.
+80x24 meets the p50 budget with one client and is at it with two; most of the round trip is the two socket hops and thread wakeups, not the server. 300x100 (200 lines of ~300 chars with multi-byte text, about 30 KB of JSON per frame) does not: every frame resends all visible lines, and encoding and decoding them dominates. The planned fix is to send only changed lines (line ids or a line diff in `surface`), which a later protocol version can add without breaking v0 clients. CI does not gate on these numbers; shared runners are too noisy.
+
+## Follow-ups
+
+- Client ids are connection numbers today; resume (slice 4) needs ids that outlive a connection.
+- The server tracks one surface per client; UX packs with several surfaces (slice 2) need per-surface view, size and last frame.
+- The global context's `editor.*` keys hold whichever client ran last; anything evaluating `when` for a client must use the client's scope.
 
 ## Consequences
 

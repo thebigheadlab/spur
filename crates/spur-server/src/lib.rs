@@ -12,7 +12,7 @@ mod frame;
 mod input;
 mod session;
 
-pub use session::{Session, SessionConfig, SessionError};
+pub use session::{Ended, Session, SessionConfig, SessionError};
 
 /// Name of this crate, used in diagnostics.
 pub const NAME: &str = env!("CARGO_PKG_NAME");

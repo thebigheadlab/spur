@@ -62,6 +62,12 @@ struct MoveArgs {
 }
 
 #[derive(Deserialize)]
+struct MoveToArgs {
+    line: usize,
+    col: usize,
+}
+
+#[derive(Deserialize)]
 struct TextArgs {
     text: String,
 }
@@ -690,6 +696,41 @@ pub fn register_editor_commands(core: &mut Core<Editor>) -> Result<(), RegisterE
         },
     )?;
 
+    reg(
+        "view.move_to",
+        "Put the cursor at a line and char column, dropping other cursors.",
+        |m| {
+            m.read_only().args_schema(json!({
+                "type": "object",
+                "properties": {
+                    "line": { "type": "integer", "minimum": 0 },
+                    "col": { "type": "integer", "minimum": 0 }
+                },
+                "required": ["line", "col"]
+            }))
+        },
+        |cx, a| {
+            let m: MoveToArgs = parse_args(a)?;
+            let snap = cx.state.snapshot();
+            let line = m.line.min(snap.line_count().saturating_sub(1));
+            let at = motion::offset_at_col(&snap, line, m.col);
+            let depth = cx.depth();
+            let id = focus(cx);
+            let view = cx
+                .state
+                .views
+                .get_mut(&id)
+                .unwrap_or_else(|| unreachable!());
+            view.selection = Selection::cursor(at);
+            view.goals = vec![None];
+            if depth == 0 {
+                // Moving the cursor ends the current undo step.
+                view.turn += 1;
+            }
+            after_selection_change(cx)?;
+            Ok(Value::Null)
+        },
+    )?;
     reg(
         "editor.move_left",
         "Move left by graphemes.",
@@ -1368,7 +1409,10 @@ mod tests {
             json!({ "text": "x\ny\nz\n" }),
         );
         assert_eq!(c.state.views[&b].top_line, 23);
-        assert_eq!(c.state.viewport_of(b, 1).unwrap().lines, vec!["line 20"]);
+        assert_eq!(
+            c.state.viewport_of(b, 1, usize::MAX).unwrap().lines,
+            vec!["line 20"]
+        );
         // An edit below the top line does not scroll it.
         c.state.views.get_mut(&a).unwrap().selection = Selection::cursor(c.state.snapshot().len());
         run_in(
@@ -1387,7 +1431,10 @@ mod tests {
         let a = c.state.focus;
         let doc = c.state.views[&a].doc;
         let b = c.state.add_view(doc);
-        assert_eq!(c.state.viewport_of(a, 2), Some(c.state.viewport(2)));
+        assert_eq!(
+            c.state.viewport_of(a, 2, usize::MAX),
+            Some(c.state.viewport(2))
+        );
         assert!(!c.state.remove_view(a), "focused view stays");
         let keys = c.state.view_keys(b).unwrap();
         assert_eq!(
@@ -1395,7 +1442,31 @@ mod tests {
             ("editor.mode", crate::CtxValue::Str("insert".into()))
         );
         assert!(c.state.remove_view(b));
-        assert!(c.state.viewport_of(b, 2).is_none());
+        assert!(c.state.viewport_of(b, 2, usize::MAX).is_none());
         assert!(!c.state.remove_view(b));
+    }
+
+    #[test]
+    fn move_to_scroll_and_clipped_viewports() {
+        let mut c = core("ab\ncdéf\ng\n", "insert");
+        let v = c.state.focus;
+        run(&mut c, "view.move_to", json!({ "line": 1, "col": 3 }));
+        let p = c.state.primary_point(v).unwrap();
+        assert_eq!((p.line, p.column), (1, 3));
+        // Past the end clamps to the last line and its end.
+        run(&mut c, "view.move_to", json!({ "line": 99, "col": 99 }));
+        assert_eq!(c.state.primary_point(v).unwrap().line, 3);
+        let vp = c.state.viewport_of(v, 3, 3).unwrap();
+        assert_eq!(vp.lines, vec!["ab", "cdé", "g"]);
+        assert_eq!(vp.clipped, vec![false, true, false]);
+        c.state.scroll_by(v, 2);
+        assert_eq!(c.state.views[&v].top_line, 2);
+        c.state.scroll_by(v, 100);
+        assert_eq!(c.state.views[&v].top_line, 3);
+        c.state.scroll_by(v, -100);
+        assert_eq!(c.state.views[&v].top_line, 0);
+        let turn = c.state.views[&v].turn;
+        c.state.end_undo_step(v);
+        assert_eq!(c.state.views[&v].turn, turn + 1);
     }
 }
