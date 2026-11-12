@@ -35,7 +35,7 @@ Core changes for this:
 1. Views record their owning client; `editor.open` reuses only the caller's view of a document, else adds one. Spawn-time files are opened by the system with no owner. `view.move_to` (a mouse press), `end_undo_step`, `scroll_by` and `primary_point` are core APIs, so the server never edits a view's fields itself.
 2. Each view numbers its undo turns from `view_id << 32`, so two clients' edits never join one undo step. Undo restores a recorded selection only in the view that made the edit; other views only shift.
 3. Edits keep other views' first visible line on the same text, using the pre-edit snapshot.
-4. `viewport_of`, `scroll_view`, `remove_view` and `view_keys` address any view, not only the focused one. `viewport_of` cuts each line to a width while reading it, so a huge line never costs more than the width.
+4. `viewport_of`, `scroll_view`, `remove_view` and `view_keys` address any view, not only the focused one. `viewport_of` copies the visible block once and splits it on line endings, cutting each line to a width; a block larger than rows × width (a huge line) is read line by line, each cut while reading, so a viewport never costs more than its rows × width.
 5. `editor.open` refuses folders and files over 64 MiB, and `open` and `save` store absolute paths, so one file has one document whatever spelling opened it.
 
 Undo stays per person and document, as with split views in other editors: a human is `User` from every client (ADR 0005), and undo takes that person's newest step, which may have been made in another window. The owner chose this over per-window undo (which would need a selective undo in `spur-text`).
@@ -50,18 +50,20 @@ Frontends run commands as `Actor::User`. Tools run as `Actor::Remote { client: "
 
 Messages are JSON objects tagged by `type`.
 
-- Client: `hello {protocols, kind, name, caps, size}`, `key {key}` (one or more keys in key notation, fed one by one), `paste {text}` (one edit and one undo step, never read as keys), `mouse {node, action, line, col, lines}`, `resize {size}`, `layout {surfaces}`, `command {req, id, args}`, `subscribe {filters}`, `ack {frame}`, `ping {id}`, `bye`.
+- Client: `hello {protocols, kind, name, caps, size}`, `key {key}` (one or more keys in key notation, fed one by one), `paste {text}` (one edit and one undo step, never read as keys), `mouse {node, action, line, col, lines}`, `resize {size}`, `layout {surfaces}`, `command {req, id, args}`, `subscribe {filters}`, `ack {frame}`, `refresh`, `ping {id}`, `bye`.
 - Server: `welcome {protocol, server, client, session, features}`, `ui {root, focus}`, `surface {node, view}`, `flush {frame}`, `event {seq, name, actor, payload}`, `lagged {missed, first_missed_seq}`, `result {req, ok | error}`, `error {message}`, `pong {id, frame}`, `bye {reason}`.
 
 Order: the first message must be `hello`; over a stream the server reads only its `protocols` field first, so a hello from a newer client with fields this server cannot decode still gets a clear `bye` instead of a parse failure. The server answers with `welcome`, then the first frame. A frame is any `ui` and `surface` messages followed by `flush {frame}`; frames are sent only when something changed.
 
 The UI tree is a fixed bare tree in this slice (one editor surface); UX packs replace it from slice 2. A surface carries the visible lines (at most 500 rows of at most 4,000 chars, with a `truncated` flag), cursors (primary, secondary, and peers' cursors with their client id), selections, the absolute path (clients shorten it), modified flag, mode and document version.
 
+Surfaces send only the rows that changed. A surface with `rows` builds its lines from runs: `{from, count}` copies rows of the previous surface of that node (named by `base`, the previous surface's `seq`), and `{count}` takes the next entries of `lines`. The server matches each new row against the previous frame at the same offset as the row before it, the scroll offset, the same row, and the offset of lines inserted or deleted above it, so typing, scrolling and inserting a line each send one or a few lines. A surface is full (no `rows`) when it is the first, follows a new `ui`, shows another document, nothing could be copied, or the client sent `refresh`. A client that lost its copy (or sees a `base` that is not its last `seq`) sends `refresh` once, skips surfaces with `rows` until a full one arrives, and keeps acking. Clients apply every surface in order, even ones in frames they will not draw, because the next one is built from it.
+
 A frontend is redrawn when its own input or a peer's changes what it shows, and also whenever its document's version differs from the one in its last frame, so an edit nobody announced (a tool editing by id, later) still reaches it.
 
 Compatibility: every enum has an `Unknown` catch-all (a command outcome too) and every node carries `children`, so an older receiver keeps working when a newer sender adds a message, node kind or field. Unknown containers lay out as a column; an unknown size is fill.
 
-Framing over byte streams: a 4-byte little-endian length, then the JSON body; frames over 16 MiB are refused, and a command result that would exceed that becomes a `too_large` error. All messages of a batch go out in one write. A reader hands on every complete frame that arrived together and never waits for one that has only partly arrived.
+Framing over byte streams: a 4-byte little-endian length, then the JSON body; frames over 16 MiB are refused, and a command result that would exceed that becomes a `too_large` error. A message that cannot be encoded or is too large to send closes the connection after the messages before it are written. All messages of a batch go out in one write. A reader hands on every complete frame that arrived together and never waits for one that has only partly arrived.
 
 ### Flow control and ping
 
@@ -81,22 +83,22 @@ Measured on a 4-core cloud Linux VM, release build (run-to-run spread on this sh
 
 | Scenario | p50 ms | p99 ms | server p50 | server p99 |
 |---|---|---|---|---|
-| 80x24, 1 client | 0.166 | 0.211 | 0.041 | 0.064 |
-| 80x24, 2 clients | 0.202 | 0.282 | 0.080 | 0.130 |
-| 300x100, 1 client | 0.327 | 0.528 | 0.103 | 0.223 |
-| 300x100, 2 clients | 0.472 | 0.793 | 0.240 | 0.484 |
+| 80x24, 1 client | 0.127 | 0.175 | 0.024 | 0.046 |
+| 80x24, 2 clients | 0.129 | 0.235 | 0.037 | 0.104 |
+| 300x100, 1 client | 0.132 | 0.181 | 0.031 | 0.059 |
+| 300x100, 2 clients | 0.144 | 0.255 | 0.054 | 0.132 |
 
-80x24 meets the p50 budget with one client and is at it with two; most of the round trip is the two socket hops and thread wakeups, not the server. 300x100 (200 lines of ~300 chars with multi-byte text, about 30 KB of JSON per frame) does not: every frame resends all visible lines, and encoding and decoding them dominates. The planned fix is to send only changed lines (line ids or a line diff in `surface`), which a later protocol version can add without breaking v0 clients. CI does not gate on these numbers; shared runners are too noisy.
+Every scenario meets the p50 budget; most of the round trip is the two socket hops and thread wakeups, not the server. 300x100 is 200 lines of ~300 chars with multi-byte text. When every frame resent all visible lines (about 30 KB of JSON), it measured 0.327 ms (one client) and 0.472 ms (two) at p50, with encoding and decoding dominating. Sending only changed rows brought a typed key's frame to one line, and reading the visible block in one pass cut the server's viewport cost. `rows` changed v0 in place rather than adding a version, which is fine while v0 is unreleased. CI does not gate on these numbers; shared runners are too noisy.
 
 ## Follow-ups
 
 - Client ids are connection numbers today; resume (slice 4) needs ids that outlive a connection.
-- The server tracks one surface per client; UX packs with several surfaces (slice 2) need per-surface view, size and last frame.
+- The server tracks one surface per client; UX packs with several surfaces (slice 2) need per-surface view, size and last frame (which is also each surface's diff base).
 - The global context's `editor.*` keys hold whichever client ran last; anything evaluating `when` for a client must use the client's scope.
 
 ## Consequences
 
 - Any process that speaks spur-rpc can drive the editor; the terminal and desktop frontends will be clients like the test harness.
-- The server sends whole visible lines per frame; large viewports cost more until line diffs land.
+- Clients must keep each surface's last lines to apply the next one; a client that cannot sends `refresh`.
 - Undo is per person, not per window, until selective undo exists.
 - Key bindings come only from layers given to the session; the examples carry a small layer of their own.

@@ -91,6 +91,8 @@ pub fn surface(ed: &Editor, view: ViewId, rows: usize, peers: &[(u64, ViewId)]) 
         line_count: n32(vp.line_count),
         lines,
         rows: Vec::new(),
+        seq: 0,
+        base: None,
         cursors,
         selections: vp
             .selections
@@ -114,7 +116,8 @@ pub fn surface(ed: &Editor, view: ViewId, rows: usize, peers: &[(u64, ViewId)]) 
 ///
 /// Each row is compared with the previous frame's row at the scroll offset, at the
 /// same position, and at the offset of lines inserted or deleted above, so typing,
-/// scrolling and adding or removing a line resend only what changed. Cost is O(rows).
+/// scrolling and adding or removing a line resend only what changed. Cost is O(rows)
+/// line comparisons. The caller numbers the result (`seq`, `base`).
 pub fn delta(last: Option<&SurfaceView>, new: &SurfaceView) -> SurfaceView {
     let mut wire = SurfaceView {
         lines: Vec::new(),
@@ -193,6 +196,8 @@ impl WithoutLines for SurfaceView {
             line_count: self.line_count,
             lines: Vec::new(),
             rows: Vec::new(),
+            seq: 0,
+            base: None,
             cursors: self.cursors.clone(),
             selections: self.selections.clone(),
             path: self.path.clone(),
@@ -229,6 +234,9 @@ mod tests {
     /// lines went over the wire.
     fn sent(old: &SurfaceView, new: &SurfaceView) -> usize {
         let mut wire = delta(Some(old), new);
+        if !wire.rows.is_empty() {
+            wire.base = Some(old.seq);
+        }
         let n = wire.lines.len();
         wire.resolve(Some(old)).unwrap();
         assert_eq!(&wire, new);

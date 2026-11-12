@@ -50,7 +50,10 @@ pub struct Client {
     pub scope: Context,
     pub sub: Option<Subscription>,
     pub last_ui: Option<Node>,
+    /// The last surface sent, in full: the base the client builds the next one on.
     pub last_view: Option<SurfaceView>,
+    /// Number of the last surface sent.
+    pub surface_seq: u64,
     /// Last frame number sent, and last acked.
     sent: u64,
     acked: u64,
@@ -108,6 +111,7 @@ impl Client {
             sub: None,
             last_ui: None,
             last_view: None,
+            surface_seq: 0,
             sent: 0,
             acked: 0,
             dirty: kind == ClientKind::Frontend,

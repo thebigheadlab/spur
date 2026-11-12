@@ -427,9 +427,20 @@ fn clipped_line(s: &Snapshot, line: usize, max_cols: usize) -> (String, bool) {
     let Some(range) = s.line_range(line) else {
         return (String::new(), false);
     };
-    let mut text = String::with_capacity((range.end - range.start).min(max_cols.saturating_mul(4)));
+    let cap = (range.end - range.start).min(max_cols.saturating_mul(4));
+    take_cols(s.chunks(range).into_iter().flatten(), max_cols, cap)
+}
+
+/// The text of `chunks` (one line with its ending) up to `max_cols` chars, without
+/// the ending, and whether chars were left out.
+fn take_cols<'a>(
+    chunks: impl Iterator<Item = &'a str>,
+    max_cols: usize,
+    cap: usize,
+) -> (String, bool) {
+    let mut text = String::with_capacity(cap);
     let mut chars = 0usize;
-    for chunk in s.chunks(range).into_iter().flatten() {
+    'chunks: for chunk in chunks {
         // A char is at least one byte, so a chunk this short cannot pass the limit.
         if chars + chunk.len() <= max_cols {
             text.push_str(chunk);
@@ -438,17 +449,14 @@ fn clipped_line(s: &Snapshot, line: usize, max_cols: usize) -> (String, bool) {
         }
         for c in chunk.chars() {
             if chars == max_cols {
-                let rest_is_ending = matches!(c, '\n' | '\r');
-                if !rest_is_ending {
-                    return (text, true);
+                // Only the line ending may follow a full line.
+                if matches!(c, '\n' | '\r') {
+                    break 'chunks;
                 }
-                break;
+                return (text, true);
             }
             text.push(c);
             chars += 1;
-        }
-        if chars == max_cols {
-            break;
         }
     }
     // Drop the line ending: `\r\n`, `\n` or `\r`.
@@ -459,4 +467,22 @@ fn clipped_line(s: &Snapshot, line: usize, max_cols: usize) -> (String, bool) {
         text.pop();
     }
     (text, false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::take_cols;
+
+    #[test]
+    fn a_cut_is_seen_across_chunk_boundaries() {
+        let cut = |chunks: &[&str], max| take_cols(chunks.iter().copied(), max, 0);
+        // The limit falls exactly at the end of a chunk.
+        assert_eq!(cut(&["éé", "é\n"], 2), ("éé".into(), true));
+        assert_eq!(cut(&["éé", "\r\n"], 2), ("éé".into(), false));
+        assert_eq!(cut(&["éé", "\n"], 2), ("éé".into(), false));
+        assert_eq!(cut(&["éé"], 2), ("éé".into(), false));
+        assert_eq!(cut(&["ab", "c"], 3), ("abc".into(), false));
+        assert_eq!(cut(&["ab", "cd"], 3), ("abc".into(), true));
+        assert_eq!(cut(&["ab\r", "\n"], 2), ("ab".into(), false));
+    }
 }

@@ -468,6 +468,29 @@ mod tests {
     }
 
     #[test]
+    fn a_message_too_large_ends_the_stream_after_the_ones_before_it() {
+        let (tx, rx) = mpsc::sync_channel(4);
+        let huge = ClientMsg::Paste {
+            text: "x".repeat(MAX_FRAME + 1),
+        };
+        tx.send(vec![
+            ClientMsg::Ping { id: 1 },
+            huge,
+            ClientMsg::Ping { id: 2 },
+        ])
+        .unwrap();
+        tx.send(vec![ClientMsg::Ping { id: 3 }]).unwrap();
+        let mut out = Vec::new();
+        pump_writes(&rx, &mut out);
+        let mut r = FrameReader::new(out.as_slice());
+        assert_eq!(
+            r.read::<ClientMsg>().unwrap(),
+            Some(ClientMsg::Ping { id: 1 })
+        );
+        assert_eq!(r.read::<ClientMsg>().unwrap(), None);
+    }
+
+    #[test]
     fn a_bad_frame_does_not_lose_the_frames_before_it() {
         let mut bytes = Vec::new();
         write_frame(&mut bytes, &ClientMsg::Ping { id: 1 }).unwrap();

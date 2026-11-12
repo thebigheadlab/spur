@@ -467,6 +467,31 @@ fn subscribed_events_arrive_before_the_frame() {
 }
 
 #[test]
+fn a_client_that_lost_its_rows_gets_a_full_frame_after_refresh() {
+    let s = session("refresh", "ab\ncd\n");
+    let mut c = Client::attach(&s, ClientKind::Frontend);
+    c.keys("x");
+    // A diff may already be on its way when the client drops its copy.
+    c.send(ClientMsg::Key { key: "y".into() });
+    c.send(ClientMsg::Refresh);
+    c.view = None;
+    c.send(ClientMsg::Ping { id: 99 });
+    loop {
+        match c.end.recv_timeout(WAIT).unwrap().unwrap() {
+            ServerMsg::Surface { view, .. } if !view.rows.is_empty() => {
+                assert!(view.clone().resolve(None).is_err());
+            }
+            ServerMsg::Pong { id: 99, .. } => break,
+            m => c.take(m),
+        }
+    }
+    assert_eq!(c.text(), "xyab\ncd\n");
+    // From there on, diffs build on the full frame.
+    c.keys("z");
+    assert_eq!(c.text(), "xyzab\ncd\n");
+}
+
+#[test]
 fn a_client_that_does_not_ack_gets_at_most_two_frames() {
     let s = session("flow", "");
     let mut slow = Client::attach(&s, ClientKind::Frontend);

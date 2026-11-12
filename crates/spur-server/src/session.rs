@@ -938,7 +938,10 @@ fn render(c: &mut Client, view: SurfaceView, ui: Option<Node>, wire: Option<Surf
         });
         c.last_ui = Some(ui);
     }
-    if let Some(wire) = wire {
+    if let Some(mut wire) = wire {
+        c.surface_seq += 1;
+        wire.base = (!wire.rows.is_empty()).then_some(c.surface_seq - 1);
+        wire.seq = c.surface_seq;
         // The client builds this frame from the last surface it got, which is
         // `last_view`: every surface queued is delivered in order, or the client is
         // dropped (a writer that cannot encode a message closes the connection).

@@ -171,8 +171,9 @@ pub enum ClientMsg {
         /// Echoed back.
         id: u64,
     },
-    /// The client lost its copy of what it showed: the next frame of every surface is
-    /// sent in full.
+    /// The client lost its copy of what it showed (see [`SurfaceView::resolve`]): the
+    /// next surface built after this arrives is sent in full. Surfaces already on
+    /// their way may still carry `rows`; skip those.
     Refresh,
     /// The client is leaving.
     Bye,
@@ -476,10 +477,16 @@ pub struct SurfaceView {
     /// Visible lines: all of them when `rows` is empty, else only the rows `rows`
     /// marks as new, in order.
     pub lines: Vec<Line>,
-    /// How to build the visible rows from the client's previous frame of this
-    /// surface and `lines`. Empty means `lines` holds every row.
+    /// How to build the visible rows from the previous surface of this node and
+    /// `lines`. Absent means `lines` holds every row.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rows: Vec<Rows>,
+    /// This surface's number for the client, counting from 1.
+    #[serde(default)]
+    pub seq: u64,
+    /// With `rows`: the `seq` of the surface the rows are copied from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<u64>,
     /// Cursors (possibly outside the visible lines).
     pub cursors: Vec<Cursor>,
     /// This client's non-empty selections.
@@ -498,32 +505,34 @@ pub struct SurfaceView {
 
 impl SurfaceView {
     /// Turns a received surface into a full one: builds every visible row from
-    /// `prev` (the previous full surface of the same node, if any) and the new lines,
-    /// and clears `rows`. A client calls this on each `surface` it receives, in order.
+    /// `prev` (the last full surface of the same node, as resolved) and the new lines,
+    /// and clears `rows`. A client calls this on every `surface` it receives, in order,
+    /// even ones it will not draw.
     ///
     /// # Errors
     ///
-    /// [`BadRows`] if a run points past `prev` or past the new lines (the client
-    /// missed a frame); the client should treat its state as lost.
+    /// [`BadRows`] if the surface builds on another surface than `prev` (its `base`
+    /// is not `prev`'s `seq`) or its runs do not fit; `self` is left as received. The
+    /// client's copy is then lost: it sends `refresh` once, skips surfaces with `rows`
+    /// until a full one arrives, and keeps acking every flush meanwhile.
     pub fn resolve(&mut self, prev: Option<&Self>) -> Result<(), BadRows> {
         if self.rows.is_empty() {
             return Ok(());
         }
-        let old = prev.map_or(&[][..], |p| p.lines.as_slice());
-        let mut new = std::mem::take(&mut self.lines).into_iter();
+        let prev = prev.filter(|p| Some(p.seq) == self.base).ok_or(BadRows)?;
+        let mut new = self.lines.iter();
         let mut lines = Vec::new();
-        for run in std::mem::take(&mut self.rows) {
+        for run in &self.rows {
             let count = run.count as usize;
             match run.from {
                 Some(from) => {
                     let from = from as usize;
                     let end = from.checked_add(count).ok_or(BadRows)?;
-                    let rows = old.get(from..end).ok_or(BadRows)?;
-                    lines.extend_from_slice(rows);
+                    lines.extend_from_slice(prev.lines.get(from..end).ok_or(BadRows)?);
                 }
                 None => {
                     for _ in 0..count {
-                        lines.push(new.next().ok_or(BadRows)?);
+                        lines.push(new.next().ok_or(BadRows)?.clone());
                     }
                 }
             }
@@ -532,6 +541,8 @@ impl SurfaceView {
             return Err(BadRows);
         }
         self.lines = lines;
+        self.rows.clear();
+        self.base = None;
         Ok(())
     }
 }
@@ -751,12 +762,13 @@ mod tests {
     fn rows_copy_from_the_previous_frame() {
         let prev = SurfaceView {
             lines: vec![line("a"), line("b"), line("c")],
+            seq: 1,
             ..SurfaceView::default()
         };
         let mut next: SurfaceView = serde_json::from_str(
             r#"{"doc":0,"version":1,"top_line":1,"line_count":4,"cursors":[],"mode":"insert",
                "lines":[{"spans":[{"text":"x"}]}],
-               "rows":[{"from":1,"count":2},{"count":1}]}"#,
+               "rows":[{"from":1,"count":2},{"count":1}],"seq":2,"base":1}"#,
         )
         .unwrap();
         next.resolve(Some(&prev)).unwrap();
@@ -788,10 +800,24 @@ mod tests {
             let mut bad = SurfaceView {
                 lines: vec![line("x")],
                 rows,
+                base: Some(1),
                 ..SurfaceView::default()
             };
+            let before = bad.clone();
             assert_eq!(bad.resolve(Some(&prev)), Err(BadRows), "{:?}", bad.rows);
+            assert_eq!(bad, before);
         }
+        // Runs that fit, but against another surface than the client holds.
+        let mut stale = SurfaceView {
+            rows: vec![Rows {
+                from: Some(0),
+                count: 1,
+            }],
+            base: Some(7),
+            ..SurfaceView::default()
+        };
+        assert_eq!(stale.resolve(Some(&prev)), Err(BadRows));
+        assert_eq!(stale.resolve(None), Err(BadRows));
     }
 
     #[test]
