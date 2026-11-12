@@ -2,7 +2,7 @@
 
 A native, modal, agent-first editor and development environment, with a terminal (TUI) and a desktop (GUI) frontend.
 
-> Status: pre-alpha. Scaffolding only. The plan lives in the [epic](https://github.com/thebigheadlab/spur/issues/1).
+> Status: pre-alpha. The editor server and protocol v0 work; there is no frontend yet. The plan lives in the [epic](https://github.com/thebigheadlab/spur/issues/1).
 
 ## Vision
 
@@ -22,7 +22,8 @@ A native, modal, agent-first editor and development environment, with a terminal
 | `crates/spur-core` | Buffers, views, commands, events, config |
 | `crates/spur-keymap` | Keymap and mode engine |
 | `crates/spur-ext` | Extension host and capabilities |
-| `crates/spur-rpc` | Session server protocol and transports |
+| `crates/spur-rpc` | Client protocol (v0) and transports |
+| `crates/spur-server` | The editor server: one editor state, many clients |
 | `crates/spur-tui` | Terminal frontend |
 | `crates/spur-gui` | Desktop frontend (winit + wgpu) |
 | `crates/spur` | The `spur` binary |
@@ -38,6 +39,17 @@ cargo run
 ```
 
 The toolchain is pinned in `rust-toolchain.toml`; `rustup` installs it automatically.
+
+Two examples (Unix only) show the server at work:
+
+```sh
+# Two clients edit one file; a plain debug view of both clients' frames.
+cargo run --release -p spur-server --example two_clients
+# Key-to-frame latency over Unix sockets.
+cargo run --release -p spur-server --example latency
+```
+
+The server and protocol are described in [ADR 0006](docs/adr/0006-editor-server-and-protocol-v0.md).
 
 ## License
 

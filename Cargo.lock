@@ -561,6 +561,7 @@ dependencies = [
  "spur-gui",
  "spur-keymap",
  "spur-rpc",
+ "spur-server",
  "spur-text",
  "spur-tui",
 ]
@@ -570,6 +571,7 @@ name = "spur-core"
 version = "0.0.0"
 dependencies = [
  "criterion",
+ "memchr",
  "regex",
  "serde",
  "serde_json",
@@ -605,7 +607,20 @@ dependencies = [
 name = "spur-rpc"
 version = "0.0.0"
 dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "spur-server"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
  "spur-core",
+ "spur-keymap",
+ "spur-rpc",
+ "spur-text",
 ]
 
 [[package]]
