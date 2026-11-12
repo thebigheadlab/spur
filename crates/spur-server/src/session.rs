@@ -19,8 +19,8 @@ use spur_core::{
 };
 use spur_keymap::{Keymap, Layer};
 use spur_rpc::{
-    ClientKind, ClientMsg, FrameReader, MAX_FRAME, PROTOCOL_VERSION, QUEUE, Reply, ServerEnd,
-    ServerMsg, WireError, peek_hello, pump_writes,
+    ClientKind, ClientMsg, FrameReader, MAX_FRAME, Node, PROTOCOL_VERSION, QUEUE, Reply, ServerEnd,
+    ServerMsg, SurfaceView, WireError, peek_hello, pump_writes,
 };
 
 use crate::client::{Client, SendFail, Shutter};
@@ -673,6 +673,12 @@ impl State {
                     c.ping(id);
                 }
             }
+            ClientMsg::Refresh => {
+                if let Some(c) = self.clients.get_mut(&conn) {
+                    c.last_view = None;
+                    c.dirty = true;
+                }
+            }
             ClientMsg::Bye => self.drop_client(conn),
             ClientMsg::Unknown => {}
         }
@@ -834,10 +840,16 @@ impl State {
                     peers.iter().copied().filter(|(p, _)| p != conn).collect();
                 let ed = &self.core.state;
                 let built = catch_unwind(AssertUnwindSafe(|| {
-                    frame::surface(ed, c.active, c.rows(), &others)
+                    let view = frame::surface(ed, c.active, c.rows(), &others);
+                    // A new tree may have new surfaces: start them from a full frame.
+                    let ui = bare_ui();
+                    let new_ui = c.last_ui.as_ref() != Some(&ui);
+                    let base = if new_ui { None } else { c.last_view.as_ref() };
+                    let wire = (base != Some(&view)).then(|| frame::delta(base, &view));
+                    (view, new_ui.then_some(ui), wire)
                 }));
                 match built {
-                    Ok(view) => render(c, view),
+                    Ok((view, ui, wire)) => render(c, view, ui, wire),
                     Err(_) => broken.push(*conn),
                 }
             }
@@ -914,26 +926,27 @@ fn drain_events(c: &mut Client) {
     }
 }
 
-/// Queues what changed for a dirty client, then a flush if anything did.
-fn render(c: &mut Client, view: spur_rpc::SurfaceView) {
+/// Queues what changed for a dirty client (a new tree, the surface as sent), then a
+/// flush if anything did.
+fn render(c: &mut Client, view: SurfaceView, ui: Option<Node>, wire: Option<SurfaceView>) {
     c.dirty = false;
-    let mut changed = false;
-    let ui = bare_ui();
-    if c.last_ui.as_ref() != Some(&ui) {
+    let changed = ui.is_some() || wire.is_some();
+    if let Some(ui) = ui {
         c.batch.push(ServerMsg::Ui {
             root: ui.clone(),
             focus: Some(frame::SURFACE.into()),
         });
         c.last_ui = Some(ui);
-        changed = true;
     }
-    if c.last_view.as_ref() != Some(&view) {
+    if let Some(wire) = wire {
+        // The client builds this frame from the last surface it got, which is
+        // `last_view`: every surface queued is delivered in order, or the client is
+        // dropped (a writer that cannot encode a message closes the connection).
         c.batch.push(ServerMsg::Surface {
             node: frame::SURFACE.into(),
-            view: view.clone(),
+            view: wire,
         });
         c.last_view = Some(view);
-        changed = true;
     }
     if changed {
         let frame = c.next_frame();

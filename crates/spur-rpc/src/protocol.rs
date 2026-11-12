@@ -171,6 +171,9 @@ pub enum ClientMsg {
         /// Echoed back.
         id: u64,
     },
+    /// The client lost its copy of what it showed: the next frame of every surface is
+    /// sent in full.
+    Refresh,
     /// The client is leaving.
     Bye,
     /// A message this version does not know; ignored.
@@ -434,6 +437,30 @@ pub struct Line {
     pub truncated: bool,
 }
 
+/// A run of visible rows: `count` rows copied from the previous frame starting at
+/// row `from` (0 is that frame's first visible row), or, without `from`, the next
+/// `count` entries of [`SurfaceView::lines`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Rows {
+    /// First row to copy from the previous frame; absent for new rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<u32>,
+    /// Number of rows.
+    pub count: u32,
+}
+
+/// [`SurfaceView::rows`] refers to rows or lines that are not there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BadRows;
+
+impl std::fmt::Display for BadRows {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("surface rows do not match the previous frame")
+    }
+}
+
+impl std::error::Error for BadRows {}
+
 /// What a surface shows: the visible lines of one view, its cursors and status data.
 /// Columns are in chars; the client handles tabs and wide chars.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -446,8 +473,13 @@ pub struct SurfaceView {
     pub top_line: u32,
     /// Lines in the document.
     pub line_count: u32,
-    /// Visible lines.
+    /// Visible lines: all of them when `rows` is empty, else only the rows `rows`
+    /// marks as new, in order.
     pub lines: Vec<Line>,
+    /// How to build the visible rows from the client's previous frame of this
+    /// surface and `lines`. Empty means `lines` holds every row.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rows: Vec<Rows>,
     /// Cursors (possibly outside the visible lines).
     pub cursors: Vec<Cursor>,
     /// This client's non-empty selections.
@@ -462,6 +494,46 @@ pub struct SurfaceView {
     /// Mode name.
     #[serde(default)]
     pub mode: String,
+}
+
+impl SurfaceView {
+    /// Turns a received surface into a full one: builds every visible row from
+    /// `prev` (the previous full surface of the same node, if any) and the new lines,
+    /// and clears `rows`. A client calls this on each `surface` it receives, in order.
+    ///
+    /// # Errors
+    ///
+    /// [`BadRows`] if a run points past `prev` or past the new lines (the client
+    /// missed a frame); the client should treat its state as lost.
+    pub fn resolve(&mut self, prev: Option<&Self>) -> Result<(), BadRows> {
+        if self.rows.is_empty() {
+            return Ok(());
+        }
+        let old = prev.map_or(&[][..], |p| p.lines.as_slice());
+        let mut new = std::mem::take(&mut self.lines).into_iter();
+        let mut lines = Vec::new();
+        for run in std::mem::take(&mut self.rows) {
+            let count = run.count as usize;
+            match run.from {
+                Some(from) => {
+                    let from = from as usize;
+                    let end = from.checked_add(count).ok_or(BadRows)?;
+                    let rows = old.get(from..end).ok_or(BadRows)?;
+                    lines.extend_from_slice(rows);
+                }
+                None => {
+                    for _ in 0..count {
+                        lines.push(new.next().ok_or(BadRows)?);
+                    }
+                }
+            }
+        }
+        if new.next().is_some() {
+            return Err(BadRows);
+        }
+        self.lines = lines;
+        Ok(())
+    }
 }
 
 /// Reads the protocol versions from a first message without decoding the rest, so a
@@ -619,10 +691,10 @@ mod tests {
                         peer: Some(2),
                     },
                 ],
-                selections: vec![],
                 path: Some("notes.txt".into()),
                 modified: true,
                 mode: "insert".into(),
+                ..SurfaceView::default()
             },
         };
         let text = round_trip(&view);
@@ -658,6 +730,67 @@ mod tests {
             },
         ] {
             round_trip(&msg);
+        }
+    }
+
+    fn line(t: &str) -> Line {
+        Line {
+            spans: vec![Span {
+                text: t.into(),
+                hl: None,
+            }],
+            truncated: false,
+        }
+    }
+
+    fn texts(v: &SurfaceView) -> Vec<&str> {
+        v.lines.iter().map(|l| l.spans[0].text.as_str()).collect()
+    }
+
+    #[test]
+    fn rows_copy_from_the_previous_frame() {
+        let prev = SurfaceView {
+            lines: vec![line("a"), line("b"), line("c")],
+            ..SurfaceView::default()
+        };
+        let mut next: SurfaceView = serde_json::from_str(
+            r#"{"doc":0,"version":1,"top_line":1,"line_count":4,"cursors":[],"mode":"insert",
+               "lines":[{"spans":[{"text":"x"}]}],
+               "rows":[{"from":1,"count":2},{"count":1}]}"#,
+        )
+        .unwrap();
+        next.resolve(Some(&prev)).unwrap();
+        assert_eq!(texts(&next), ["b", "c", "x"]);
+        assert!(next.rows.is_empty());
+        // A full frame needs no previous one.
+        let mut full = prev.clone();
+        full.resolve(None).unwrap();
+        assert_eq!(full, prev);
+        // Runs past either side are refused.
+        for rows in [
+            vec![Rows {
+                from: Some(2),
+                count: 2,
+            }],
+            vec![Rows {
+                from: Some(u32::MAX),
+                count: u32::MAX,
+            }],
+            vec![Rows {
+                from: None,
+                count: 2,
+            }],
+            vec![Rows {
+                from: Some(0),
+                count: 1,
+            }],
+        ] {
+            let mut bad = SurfaceView {
+                lines: vec![line("x")],
+                rows,
+                ..SurfaceView::default()
+            };
+            assert_eq!(bad.resolve(Some(&prev)), Err(BadRows), "{:?}", bad.rows);
         }
     }
 

@@ -571,6 +571,7 @@ name = "spur-core"
 version = "0.0.0"
 dependencies = [
  "criterion",
+ "memchr",
  "regex",
  "serde",
  "serde_json",

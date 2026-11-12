@@ -13,6 +13,7 @@ workspace = true
 
 [dependencies]
 spur-text.workspace = true
+memchr = "2.8"
 regex = "1.13"
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde_json = "1.0"

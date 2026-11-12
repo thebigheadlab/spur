@@ -127,9 +127,9 @@ mod protocol;
 mod transport;
 
 pub use protocol::{
-    Caps, ClientKind, ClientMsg, Cursor, CursorKind, Dim, Layout, Line, MouseAction, Node,
-    NodeKind, PROTOCOL_VERSION, Pos, Reply, Sel, ServerMsg, Size, Span, SurfaceSize, SurfaceView,
-    WireError, peek_hello,
+    BadRows, Caps, ClientKind, ClientMsg, Cursor, CursorKind, Dim, Layout, Line, MouseAction, Node,
+    NodeKind, PROTOCOL_VERSION, Pos, Reply, Rows, Sel, ServerMsg, Size, Span, SurfaceSize,
+    SurfaceView, WireError, peek_hello,
 };
 pub use transport::{
     ClientEnd, Closed, Endpoint, FrameReader, FrameWriter, MAX_FRAME, QUEUE, ServerEnd, in_process,

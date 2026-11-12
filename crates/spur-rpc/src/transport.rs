@@ -60,8 +60,8 @@ impl<S, R> Endpoint<S, R> {
     }
 
     /// Sends one message. Waits while the queue is full ([`QUEUE`] batches). Over a
-    /// stream, a message larger than [`MAX_FRAME`] once encoded is dropped by the
-    /// writer, so split big pastes.
+    /// stream, a message larger than [`MAX_FRAME`] once encoded closes the connection,
+    /// so split big pastes.
     ///
     /// # Errors
     ///
@@ -218,21 +218,18 @@ impl ClientEnd {
 }
 
 /// Writes every batch from `rx` to `writer`, merging batches that are already waiting
-/// into one write. A message that cannot be encoded (or is over [`MAX_FRAME`]) is
-/// skipped; senders that must not lose one check its size first. Returns when `rx`
-/// closes or a write fails.
+/// into one write. Returns when `rx` closes or a write fails. A message that cannot
+/// be encoded (or is over [`MAX_FRAME`]) ends the connection after the messages
+/// before it are written: a receiver that builds on earlier messages (surface rows)
+/// must never miss one silently.
 pub fn pump_writes<T: Serialize, W: Write>(rx: &Receiver<Vec<T>>, writer: W) {
     let mut frames = FrameWriter::new(writer);
     while let Ok(batch) = rx.recv() {
-        for m in &batch {
-            let _ = frames.push(m);
+        let mut ok = batch.iter().all(|m| frames.push(m).is_ok());
+        while ok && let Ok(more) = rx.try_recv() {
+            ok = more.iter().all(|m| frames.push(m).is_ok());
         }
-        while let Ok(more) = rx.try_recv() {
-            for m in &more {
-                let _ = frames.push(m);
-            }
-        }
-        if frames.flush().is_err() {
+        if frames.flush().is_err() || !ok {
             return;
         }
     }

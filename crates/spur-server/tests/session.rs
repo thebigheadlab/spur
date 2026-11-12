@@ -145,7 +145,12 @@ impl Client {
 
     fn take(&mut self, m: ServerMsg) {
         match &m {
-            ServerMsg::Surface { view, .. } => self.view = Some(view.clone()),
+            ServerMsg::Surface { view, .. } => {
+                let mut full = view.clone();
+                full.resolve(self.view.as_ref())
+                    .unwrap_or_else(|e| panic!("{e}: {view:?}"));
+                self.view = Some(full);
+            }
             ServerMsg::Flush { frame } if self.ack => {
                 let _ = self.end.send(ClientMsg::Ack { frame: *frame });
             }

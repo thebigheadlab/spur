@@ -1494,4 +1494,26 @@ mod tests {
         );
         assert_eq!(c.state.view().doc, doc);
     }
+
+    #[test]
+    fn viewports_split_every_line_ending_and_cut_long_lines() {
+        let c = core("ab\r\ncd\re\n\r\nxyzw\nlast\n", "insert");
+        let v = c.state.focus;
+        let vp = c.state.viewport_of(v, 10, 4).unwrap();
+        assert_eq!(vp.lines, ["ab", "cd", "e", "", "xyzw", "last", ""]);
+        assert_eq!(vp.clipped, [false; 7]);
+        let vp = c.state.viewport_of(v, 10, 3).unwrap();
+        assert_eq!(vp.lines[4], "xyz");
+        assert!(vp.clipped[4]);
+        // An empty document has one empty line.
+        let c = core("", "insert");
+        let vp = c.state.viewport_of(c.state.focus, 5, 3).unwrap();
+        assert_eq!(vp.lines, [""]);
+        // A line too long to copy whole is read only up to the cut.
+        let long = format!("{}\nshort\n", "é".repeat(100_000));
+        let c = core(&long, "insert");
+        let vp = c.state.viewport_of(c.state.focus, 3, 5).unwrap();
+        assert_eq!(vp.lines, ["ééééé", "short", ""]);
+        assert_eq!(vp.clipped, [true, false, false]);
+    }
 }

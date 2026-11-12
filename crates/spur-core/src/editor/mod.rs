@@ -317,9 +317,7 @@ impl Editor {
         let doc = self.docs.get(&view.doc)?;
         let snap = doc.buffer.snapshot();
         let end = (view.top_line + rows).min(snap.line_count());
-        let (lines, clipped) = (view.top_line..end)
-            .map(|l| clipped_line(&snap, l, max_cols))
-            .unzip();
+        let (lines, clipped) = visible_lines(&snap, view.top_line..end, max_cols);
         let point = |off: usize| Point {
             line: motion::line_of(&snap, off),
             column: motion::char_col(&snap, off),
@@ -377,19 +375,88 @@ pub struct Viewport {
     pub modified: bool,
 }
 
+/// Lines `range` without their endings, each cut to `max_cols` chars. Copies the
+/// block once and splits it, unless a line is long enough that copying it whole
+/// would cost more than the cut lines.
+fn visible_lines(
+    s: &Snapshot,
+    range: std::ops::Range<usize>,
+    max_cols: usize,
+) -> (Vec<String>, Vec<bool>) {
+    let (Some(first), Some(last)) = (
+        s.line_range(range.start),
+        range.end.checked_sub(1).and_then(|l| s.line_range(l)),
+    ) else {
+        return (Vec::new(), Vec::new());
+    };
+    let rows = range.end - range.start;
+    let limit = rows.saturating_mul(max_cols.min(1 << 20)).saturating_mul(4);
+    let block = (last.end - first.start <= limit)
+        .then(|| s.slice(first.start..last.end))
+        .flatten();
+    let Some(block) = block else {
+        return range.map(|l| clipped_line(s, l, max_cols)).unzip();
+    };
+    let mut lines = Vec::with_capacity(rows);
+    let mut clipped = Vec::with_capacity(rows);
+    let mut rest = block.as_str();
+    for _ in 0..rows {
+        // Line breaks are `\n`, `\r\n` and `\r` (the rope's line metric).
+        let brk = memchr::memchr2(b'\n', b'\r', rest.as_bytes());
+        let (line, next) = match brk {
+            Some(i) if rest[i..].starts_with("\r\n") => (&rest[..i], &rest[i + 2..]),
+            Some(i) => (&rest[..i], &rest[i + 1..]),
+            None => (rest, ""),
+        };
+        rest = next;
+        let cut = if line.len() > max_cols {
+            line.char_indices().nth(max_cols).map(|(i, _)| i)
+        } else {
+            None
+        };
+        lines.push(cut.map_or(line, |i| &line[..i]).to_owned());
+        clipped.push(cut.is_some());
+    }
+    (lines, clipped)
+}
+
 /// Line `line` without its ending, cut to `max_cols` chars, and whether it was cut.
 fn clipped_line(s: &Snapshot, line: usize, max_cols: usize) -> (String, bool) {
-    let start = motion::line_start(s, line);
-    let end = motion::line_end(s, line);
-    // A char is at least one byte, so a line this short needs no counting.
-    if end - start <= max_cols {
-        return (s.slice(start..end).unwrap_or_default(), false);
+    // One range lookup and borrowed chunks: no per-line char conversions, and never
+    // more than `max_cols` chars read from a long line.
+    let Some(range) = s.line_range(line) else {
+        return (String::new(), false);
+    };
+    let mut text = String::with_capacity((range.end - range.start).min(max_cols.saturating_mul(4)));
+    let mut chars = 0usize;
+    for chunk in s.chunks(range).into_iter().flatten() {
+        // A char is at least one byte, so a chunk this short cannot pass the limit.
+        if chars + chunk.len() <= max_cols {
+            text.push_str(chunk);
+            chars += chunk.chars().count();
+            continue;
+        }
+        for c in chunk.chars() {
+            if chars == max_cols {
+                let rest_is_ending = matches!(c, '\n' | '\r');
+                if !rest_is_ending {
+                    return (text, true);
+                }
+                break;
+            }
+            text.push(c);
+            chars += 1;
+        }
+        if chars == max_cols {
+            break;
+        }
     }
-    let c0 = s.byte_to_char(start).unwrap_or(0);
-    let c_end = s.byte_to_char(end).unwrap_or(c0);
-    if c_end - c0 <= max_cols {
-        return (s.slice(start..end).unwrap_or_default(), false);
+    // Drop the line ending: `\r\n`, `\n` or `\r`.
+    if text.ends_with('\n') {
+        text.pop();
     }
-    let cut = s.char_to_byte(c0 + max_cols).unwrap_or(end);
-    (s.slice(start..cut).unwrap_or_default(), true)
+    if text.ends_with('\r') {
+        text.pop();
+    }
+    (text, false)
 }

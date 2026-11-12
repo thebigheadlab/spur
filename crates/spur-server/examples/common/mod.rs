@@ -120,7 +120,12 @@ impl Client {
     fn take(&mut self, m: ServerMsg) {
         match m {
             ServerMsg::Welcome { client, .. } => self.id = client,
-            ServerMsg::Surface { view, .. } => self.view = Some(view),
+            ServerMsg::Surface { mut view, .. } => {
+                // Rows the server did not resend come from the previous frame.
+                view.resolve(self.view.as_ref())
+                    .expect("frames arrive in order");
+                self.view = Some(view);
+            }
             ServerMsg::Flush { frame } => {
                 let _ = self.end.send(ClientMsg::Ack { frame });
             }
