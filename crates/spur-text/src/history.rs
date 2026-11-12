@@ -13,8 +13,9 @@
 //!   rewritten as [`RedoEntry::Over`]: re-apply that revision over a `prefix` leading
 //!   from its own base text to the new revision's text.
 //!
-//! A scope's own entries below its last tree move need revisions that are off the path
-//! until it redoes in order (last undone first), which a stack guarantees.
+//! A scope's tree-move entries below its newest one may need revisions that are off the
+//! path; redoing in order (last undone first, as a stack does) puts each back first,
+//! or rewrites the entry as `Over` on the head.
 
 use std::collections::HashMap;
 use std::time::SystemTime;
@@ -234,6 +235,23 @@ impl History {
         }
         path.reverse();
         Some(path)
+    }
+
+    /// `path` without the pairs that cancel out: a revision directly followed by the
+    /// exact revert of it (an undo then redo, or the reverse, with nothing in between).
+    /// Rebasing over such a pair would see a conflict where the text ends up unchanged.
+    pub(crate) fn without_cancelled(&self, path: Vec<usize>) -> Vec<usize> {
+        let mut kept: Vec<usize> = Vec::with_capacity(path.len());
+        for rev in path {
+            let r = &self.revs[rev];
+            match kept.last() {
+                Some(&prev) if r.reverts == Some(prev) && r.changes == self.revs[prev].inverse => {
+                    kept.pop();
+                }
+                _ => kept.push(rev),
+            }
+        }
+        kept
     }
 
     pub(crate) fn push_redo(&mut self, scope: &UndoScope, entry: RedoEntry) {

@@ -207,7 +207,8 @@ impl Editor {
         id
     }
 
-    /// Removes a view. Refuses (returns `false`) for the focused view or an unknown id.
+    /// Removes a view. Refuses (returns `false`) for the focused view or an unknown id
+    /// (a server rests focus on its own anchor view, so client views can go).
     /// The window's redo steps go with it; its edits stay in the document's history,
     /// where no other window undoes them.
     pub fn remove_view(&mut self, view: ViewId) -> bool {

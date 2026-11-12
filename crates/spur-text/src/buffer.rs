@@ -441,6 +441,7 @@ impl Buffer {
         let Some(path) = self.history.path_after(base) else {
             return Ok(None);
         };
+        let path = self.history.without_cancelled(path);
         let rev = &self.history.revs[child];
         let mut changes = rev.changes.clone();
         if let Some(prefix) = prefix {
@@ -522,14 +523,14 @@ impl Buffer {
         let Some(path) = self.history.path_after(rev) else {
             return Ok(None);
         };
+        let path = self.history.without_cancelled(path);
         let group = self.source_group(rev);
         let r = &self.history.revs[rev];
         let inverse = r.inverse.clone();
         // `selection_before` is in the coordinates before `rev`. The result is that text
         // plus the later edits, so map it through each later edit rebased over the
-        // (progressively rebased) inverse. If that does not rebase cleanly, fall back to
-        // mapping it past `rev`, the later edits and the inverse, which stays valid but
-        // can collapse ranges.
+        // (progressively rebased) inverse. If that does not rebase cleanly, the inverse
+        // overlaps a later edit and the commit below reports the conflict.
         let mut premapped = r.selection_before.clone();
         let mut inv = inverse.clone();
         for &later in &path {

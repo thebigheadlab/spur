@@ -271,6 +271,28 @@ fn a_redo_of_a_reverting_undo_restores_the_cursor() {
 }
 
 #[test]
+fn a_redo_skips_an_undo_and_redo_pair_in_between() {
+    let mut buf = Buffer::new("");
+    buf.apply(insert_in(&buf, 1, 0, "xyz")).unwrap();
+    let del = Transaction::new(
+        AuthorId::User,
+        buf.version(),
+        ChangeSet::delete(3, 1..2).unwrap(),
+    )
+    .with_lane(UndoLane(1));
+    buf.apply(del).unwrap();
+    buf.undo(&lane(1)).unwrap().unwrap();
+    buf.apply(insert_in(&buf, 2, 3, "Q")).unwrap();
+    // Undo then redo of the insert, by revert: a pair that cancels out.
+    buf.undo(&lane(1)).unwrap().unwrap();
+    assert_eq!(text(&buf.snapshot()), "Q");
+    buf.redo(&lane(1)).unwrap().unwrap();
+    assert_eq!(text(&buf.snapshot()), "xyzQ");
+    buf.redo(&lane(1)).unwrap().unwrap();
+    assert_eq!(text(&buf.snapshot()), "xzQ");
+}
+
+#[test]
 fn a_new_edit_clears_only_its_own_lanes_redo() {
     let mut buf = Buffer::new("");
     buf.apply(insert_in(&buf, 1, 0, "a")).unwrap();

@@ -8,7 +8,7 @@
 
 The core is an editor server. Every UI (terminal, desktop, web) and every tool is a client of it, locally or remotely, and the server holds no look: no colours, glyphs or key bindings. `main` had an editor state (`spur-core::editor`) that no client could reach. This slice adds the server and the first wire protocol, with no UX pack, frontend, daemon or reconnect yet.
 
-Terms: a *slice* is one step of the build plan in the epic (#1): slice 1 is this server, slice 2 the first UX pack and terminal client, slice 4 a daemon with listening sockets and reconnect. A *UX pack* is an extension that supplies the look, layout (the UI tree) and key bindings. An undo *turn* is the number that groups edits into one undo step (ADR 0005). The *anchor view* is the editor's own first view, where `editor.focus` rests between client commands.
+Terms: a *slice* is one step of the build plan in the epic (#1): slice 1 is this server, slice 2 the first UX pack and terminal client, slice 4 a daemon with listening sockets and reconnect. A *UX pack* is an extension that supplies the look, layout (the UI tree) and key bindings. An undo *turn* is the number that groups edits into one undo step (ADR 0005). The *anchor view* is the editor's own first view, where `editor.focus` rests between client commands. A *window* is a view (`ViewId`): one client's display of one document, with its own cursor; a client owns one view per document it opened. An *undo lane* (`spur_text::UndoLane`) is a view's id used as an undo key, and an *undo scope* (`UndoScope`) is an author plus an optional lane: undo and redo touch only revisions in the caller's scope.
 
 ## Decisions
 
@@ -28,17 +28,17 @@ A panic while handling a client's message or running its command is caught per m
 
 Each client has its own view, size, keymap state (pending keys, counts, timeouts) and context scope (`client.kind`, `client.name` and the view keys), layered over the core context when keys are looked up. Documents are shared.
 
-The core has one `editor.focus`. To run a client's command the session sets focus to the client's view, runs it, reads focus back (a command such as `editor.open` may move it to another view of the same client) and resets focus to a fixed anchor view. A command that moves focus to a view the client does not own is undone by that reset.
+The core has one `editor.focus`. To run a client's command the session sets focus to the client's view, runs it, reads focus back (a command such as `editor.open` may move it to another view of the same client) and resets focus to a fixed anchor view. A command that moves focus to a view the client does not own has no lasting effect: the reset moves focus back.
 
 Core changes for this:
 
 1. Views record their owning client; `editor.open` reuses only the caller's view of a document, else adds one. Spawn-time files are opened by the system with no owner. `view.move_to` (a mouse press), `end_undo_step`, `scroll_by` and `primary_point` are core APIs, so the server never edits a view's fields itself.
-2. A person's edits carry an undo lane, the view's id (`spur_text::UndoLane`), so two windows' edits never join one undo step and each window undoes only its own. Agents, extensions and tools have no lane: their author already separates them, and they undo their edits from any view. Undo restores the recorded selection; other views only shift.
+2. A person's edits carry an undo lane, the view's id (`spur_text::UndoLane`), so two windows' edits never join one undo step and each window undoes only its own. Agents, extensions and tools have no lane: their scope is the author alone (`Agent(session_id)`, `Extension(id)`, `Rpc(client)`), so their undo takes their newest edit whichever view it was made in. A person's undo never takes their edits; undoing an agent's change is the agent's job (or a command acting as that agent). Undo restores the recorded selection; other views only shift.
 3. Edits keep other views' first visible line on the same text, using the pre-edit snapshot.
 4. `viewport_of`, `scroll_view`, `remove_view` and `view_keys` address any view, not only the focused one. `viewport_of` copies the visible block once and splits it on line endings, cutting each line to a width; a block larger than rows × width (a huge line) is read line by line, each cut while reading, so a viewport never costs more than its rows × width.
 5. `editor.open` refuses folders and files over 64 MiB, and `open` and `save` store absolute paths, so one file has one document whatever spelling opened it.
 
-Undo is per window (the owner's choice, replacing "per person and document"): a window's undo takes its own newest edit still in effect, even when another window, the same person's or a peer's, edited later. That reuses `spur-text`'s selective undo: the edit's inverse is rebased over the later edits, and if a later edit touched the same text the undo is refused (`UndoError::Conflict`, sent as an `error`) rather than done in part. Redo is per window too, and a window's new edit clears only its own redo. When a view is removed its redo goes with it (`Buffer::forget_redo`); its edits stay in the history, and no other window can undo them.
+Undo is per window (the project owner's decision). Before, all of a document's human edits shared one history, because every human is the author `User` (ADR 0005); the lane is what now keeps one window's undo, and so one person's, from taking another's text. A window's undo takes its own newest edit still in effect, even when another window, on the same client or another, edited later. That reuses `spur-text`'s selective undo: the edit's inverse is rebased over the later edits, and if a later edit touched the same text the undo is refused (`UndoError::Conflict`, sent as `error {message}`; v0 does not send the ranges) rather than done in part. Redo is per window too: window A can still redo after window B edits, because B's edit clears only B's redo; the redo is rebased over B's edit, and if B touched the same text it is refused and stays available. A's own next edit clears A's redo. When a view is removed its redo goes with it (`Buffer::forget_redo`); its edits stay in the history, and no other window can undo them.
 
 When a client leaves, every view it owns is removed (`view.closed`) and the others redraw without its cursor.
 
@@ -92,7 +92,8 @@ Every scenario meets the p50 budget; most of the round trip is the two socket ho
 
 ## Follow-ups
 
-- Client ids are connection numbers today; resume (slice 4) needs ids that outlive a connection, and the client's views (its undo lanes) with them.
+- Client ids are connection numbers today; resume (slice 4) needs ids that outlive a connection, and the client's views (its undo lanes) and tool author names with them.
+- Two windows typing at once get small undo steps (see Consequences); undo could treat a window's consecutive steps with the same turn as one step even with other windows' edits between them.
 - The server tracks one surface per client; UX packs with several surfaces (slice 2) need per-surface view, size and last frame (which is also each surface's diff base).
 - The global context's `editor.*` keys hold whichever client ran last; anything evaluating `when` for a client must use the client's scope.
 
@@ -100,7 +101,8 @@ Every scenario meets the p50 budget; most of the round trip is the two socket ho
 
 - Any process that speaks spur-rpc can drive the editor; the terminal and desktop frontends will be clients like the test harness.
 - Clients must keep each surface's last lines to apply the next one; a client that cannot sends `refresh`.
-- Undo is per window. Typing inside text another window just typed makes that window's undo of it a conflict, which it reports instead of undoing part of it.
-- A window's typing joins one undo step only while nobody else edits in between, so two windows typing at once get small steps. Undo could later treat a window's consecutive steps with the same turn as one, now that steps are per window.
-- A reattached client gets a new view, so it cannot undo the edits it made before; reconnect (slice 4) has to carry the view and its lane over.
+- Undo is per window. If window B edits inside text that window A typed, A's undo of that typing is refused with a conflict rather than partly done; B's own undo is unaffected.
+- A window's typing forms one undo step only while no other window or author edits the same document in between, so two windows typing at once get small steps.
+- Closing a window makes its edits permanent as far as undo goes: no remaining window can undo them, and another window's undo that overlaps them stays refused. There is no recovery path yet beyond editing the text by hand.
+- A client that connects again cannot undo edits from its previous connection: a frontend gets a new view (lane) and a tool a new author name, both from the connection id. Resume (slice 4) has to carry both over.
 - Key bindings come only from layers given to the session; the examples carry a small layer of their own.
