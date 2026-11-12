@@ -33,12 +33,12 @@ The core has one `editor.focus`. To run a client's command the session sets focu
 Core changes for this:
 
 1. Views record their owning client; `editor.open` reuses only the caller's view of a document, else adds one. Spawn-time files are opened by the system with no owner. `view.move_to` (a mouse press), `end_undo_step`, `scroll_by` and `primary_point` are core APIs, so the server never edits a view's fields itself.
-2. Each view numbers its undo turns from `view_id << 32`, so two clients' edits never join one undo step. Undo restores a recorded selection only in the view that made the edit; other views only shift.
+2. A person's edits carry an undo lane, the view's id (`spur_text::UndoLane`), so two windows' edits never join one undo step and each window undoes only its own. Agents, extensions and tools have no lane: their author already separates them, and they undo their edits from any view. Undo restores the recorded selection; other views only shift.
 3. Edits keep other views' first visible line on the same text, using the pre-edit snapshot.
 4. `viewport_of`, `scroll_view`, `remove_view` and `view_keys` address any view, not only the focused one. `viewport_of` copies the visible block once and splits it on line endings, cutting each line to a width; a block larger than rows × width (a huge line) is read line by line, each cut while reading, so a viewport never costs more than its rows × width.
 5. `editor.open` refuses folders and files over 64 MiB, and `open` and `save` store absolute paths, so one file has one document whatever spelling opened it.
 
-Undo stays per person and document, as with split views in other editors: a human is `User` from every client (ADR 0005), and undo takes that person's newest step, which may have been made in another window. The owner chose this over per-window undo (which would need a selective undo in `spur-text`).
+Undo is per window (the owner's choice, replacing "per person and document"): a window's undo takes its own newest edit still in effect, even when another window, the same person's or a peer's, edited later. That reuses `spur-text`'s selective undo: the edit's inverse is rebased over the later edits, and if a later edit touched the same text the undo is refused (`UndoError::Conflict`, sent as an `error`) rather than done in part. Redo is per window too, and a window's new edit clears only its own redo. When a view is removed its redo goes with it (`Buffer::forget_redo`); its edits stay in the history, and no other window can undo them.
 
 When a client leaves, every view it owns is removed (`view.closed`) and the others redraw without its cursor.
 
@@ -92,7 +92,7 @@ Every scenario meets the p50 budget; most of the round trip is the two socket ho
 
 ## Follow-ups
 
-- Client ids are connection numbers today; resume (slice 4) needs ids that outlive a connection.
+- Client ids are connection numbers today; resume (slice 4) needs ids that outlive a connection, and the client's views (its undo lanes) with them.
 - The server tracks one surface per client; UX packs with several surfaces (slice 2) need per-surface view, size and last frame (which is also each surface's diff base).
 - The global context's `editor.*` keys hold whichever client ran last; anything evaluating `when` for a client must use the client's scope.
 
@@ -100,5 +100,6 @@ Every scenario meets the p50 budget; most of the round trip is the two socket ho
 
 - Any process that speaks spur-rpc can drive the editor; the terminal and desktop frontends will be clients like the test harness.
 - Clients must keep each surface's last lines to apply the next one; a client that cannot sends `refresh`.
-- Undo is per person, not per window, until selective undo exists.
+- Undo is per window. Typing inside text another window just typed makes that window's undo of it a conflict, which it reports instead of undoing part of it.
+- A reattached client gets a new view, so it cannot undo the edits it made before; reconnect (slice 4) has to carry the view and its lane over.
 - Key bindings come only from layers given to the session; the examples carry a small layer of their own.

@@ -11,7 +11,7 @@ use spur_text::{
     Applied, Bias, Buffer, Change, ChangeSet, EditError, SelRange, Selection, Snapshot, Transaction,
 };
 
-use super::{Editor, Register, ViewId, motion, turn_view};
+use super::{Editor, Register, ViewId, motion, undo_scope};
 use crate::command::{CommandError, CommandMeta, ErrorCode, RemoteSide, parse_args};
 use crate::core::{Core, Cx, RegisterError};
 use crate::name::{CommandId, EventName, events};
@@ -244,9 +244,10 @@ fn edit(
     };
     let group = cx.actor().group_key(turn);
     let doc_id = cx.state.views[&id].doc;
-    let txn = Transaction::new(author, snap.version(), changes)
+    let mut txn = Transaction::new(author, snap.version(), changes)
         .with_selections(before, after.clone())
         .with_group(group);
+    txn.lane = undo_scope(cx.actor(), id).lane;
     let applied = cx
         .state
         .docs
@@ -329,8 +330,8 @@ fn yank(cx: C<'_, '_>, register: Option<char>) -> usize {
 }
 
 fn undo_redo(cx: C<'_, '_>, redo: bool) -> Result<Value, CommandError> {
-    let author = cx.actor().author();
     let id = focus(cx);
+    let scope = undo_scope(cx.actor(), id);
     let doc_id = cx.state.views[&id].doc;
     let mut last = None;
     for _ in 0..count(cx) {
@@ -342,9 +343,9 @@ fn undo_redo(cx: C<'_, '_>, redo: bool) -> Result<Value, CommandError> {
             .buffer;
         let old = buffer.snapshot();
         let r = if redo {
-            buffer.redo(&author)
+            buffer.redo(&scope)
         } else {
-            buffer.undo(&author)
+            buffer.undo(&scope)
         };
         let r = match r {
             Ok(r) => r,
@@ -360,14 +361,9 @@ fn undo_redo(cx: C<'_, '_>, redo: bool) -> Result<Value, CommandError> {
                     .views
                     .get_mut(&id)
                     .unwrap_or_else(|| unreachable!());
-                // Restore the recorded selection only for an edit made in this view;
-                // another view's edit (another client's) just shifts this cursor.
-                let ours = applied.group.as_ref().is_none_or(|g| {
-                    g.actor != spur_text::AuthorId::User || turn_view(g.turn) == id
-                });
                 view.selection = match &applied.selection {
-                    Some(sel) if ours => sel.clone(),
-                    _ => view.selection.map(&applied.changes),
+                    Some(sel) => sel.clone(),
+                    None => view.selection.map(&applied.changes),
                 };
                 let doc = cx
                     .state
@@ -883,12 +879,15 @@ pub fn register_editor_commands(core: &mut Core<Editor>) -> Result<(), RegisterE
         |cx, _| move_ranges(cx, false, false, |_, h, _| h),
     )?;
 
-    reg("editor.undo", "Undo your last change.", plain, |cx, _| {
-        undo_redo(cx, false)
-    })?;
+    reg(
+        "editor.undo",
+        "Undo your last change in this window.",
+        plain,
+        |cx, _| undo_redo(cx, false),
+    )?;
     reg(
         "editor.redo",
-        "Redo your last undone change.",
+        "Redo your last undone change in this window.",
         plain,
         |cx, _| undo_redo(cx, true),
     )?;
@@ -1361,19 +1360,53 @@ mod tests {
             run_in(&mut c, b, 2, "editor.insert_text", json!({ "text": wb }));
         }
         assert_eq!(text(&c), "hello\n\nworld\n");
-        // Steps never merge across views: six steps, undone newest first. Undo is per
-        // person and document (as in other editors' split views), so A's undo takes
-        // B's newest step, but A's cursor only shifts; it never jumps to B's.
-        let a_head = c.state.views[&a].selection.ranges[0].head;
+        // Undo is per window: A's undo takes A's own newest step although B typed
+        // after it, and only shifts B's cursor.
         run_in(&mut c, a, 1, "editor.undo", Value::Null);
-        assert_eq!(text(&c), "hello\n\nworl\n");
-        assert_eq!(c.state.views[&a].selection.ranges[0].head, a_head);
+        assert_eq!(text(&c), "hell\n\nworld\n");
+        assert_eq!(c.state.views[&a].selection.ranges[0].head, 4);
         assert_eq!(c.state.views[&b].selection.ranges[0].head, 11);
         run_in(&mut c, a, 1, "editor.undo", Value::Null);
+        assert_eq!(text(&c), "he\n\nworld\n");
+        assert_eq!(c.state.views[&a].selection.ranges[0].head, 2);
+        run_in(&mut c, b, 2, "editor.undo", Value::Null);
+        assert_eq!(text(&c), "he\n\nworl\n");
+        assert_eq!(c.state.views[&b].selection.ranges[0].head, 8);
+        run_in(&mut c, a, 1, "editor.redo", Value::Null);
         assert_eq!(text(&c), "hell\n\nworl\n");
         assert_eq!(c.state.views[&a].selection.ranges[0].head, 4);
-        assert_eq!(c.state.views[&b].selection.ranges[0].head, 10);
-        assert_ne!(c.state.views[&a].turn >> 32, c.state.views[&b].turn >> 32);
+        // A new window never redoes a closed one's steps.
+        run_in(&mut c, b, 2, "editor.undo", Value::Null);
+        c.state.focus = a;
+        assert!(c.state.remove_view(b));
+        let b2 = c.state.add_view(doc);
+        run_in(&mut c, b2, 2, "editor.redo", Value::Null);
+        assert_eq!(text(&c), "hell\n\nwo\n");
+    }
+
+    #[test]
+    fn an_agent_undoes_its_edits_from_any_view() {
+        let mut c = core("hello", "insert");
+        let a = c.state.focus;
+        let doc = c.state.views[&a].doc;
+        let b = c.state.add_view(doc);
+        let agent = Actor::Agent {
+            session_id: "s".into(),
+            agent_kind: "t".into(),
+            turn_id: 1,
+            tool_call_id: None,
+        };
+        let id = CommandId::new("editor.insert_text").unwrap();
+        c.execute(Invocation::new(id, agent.clone()).args(json!({"text": "!"})))
+            .unwrap();
+        assert_eq!(text(&c), "!hello");
+        c.state.focus = b;
+        c.execute(Invocation::new(
+            CommandId::new("editor.undo").unwrap(),
+            agent,
+        ))
+        .unwrap();
+        assert_eq!(text(&c), "hello");
     }
 
     #[test]
@@ -1448,6 +1481,7 @@ mod tests {
             keys[0],
             ("editor.mode", crate::CtxValue::Str("insert".into()))
         );
+        c.state.focus = a;
         assert!(c.state.remove_view(b));
         assert!(c.state.viewport_of(b, 2, usize::MAX).is_none());
         assert!(!c.state.remove_view(b));

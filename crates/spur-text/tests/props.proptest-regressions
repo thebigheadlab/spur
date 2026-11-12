@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 253b49db14b2ac44826d14ff3ba5be9daa5daf091c048cb0f4eb3021b568e5f2 # shrinks to base = "a😀é\ra\r😀😀\n\r\n\r\raéaéa", edits = []
+cc 852075ccdced06627732ec571d892657d0d9b0a5aff6ba83040840b03953d57e # shrinks to ops = [(1, 0, "a"), (1, 0, "a"), (4, 0, "a"), (4, 0, "a"), (0, 0, "a"), (7, 0, "a"), (7, 0, "a")]

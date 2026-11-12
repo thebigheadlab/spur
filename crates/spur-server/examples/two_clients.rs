@@ -77,16 +77,20 @@ mod demo {
             }
             show.frame(&mut a, &mut b, "both type at once");
         }
-        b.keys("<Up><Up>");
-        show.frame(&mut a, &mut b, "B moves up to A's line");
+        b.keys("<Up><Up><Home>");
+        show.frame(&mut a, &mut b, "B moves to the start of A's line");
         b.keys("Hi A! ");
         show.frame(&mut a, &mut b, "B types on A's line; A's cursor shifts");
         a.keys("<C-z>");
         show.frame(
             &mut a,
             &mut b,
-            "A undoes: B's newest edit goes (undo is per person)",
+            "A undoes: A's last typing goes, B's newer edit stays",
         );
+        b.keys("<C-z>");
+        show.frame(&mut a, &mut b, "B undoes: B's \"Hi A! \" goes");
+        a.keys("<C-y>");
+        show.frame(&mut a, &mut b, "A redoes its typing");
         show.pause(Duration::from_secs(2));
         drop((a, b));
         session.join();

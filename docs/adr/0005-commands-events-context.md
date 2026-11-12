@@ -12,7 +12,7 @@ Every action in Spur (key, palette, extension, agent, RPC) must go through one c
 
 ### Actor vs client
 
-`Actor` is the principal: `User`, `Agent { session_id, agent_kind, turn_id, tool_call_id }`, `Extension { id }`, `Remote { client }` (a scripted RPC principal) or `System { source }`. The connection is a separate `ClientId`. A human is `User` from any frontend, so undo (keyed by author) still works after `spur attach` with a new client id.
+`Actor` is the principal: `User`, `Agent { session_id, agent_kind, turn_id, tool_call_id }`, `Extension { id }`, `Remote { client }` (a scripted RPC principal) or `System { source }`. The connection is a separate `ClientId`. A human is `User` from any frontend. (Amended by ADR 0006: a person's undo is per window, keyed by author and view, so a reattached client starts a new undo history until reconnect carries its view over.)
 
 | Actor | Text `AuthorId` | Undo turn |
 |---|---|---|

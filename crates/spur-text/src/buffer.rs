@@ -10,7 +10,7 @@ use crate::history::{History, NewRevision, RedoEntry, UndoTarget};
 use crate::selection::Selection;
 use crate::snapshot::Snapshot;
 use crate::storage::Text;
-use crate::types::{AuthorId, GroupKey, Version};
+use crate::types::{AuthorId, GroupKey, UndoLane, UndoScope, Version};
 
 /// Default number of committed change sets kept for rebasing and lazy anchors.
 pub const DEFAULT_LOG_CAPACITY: usize = 10_000;
@@ -32,7 +32,10 @@ pub struct Transaction {
     pub selection_before: Option<Selection>,
     /// Selection after the edit, restored by redo. Dropped if the transaction is rebased.
     pub selection_after: Option<Selection>,
-    /// Undo group; consecutive transactions with the same author and group undo together.
+    /// Undo lane (window) of the author's; undo in one lane leaves other lanes' edits.
+    pub lane: Option<UndoLane>,
+    /// Undo group; consecutive transactions with the same author, lane and group undo
+    /// together.
     pub group: Option<GroupKey>,
 }
 
@@ -45,6 +48,7 @@ impl Transaction {
             changes,
             selection_before: None,
             selection_after: None,
+            lane: None,
             group: None,
         }
     }
@@ -54,6 +58,13 @@ impl Transaction {
     pub fn with_selections(mut self, before: Selection, after: Selection) -> Self {
         self.selection_before = Some(before);
         self.selection_after = Some(after);
+        self
+    }
+
+    /// Sets the undo lane.
+    #[must_use]
+    pub fn with_lane(mut self, lane: UndoLane) -> Self {
+        self.lane = Some(lane);
         self
     }
 
@@ -164,7 +175,7 @@ impl std::error::Error for EditError {}
 /// Why an undo or redo was refused. Nothing is applied on error.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UndoError {
-    /// Undoing would change text another author edited later.
+    /// Undoing would change text another author or lane edited later.
     Conflict {
         /// The overlapping hunks.
         conflicts: Vec<Conflict>,
@@ -176,7 +187,7 @@ impl fmt::Display for UndoError {
         match self {
             Self::Conflict { conflicts } => write!(
                 f,
-                "undo overlaps {} later edit(s) by other authors",
+                "undo overlaps {} later edit(s) by others",
                 conflicts.len()
             ),
         }
@@ -313,9 +324,11 @@ impl Buffer {
             });
         }
         let inverse = self.commit(&changes);
-        self.history.clear_redo(&txn.author);
+        self.history
+            .clear_redo(&UndoScope::new(txn.author.clone(), txn.lane));
         self.history.push(NewRevision {
             author: txn.author.clone(),
+            lane: txn.lane,
             group: txn.group.clone(),
             changes: changes.clone(),
             inverse,
@@ -334,15 +347,17 @@ impl Buffer {
         })
     }
 
-    /// Undoes the author's latest edit that is still in effect. If it is the newest
-    /// revision this moves back in the undo tree; otherwise its inverse is rebased over
-    /// later edits and committed as a new revision. Returns `None` if there is nothing
-    /// to undo.
+    /// Undoes the scope's latest edit that is still in effect: the author's, made in the
+    /// same lane. If it is the newest revision this moves back in the undo tree;
+    /// otherwise (or if another scope could still redo a newer edit) its inverse is
+    /// rebased over later edits and committed as a new revision. Returns `None` if there
+    /// is nothing to undo.
     ///
     /// # Errors
-    /// [`UndoError::Conflict`] if another author changed the same text later.
-    pub fn undo(&mut self, author: &AuthorId) -> Result<Option<Applied>, UndoError> {
-        match self.history.undo_target(author) {
+    /// [`UndoError::Conflict`] if another author or lane changed the same text later.
+    pub fn undo(&mut self, scope: &UndoScope) -> Result<Option<Applied>, UndoError> {
+        let author = &scope.author;
+        match self.history.undo_target(scope) {
             UndoTarget::Nothing => Ok(None),
             UndoTarget::TreeMove(rev) => {
                 let inverse = self.history.revs[rev].inverse.clone();
@@ -350,41 +365,50 @@ impl Buffer {
                 let group = self.source_group(rev);
                 self.commit(&inverse);
                 self.history.head = self.history.revs[rev].parent;
-                self.history.push_redo(author, RedoEntry::TreeMove(rev));
+                self.history.push_redo(scope, RedoEntry::TreeMove(rev));
                 Ok(Some(self.applied(author, inverse, selection, group)))
             }
             UndoTarget::Revert(rev) => {
-                let applied = self.revert(author, rev)?;
+                let applied = self.revert(scope, rev)?;
                 let node = self.history.head;
-                self.history.push_redo(author, RedoEntry::Revert(node));
+                self.history.push_redo(scope, RedoEntry::Revert(node));
                 Ok(applied)
             }
         }
     }
 
-    /// Redoes the author's latest undo. Returns `None` if there is nothing to redo, or
+    /// Drops the scope's redo steps, for a window that closed. Its edits stay in the
+    /// history, where no other scope undoes them.
+    pub fn forget_redo(&mut self, scope: &UndoScope) {
+        self.history.clear_redo(scope);
+    }
+
+    /// Redoes the scope's latest undo. Returns `None` if there is nothing to redo, or
     /// the undone edit is no longer on the current undo-tree branch.
     ///
     /// # Errors
-    /// [`UndoError::Conflict`] if another author changed the same text since; the redo
-    /// stays available.
-    pub fn redo(&mut self, author: &AuthorId) -> Result<Option<Applied>, UndoError> {
-        let Some(entry) = self.history.pop_redo(author) else {
+    /// [`UndoError::Conflict`] if another author or lane changed the same text since;
+    /// the redo stays available.
+    pub fn redo(&mut self, scope: &UndoScope) -> Result<Option<Applied>, UndoError> {
+        let Some(entry) = self.history.pop_redo(scope) else {
             return Ok(None);
         };
-        let result = match entry {
-            RedoEntry::TreeMove(child) => self.redo_child(author, child),
-            RedoEntry::Revert(node) => self.revert(author, node),
+        let result = match &entry {
+            &RedoEntry::TreeMove(child) => self.redo_child(scope, child),
+            &RedoEntry::Revert(node) => self.revert(scope, node),
+            RedoEntry::Over { rev, base, prefix } => {
+                self.redo_over(scope, *rev, *base, Some(prefix))
+            }
         };
         if result.is_err() {
-            self.history.push_redo(author, entry);
+            self.history.push_redo(scope, entry);
         }
         result
     }
 
     fn redo_child(
         &mut self,
-        author: &AuthorId,
+        scope: &UndoScope,
         child: usize,
     ) -> Result<Option<Applied>, UndoError> {
         let parent = self.history.revs[child].parent;
@@ -394,21 +418,107 @@ impl Buffer {
             let group = self.source_group(child);
             self.commit(&changes);
             self.history.head = child;
-            return Ok(Some(self.applied(author, changes, selection, group)));
+            return Ok(Some(self.applied(&scope.author, changes, selection, group)));
         }
         // Others edited since the undo: re-apply the child over their edits.
-        let Some(path) = self.history.path_after(parent) else {
+        self.redo_over(scope, child, parent, None)
+    }
+
+    /// Re-applies revision `child` as a new revision: its changes rebased over `prefix`
+    /// (from the text before `child` to the text at `base`) and the path after `base`.
+    /// The scope's redo steps that hung off `child` are rewritten to hang off the new
+    /// revision, so redoing several undone steps after others edited keeps working.
+    fn redo_over(
+        &mut self,
+        scope: &UndoScope,
+        child: usize,
+        base: usize,
+        prefix: Option<&ChangeSet>,
+    ) -> Result<Option<Applied>, UndoError> {
+        let Some(path) = self.history.path_after(base) else {
             return Ok(None);
         };
         let rev = &self.history.revs[child];
-        let (changes, selection) = (rev.changes.clone(), rev.selection_after.clone());
+        let mut changes = rev.changes.clone();
+        let mut selection = rev.selection_after.clone();
+        if let Some(prefix) = prefix {
+            changes = changes
+                .rebase(prefix)
+                .map_err(|hunks| UndoError::Conflict {
+                    conflicts: hunks
+                        .into_iter()
+                        .map(|h| Conflict {
+                            incoming: rev.changes.hunks()[h.incoming].clone(),
+                            committed: h.committed,
+                            committed_version: self.history.revs[base].version,
+                        })
+                        .collect(),
+                })?;
+            selection = selection.map(|s| s.map(prefix));
+        }
+        // Edits from the text before `child` to the current text, for rewriting the
+        // redo steps that hang off it.
+        let lead: Vec<ChangeSet> = prefix
+            .into_iter()
+            .cloned()
+            .chain(path.iter().map(|&r| self.history.revs[r].changes.clone()))
+            .collect();
         let group = self.source_group(child);
-        self.commit_over(author, &changes, selection, &path, None, false)
-            .map(|a| with_group(a, group))
+        let applied = self.commit_over(scope, &changes, selection, &path, None, false)?;
+        self.rehang_redo(scope, child, &lead);
+        Ok(with_group(applied, group))
+    }
+
+    /// Rewrites the scope's redo steps that need revision `child` on the head path to
+    /// need the head instead, which re-applied `child` over `lead`. A step whose edits
+    /// cannot be carried over stays as it is (and finds nothing to redo).
+    fn rehang_redo(&mut self, scope: &UndoScope, child: usize, lead: &[ChangeSet]) {
+        let head = self.history.head;
+        let Some(stack) = self.history.redo.get(scope) else {
+            return;
+        };
+        if !stack.iter().any(|e| e.needs(&self.history.revs) == child) {
+            return;
+        }
+        // From the text after `child` to the head's text.
+        let after = {
+            let mut ch = self.history.revs[child].changes.clone();
+            let mut after = Some(ChangeSet::empty(ch.new_len()));
+            for cs in lead {
+                let (Ok(pre), Ok(next)) = (cs.rebase(&ch), ch.rebase(cs)) else {
+                    after = None;
+                    break;
+                };
+                after = after.map(|a| a.compose(&pre));
+                ch = next;
+            }
+            after
+        };
+        let Some(after) = after else {
+            return;
+        };
+        let revs = &self.history.revs;
+        let rehung: Vec<RedoEntry> = stack
+            .iter()
+            .map(|e| match e {
+                &RedoEntry::TreeMove(rev) if revs[rev].parent == child => RedoEntry::Over {
+                    rev,
+                    base: head,
+                    prefix: after.clone(),
+                },
+                RedoEntry::Over { rev, base, prefix } if *base == child => RedoEntry::Over {
+                    rev: *rev,
+                    base: head,
+                    prefix: prefix.compose(&after),
+                },
+                e => e.clone(),
+            })
+            .collect();
+        self.history.redo.insert(scope.clone(), rehung);
     }
 
     /// Reverts revision `rev` (on the head path) by rebasing its inverse over later edits.
-    fn revert(&mut self, author: &AuthorId, rev: usize) -> Result<Option<Applied>, UndoError> {
+    fn revert(&mut self, scope: &UndoScope, rev: usize) -> Result<Option<Applied>, UndoError> {
         let Some(path) = self.history.path_after(rev) else {
             return Ok(None);
         };
@@ -427,13 +537,13 @@ impl Buffer {
             let (Ok(over_pre), Ok(inv_next)) = (over.rebase(&inv), inv.rebase(over)) else {
                 let selection = r.selection_before.as_ref().map(|s| s.map(&r.changes));
                 return self
-                    .commit_over(author, &inverse, selection, &path, Some(rev), false)
+                    .commit_over(scope, &inverse, selection, &path, Some(rev), false)
                     .map(|a| with_group(a, group));
             };
             premapped = premapped.map(|s| s.map(&over_pre));
             inv = inv_next;
         }
-        self.commit_over(author, &inverse, premapped, &path, Some(rev), true)
+        self.commit_over(scope, &inverse, premapped, &path, Some(rev), true)
             .map(|a| with_group(a, group))
     }
 
@@ -449,7 +559,7 @@ impl Buffer {
     /// Rebases `changes` over the revisions in `path`, then commits it as a new revision.
     fn commit_over(
         &mut self,
-        author: &AuthorId,
+        scope: &UndoScope,
         changes: &ChangeSet,
         selection: Option<Selection>,
         path: &[usize],
@@ -492,7 +602,8 @@ impl Buffer {
             }
         }
         self.history.push(NewRevision {
-            author: author.clone(),
+            author: scope.author.clone(),
+            lane: scope.lane,
             group: None,
             changes: changes.clone(),
             inverse,
@@ -502,7 +613,7 @@ impl Buffer {
             version: self.version,
             time: SystemTime::now(),
         });
-        Ok(Some(self.applied(author, changes, selection, None)))
+        Ok(Some(self.applied(&scope.author, changes, selection, None)))
     }
 
     fn applied(

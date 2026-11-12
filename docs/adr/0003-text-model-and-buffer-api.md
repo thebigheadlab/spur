@@ -11,7 +11,7 @@ Spur runs one core state thread that orders every edit (#3). Frontends are thin 
 The text engine must support:
 
 - async edits from agents and extensions that were computed against an older version;
-- per-author undo ("undo mine" never touches someone else's text);
+- per-author undo ("undo mine" never touches someone else's text), and per window within an author (amended by ADR 0006);
 - anchors that survive edits (diagnostics, agent proposals, bookmarks);
 - cheap snapshots for background work (highlighting, search, agents);
 - byte-exact round trip of line endings.
@@ -76,7 +76,8 @@ Mapping rule, shared by anchors, selections and rebase: a position before a hunk
   - If the head revision is the author's, move the head to its parent by applying the inverse. Redo follows the tree.
   - Otherwise find the author's latest revision on the path from the root to the head that is still in effect. Undo revisions are skipped. A redo revision (one that reverts an undo) is a target itself, so undo, redo, undo works even after other authors edited in between. Rebase its inverse through every later revision. On overlap with another author's later edit, refuse with `UndoError::Conflict` and the conflicting ranges; never undo partially. On success, commit the rebased inverse as a new revision that records which revision it reverts.
 - `redo(author)` replays the author's own undo stack: a tree move if the author's undo was a tree move and the head has not moved since, otherwise it reverts the revert.
-- Groups: consecutive transactions with the same author and the same `GroupKey` (actor plus turn id, for example one insert-mode session or one agent turn) merge into one revision, so one undo step undoes the whole group. A transaction from another author in between ends the group.
+- Lanes (added by ADR 0006): a transaction may name an undo lane (a window). Undo and redo take an `UndoScope` (author plus lane) and touch only revisions made in that scope, so everything above that says "author" means "scope". An undo moves the head only when no other scope has a redo that needs the head on the path; otherwise it reverts. When a redo has to be rebased, the scope's later redos are rewritten to follow the new revision.
+- Groups: consecutive transactions with the same author, lane and `GroupKey` (actor plus turn id, for example one insert-mode session or one agent turn) merge into one revision, so one undo step undoes the whole group. A transaction from another author in between ends the group.
 - Finding the target walks the head path, and a revert rebases over every later revision: O(revisions) work. That is fine for M0. The history cap from #18 (default 10 000 revisions or 50 MB) also bounds this walk.
 - Every undo and redo is itself a committed transaction with a new `Version`, so anchors, the change log and rebasing see one uniform stream of edits.
 
@@ -106,7 +107,9 @@ impl ChangeSet {
 
 pub struct Selection { pub ranges: Vec<SelRange>, pub primary: usize }
 pub struct Transaction { pub author, pub base: Version, pub changes: ChangeSet,
-    pub selection_before: Option<Selection>, pub selection_after: Option<Selection>, pub group: Option<GroupKey> }
+    pub selection_before: Option<Selection>, pub selection_after: Option<Selection>,
+    pub lane: Option<UndoLane>, pub group: Option<GroupKey> }
+pub struct UndoScope { pub author: AuthorId, pub lane: Option<UndoLane> }  // From<AuthorId>: lane None
 
 pub struct Snapshot { /* O(1) clone, Send + Sync */ }
 impl Snapshot {
@@ -124,8 +127,9 @@ impl Buffer {
     pub fn snapshot(&self) -> Snapshot; pub fn version(&self) -> Version;
     pub fn apply(&mut self, txn: Transaction) -> Result<Applied, EditError>;
     // EditError: Stale | TooOld | FutureVersion | LengthMismatch | NotCharBoundary
-    pub fn undo(&mut self, author: &AuthorId) -> Result<Option<Applied>, UndoError>;
-    pub fn redo(&mut self, author: &AuthorId) -> Result<Option<Applied>, UndoError>;
+    pub fn undo(&mut self, scope: &UndoScope) -> Result<Option<Applied>, UndoError>;
+    pub fn redo(&mut self, scope: &UndoScope) -> Result<Option<Applied>, UndoError>;
+    pub fn forget_redo(&mut self, scope: &UndoScope);
     pub fn anchor(&self, offset, bias) -> Anchor; pub fn resolve(&self, anchor) -> Result<usize, AnchorError>;
     pub fn with_log_limits(text: &str, capacity: usize, byte_limit: usize) -> Self;
     pub fn last_edit_time(&self) -> Option<SystemTime>;

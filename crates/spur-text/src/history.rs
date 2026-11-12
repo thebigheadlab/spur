@@ -6,7 +6,7 @@ use std::time::SystemTime;
 
 use crate::change::ChangeSet;
 use crate::selection::Selection;
-use crate::types::{AuthorId, GroupKey, Version};
+use crate::types::{AuthorId, GroupKey, UndoLane, UndoScope, Version};
 
 pub(crate) const ROOT: usize = 0;
 
@@ -14,6 +14,8 @@ pub(crate) struct Revision {
     pub(crate) parent: usize,
     pub(crate) last_child: Option<usize>,
     pub(crate) author: AuthorId,
+    /// The author's undo lane (window) the revision was made in.
+    pub(crate) lane: Option<UndoLane>,
     pub(crate) group: Option<GroupKey>,
     /// From the parent's text to this revision's text.
     pub(crate) changes: ChangeSet,
@@ -29,33 +31,54 @@ pub(crate) struct Revision {
     pub(crate) time: SystemTime,
 }
 
-/// One step an author can redo.
-#[derive(Clone, Copy, Debug)]
+/// One step a scope can redo.
+#[derive(Clone, Debug)]
 pub(crate) enum RedoEntry {
     /// Undone by moving the head to the parent; redo re-applies this child.
     TreeMove(usize),
     /// Undone by this revert revision; redo reverts it.
     Revert(usize),
+    /// A tree move whose parent left the head path when an earlier redo had to be
+    /// rebased: `prefix` leads from the text before revision `rev` to the text at `base`,
+    /// a revision on the head path. Redo re-applies `rev` over `prefix` and the path
+    /// after `base`.
+    Over {
+        rev: usize,
+        base: usize,
+        prefix: ChangeSet,
+    },
+}
+
+impl RedoEntry {
+    /// The revision that must stay on the head path for this redo to apply.
+    pub(crate) fn needs(&self, revs: &[Revision]) -> usize {
+        match *self {
+            Self::TreeMove(child) => revs[child].parent,
+            Self::Revert(node) => node,
+            Self::Over { base, .. } => base,
+        }
+    }
 }
 
 /// What `undo(author)` should do.
 pub(crate) enum UndoTarget {
     Nothing,
-    /// The head is the author's: move to its parent.
+    /// The head is the scope's and no other scope's redo hangs off it: move to its parent.
     TreeMove(usize),
-    /// An earlier revision of the author's, still in effect: revert it.
+    /// A revision of the scope's still in effect: revert it (a new revision).
     Revert(usize),
 }
 
 pub(crate) struct History {
     pub(crate) revs: Vec<Revision>,
     pub(crate) head: usize,
-    pub(crate) redo: HashMap<AuthorId, Vec<RedoEntry>>,
+    pub(crate) redo: HashMap<UndoScope, Vec<RedoEntry>>,
 }
 
 /// A new revision, before it is linked into the tree.
 pub(crate) struct NewRevision {
     pub(crate) author: AuthorId,
+    pub(crate) lane: Option<UndoLane>,
     pub(crate) group: Option<GroupKey>,
     pub(crate) changes: ChangeSet,
     pub(crate) inverse: ChangeSet,
@@ -73,6 +96,7 @@ impl History {
                 parent: ROOT,
                 last_child: None,
                 author: AuthorId::User,
+                lane: None,
                 group: None,
                 changes: ChangeSet::empty(len),
                 inverse: ChangeSet::empty(len),
@@ -99,7 +123,8 @@ impl History {
             && new.reverts.is_none()
             && new.group.is_some()
             && head.group == new.group
-            && head.author == new.author;
+            && head.author == new.author
+            && head.lane == new.lane;
         if continues_group {
             head.changes = head.changes.compose(&new.changes);
             head.inverse = new.inverse.compose(&head.inverse);
@@ -113,6 +138,7 @@ impl History {
             parent: self.head,
             last_child: None,
             author: new.author,
+            lane: new.lane,
             group: new.group,
             changes: new.changes,
             inverse: new.inverse,
@@ -127,12 +153,12 @@ impl History {
         index
     }
 
-    /// Finds the author's latest revision on the head path that is still in effect.
+    /// Finds the scope's latest revision on the head path that is still in effect.
     /// Undo revisions (an odd number of reverts deep) are skipped, so undoing again goes
     /// to the author's previous edit. Redo revisions (a revert of an undo) are targets
     /// themselves: undoing a redo reverts the redo, not the original edit, which would
     /// overlap the undo/redo pair still on the path.
-    pub(crate) fn undo_target(&self, author: &AuthorId) -> UndoTarget {
+    pub(crate) fn undo_target(&self, scope: &UndoScope) -> UndoTarget {
         let mut reverted: Vec<usize> = Vec::new();
         let mut at = self.head;
         while at != ROOT {
@@ -141,8 +167,8 @@ impl History {
                 if let Some(target) = rev.reverts {
                     reverted.push(target);
                 }
-                if rev.author == *author && !self.is_undo(at) {
-                    return if at == self.head {
+                if self.in_scope(at, scope) && !self.is_undo(at) {
+                    return if at == self.head && !self.redo_hangs_off(at, scope) {
                         UndoTarget::TreeMove(at)
                     } else {
                         UndoTarget::Revert(at)
@@ -152,6 +178,20 @@ impl History {
             at = rev.parent;
         }
         UndoTarget::Nothing
+    }
+
+    fn in_scope(&self, rev: usize, scope: &UndoScope) -> bool {
+        let r = &self.revs[rev];
+        r.author == scope.author && r.lane == scope.lane
+    }
+
+    /// True if another scope could redo a child of `rev` by a tree move. Moving the head
+    /// off `rev` would take that child's parent off the head path and lose the redo, so
+    /// undoing `rev` must revert it instead.
+    fn redo_hangs_off(&self, rev: usize, scope: &UndoScope) -> bool {
+        self.redo.iter().any(|(owner, stack)| {
+            owner != scope && stack.iter().any(|e| e.needs(&self.revs) == rev)
+        })
     }
 
     /// True if `rev` undoes something: it ends an odd-length chain of reverts.
@@ -181,17 +221,15 @@ impl History {
         Some(path)
     }
 
-    pub(crate) fn push_redo(&mut self, author: &AuthorId, entry: RedoEntry) {
-        self.redo.entry(author.clone()).or_default().push(entry);
+    pub(crate) fn push_redo(&mut self, scope: &UndoScope, entry: RedoEntry) {
+        self.redo.entry(scope.clone()).or_default().push(entry);
     }
 
-    pub(crate) fn pop_redo(&mut self, author: &AuthorId) -> Option<RedoEntry> {
-        self.redo.get_mut(author)?.pop()
+    pub(crate) fn pop_redo(&mut self, scope: &UndoScope) -> Option<RedoEntry> {
+        self.redo.get_mut(scope)?.pop()
     }
 
-    pub(crate) fn clear_redo(&mut self, author: &AuthorId) {
-        if let Some(stack) = self.redo.get_mut(author) {
-            stack.clear();
-        }
+    pub(crate) fn clear_redo(&mut self, scope: &UndoScope) {
+        self.redo.remove(scope);
     }
 }
