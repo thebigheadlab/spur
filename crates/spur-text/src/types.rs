@@ -52,7 +52,8 @@ impl UndoScope {
 }
 
 impl From<AuthorId> for UndoScope {
-    /// The author's edits made without a lane.
+    /// The author's edits made without a lane. Edits made in a lane are not in this
+    /// scope: undoing it finds nothing of theirs.
     fn from(author: AuthorId) -> Self {
         Self { author, lane: None }
     }

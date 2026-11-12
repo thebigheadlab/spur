@@ -212,6 +212,65 @@ fn several_redos_survive_another_lanes_edit() {
 }
 
 #[test]
+fn redos_land_in_place_when_another_lane_typed_at_the_same_spot() {
+    let mut buf = Buffer::new("");
+    buf.apply(insert_in(&buf, 2, 0, "xx")).unwrap();
+    buf.apply(insert_in(&buf, 2, 1, "y")).unwrap();
+    buf.undo(&lane(2)).unwrap().unwrap();
+    buf.undo(&lane(2)).unwrap().unwrap();
+    buf.apply(insert_in(&buf, 1, 0, "ab")).unwrap();
+    buf.redo(&lane(2)).unwrap().unwrap();
+    assert_eq!(text(&buf.snapshot()), "abxx");
+    buf.redo(&lane(2)).unwrap().unwrap();
+    assert_eq!(text(&buf.snapshot()), "abxyx");
+}
+
+#[test]
+fn a_redone_delete_removes_the_same_text() {
+    let mut buf = Buffer::new("");
+    buf.apply(insert_in(&buf, 1, 0, "xyz")).unwrap();
+    let del = Transaction::new(
+        AuthorId::User,
+        buf.version(),
+        ChangeSet::delete(3, 1..2).unwrap(),
+    )
+    .with_lane(UndoLane(1));
+    buf.apply(del).unwrap();
+    buf.undo(&lane(1)).unwrap().unwrap();
+    buf.undo(&lane(1)).unwrap().unwrap();
+    buf.apply(insert_in(&buf, 2, 0, "B")).unwrap();
+    buf.redo(&lane(1)).unwrap().unwrap();
+    buf.redo(&lane(1)).unwrap().unwrap();
+    assert_eq!(text(&buf.snapshot()), "Bxz");
+}
+
+#[test]
+fn a_redo_after_others_edited_restores_the_cursor() {
+    let mut buf = Buffer::new("mnop");
+    let t = insert_in(&buf, 1, 0, "ab").with_selections(Selection::cursor(0), Selection::cursor(2));
+    buf.apply(t).unwrap();
+    buf.undo(&lane(1)).unwrap().unwrap();
+    buf.apply(insert_in(&buf, 2, 1, "Q")).unwrap();
+    let redone = buf.redo(&lane(1)).unwrap().unwrap();
+    assert_eq!(text(&buf.snapshot()), "abmQnop");
+    assert_eq!(redone.selection, Some(Selection::cursor(2)));
+}
+
+#[test]
+fn a_redo_of_a_reverting_undo_restores_the_cursor() {
+    let mut buf = Buffer::new("mn");
+    let t = insert_in(&buf, 1, 0, "ab").with_selections(Selection::cursor(0), Selection::cursor(2));
+    buf.apply(t).unwrap();
+    // Lane 2's edit is newer, so lane 1's undo reverts instead of moving the head.
+    buf.apply(insert_in(&buf, 2, 4, "Z")).unwrap();
+    let undone = buf.undo(&lane(1)).unwrap().unwrap();
+    assert_eq!(undone.selection, Some(Selection::cursor(0)));
+    let redone = buf.redo(&lane(1)).unwrap().unwrap();
+    assert_eq!(text(&buf.snapshot()), "abmnZ");
+    assert_eq!(redone.selection, Some(Selection::cursor(2)));
+}
+
+#[test]
 fn a_new_edit_clears_only_its_own_lanes_redo() {
     let mut buf = Buffer::new("");
     buf.apply(insert_in(&buf, 1, 0, "a")).unwrap();

@@ -1,5 +1,20 @@
 //! Undo tree. Revision 0 is the root (the loaded text); the path from the root to `head`
 //! composes to the current text.
+//!
+//! Each scope (an author, or one of their windows) has its own redo stack. Every entry
+//! needs one revision to stay on the head path ([`RedoEntry::needs`]): a tree move needs
+//! the undone child's parent. Two rules keep that true while several scopes undo and
+//! edit in turn:
+//!
+//! - an undo moves the head off a revision only if no other scope's entry needs it;
+//!   otherwise it reverts the revision (a new revision on top);
+//! - when a redo cannot move the head back (someone edited since) it re-applies the
+//!   child as a new revision, and the scope's entries that needed the old child are
+//!   rewritten as [`RedoEntry::Over`]: re-apply that revision over a `prefix` leading
+//!   from its own base text to the new revision's text.
+//!
+//! A scope's own entries below its last tree move need revisions that are off the path
+//! until it redoes in order (last undone first), which a stack guarantees.
 
 use std::collections::HashMap;
 use std::time::SystemTime;
@@ -60,7 +75,7 @@ impl RedoEntry {
     }
 }
 
-/// What `undo(author)` should do.
+/// What `undo(scope)` should do.
 pub(crate) enum UndoTarget {
     Nothing,
     /// The head is the scope's and no other scope's redo hangs off it: move to its parent.
@@ -155,7 +170,7 @@ impl History {
 
     /// Finds the scope's latest revision on the head path that is still in effect.
     /// Undo revisions (an odd number of reverts deep) are skipped, so undoing again goes
-    /// to the author's previous edit. Redo revisions (a revert of an undo) are targets
+    /// to the scope's previous edit. Redo revisions (a revert of an undo) are targets
     /// themselves: undoing a redo reverts the redo, not the original edit, which would
     /// overlap the undo/redo pair still on the path.
     pub(crate) fn undo_target(&self, scope: &UndoScope) -> UndoTarget {
@@ -226,7 +241,12 @@ impl History {
     }
 
     pub(crate) fn pop_redo(&mut self, scope: &UndoScope) -> Option<RedoEntry> {
-        self.redo.get_mut(scope)?.pop()
+        let stack = self.redo.get_mut(scope)?;
+        let entry = stack.pop();
+        if stack.is_empty() {
+            self.redo.remove(scope);
+        }
+        entry
     }
 
     pub(crate) fn clear_redo(&mut self, scope: &UndoScope) {

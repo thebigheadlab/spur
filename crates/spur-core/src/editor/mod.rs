@@ -218,6 +218,7 @@ impl Editor {
             return false;
         };
         if let Some(doc) = self.docs.get_mut(&removed.doc) {
+            // Only a person's edits have lanes (one per view).
             doc.buffer.forget_redo(&undo_scope(&Actor::User, view));
         }
         true

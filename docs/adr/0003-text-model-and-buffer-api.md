@@ -1,7 +1,7 @@
 # 3. Text model and buffer API
 
 - Status: proposed
-- Date: 2026-11-07
+- Date: 2026-11-07 (undo lanes added 2026-11-12 by ADR 0006)
 - Spec: #52 (text engine), #4; architecture #3. Related tasks: #17, #18, #20, #22. (Issue numbers refer to the project's spec issues, which are being restored.)
 
 ## Context
@@ -72,12 +72,12 @@ Mapping rule, shared by anchors, selections and rebase: a position before a hunk
 ### Q6 Undo model
 
 - History is an undo tree: a flat `Vec<Revision>` with parent and last-child links (Helix). Each revision stores its author, group, change set, inverse, selections before and after, the version that committed it, and a wall-clock timestamp (for "earlier by duration" and "undo to last save").
-- `undo(author)`:
-  - If the head revision is the author's, move the head to its parent by applying the inverse. Redo follows the tree.
-  - Otherwise find the author's latest revision on the path from the root to the head that is still in effect. Undo revisions are skipped. A redo revision (one that reverts an undo) is a target itself, so undo, redo, undo works even after other authors edited in between. Rebase its inverse through every later revision. On overlap with another author's later edit, refuse with `UndoError::Conflict` and the conflicting ranges; never undo partially. On success, commit the rebased inverse as a new revision that records which revision it reverts.
-- `redo(author)` replays the author's own undo stack: a tree move if the author's undo was a tree move and the head has not moved since, otherwise it reverts the revert.
-- Lanes (added by ADR 0006): a transaction may name an undo lane (a window). Undo and redo take an `UndoScope` (author plus lane) and touch only revisions made in that scope, so everything above that says "author" means "scope". An undo moves the head only when no other scope has a redo that needs the head on the path; otherwise it reverts. When a redo has to be rebased, the scope's later redos are rewritten to follow the new revision.
-- Groups: consecutive transactions with the same author, lane and `GroupKey` (actor plus turn id, for example one insert-mode session or one agent turn) merge into one revision, so one undo step undoes the whole group. A transaction from another author in between ends the group.
+- An undo history belongs to an `UndoScope`: an author, plus an optional undo lane (`UndoLane`, a window; added by ADR 0006, which makes each window of a person its own lane). A transaction names its author and lane.
+- `undo(scope)`:
+  - If the head revision is the scope's and no other scope has a redo that needs the head on the path, move the head to its parent by applying the inverse. Redo follows the tree.
+  - Otherwise find the scope's latest revision on the path from the root to the head that is still in effect. Undo revisions are skipped. A redo revision (one that reverts an undo) is a target itself, so undo, redo, undo works even after others edited in between. Rebase its inverse through every later revision. On overlap with a later edit by another author or lane, refuse with `UndoError::Conflict` and the conflicting ranges; never undo partially. On success, commit the rebased inverse as a new revision that records which revision it reverts.
+- `redo(scope)` replays the scope's own undo stack: a tree move if the undo was a tree move and the head has not moved since, otherwise it re-applies the edit (rebased) or reverts the revert. When a re-applied edit had further undone edits on top of it, those redo entries are rewritten to follow the new revision, so several redos in a row still work after someone else edited.
+- Groups: consecutive transactions with the same author, lane and `GroupKey` (actor plus turn id, for example one insert-mode session or one agent turn) merge into one revision, so one undo step undoes the whole group. A transaction from another author or lane in between ends the group.
 - Finding the target walks the head path, and a revert rebases over every later revision: O(revisions) work. That is fine for M0. The history cap from #18 (default 10 000 revisions or 50 MB) also bounds this walk.
 - Every undo and redo is itself a committed transaction with a new `Version`, so anchors, the change log and rebasing see one uniform stream of edits.
 
@@ -109,6 +109,7 @@ pub struct Selection { pub ranges: Vec<SelRange>, pub primary: usize }
 pub struct Transaction { pub author, pub base: Version, pub changes: ChangeSet,
     pub selection_before: Option<Selection>, pub selection_after: Option<Selection>,
     pub lane: Option<UndoLane>, pub group: Option<GroupKey> }
+pub struct UndoLane(pub u64);
 pub struct UndoScope { pub author: AuthorId, pub lane: Option<UndoLane> }  // From<AuthorId>: lane None
 
 pub struct Snapshot { /* O(1) clone, Send + Sync */ }

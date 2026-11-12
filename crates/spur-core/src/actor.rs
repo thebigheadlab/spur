@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 use spur_text::{AuthorId, GroupKey};
 
 /// The principal behind a command or event. A human is [`Actor::User`] from any
-/// frontend, so undo keeps working after reattaching with a new [`ClientId`].
+/// frontend, so their edits are attributed to them whichever client made them. A
+/// person's undo is per window (see `editor::undo_scope`).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Actor {

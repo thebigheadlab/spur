@@ -32,7 +32,8 @@ pub struct Transaction {
     pub selection_before: Option<Selection>,
     /// Selection after the edit, restored by redo. Dropped if the transaction is rebased.
     pub selection_after: Option<Selection>,
-    /// Undo lane (window) of the author's; undo in one lane leaves other lanes' edits.
+    /// The author's undo lane (window); undo in one lane never takes another lane's
+    /// edits.
     pub lane: Option<UndoLane>,
     /// Undo group; consecutive transactions with the same author, lane and group undo
     /// together.
@@ -187,7 +188,7 @@ impl fmt::Display for UndoError {
         match self {
             Self::Conflict { conflicts } => write!(
                 f,
-                "undo overlaps {} later edit(s) by others",
+                "undo or redo overlaps {} later edit(s) by another author or window",
                 conflicts.len()
             ),
         }
@@ -378,7 +379,9 @@ impl Buffer {
     }
 
     /// Drops the scope's redo steps, for a window that closed. Its edits stay in the
-    /// history, where no other scope undoes them.
+    /// history, where no other scope undoes them. Besides the memory, a pending redo
+    /// keeps other scopes' undos of the revision it needs from moving the head (they
+    /// revert instead), so a closed window's should go.
     pub fn forget_redo(&mut self, scope: &UndoScope) {
         self.history.clear_redo(scope);
     }
@@ -440,7 +443,6 @@ impl Buffer {
         };
         let rev = &self.history.revs[child];
         let mut changes = rev.changes.clone();
-        let mut selection = rev.selection_after.clone();
         if let Some(prefix) = prefix {
             changes = changes
                 .rebase(prefix)
@@ -454,47 +456,45 @@ impl Buffer {
                         })
                         .collect(),
                 })?;
-            selection = selection.map(|s| s.map(prefix));
         }
-        // Edits from the text before `child` to the current text, for rewriting the
-        // redo steps that hang off it.
+        // Edits from the text before `child` to the current text.
         let lead: Vec<ChangeSet> = prefix
             .into_iter()
             .cloned()
             .chain(path.iter().map(|&r| self.history.revs[r].changes.clone()))
             .collect();
+        let after = self.after_redo(child, &lead);
+        let selection = after
+            .as_ref()
+            .and_then(|a| Some(self.history.revs[child].selection_after.as_ref()?.map(a)));
         let group = self.source_group(child);
-        let applied = self.commit_over(scope, &changes, selection, &path, None, false)?;
-        self.rehang_redo(scope, child, &lead);
+        let applied = self.commit_over(scope, &changes, selection, &path, None, true)?;
+        if let Some(after) = after {
+            self.rehang_redo(scope, child, &after);
+        }
         Ok(with_group(applied, group))
     }
 
+    /// The edits from the text after `child` to the text after re-applying `child` over
+    /// `lead` (which starts at the text before `child`), or `None` if they overlap.
+    fn after_redo(&self, child: usize, lead: &[ChangeSet]) -> Option<ChangeSet> {
+        let mut ch = self.history.revs[child].changes.clone();
+        let mut after = ChangeSet::empty(ch.new_len());
+        for cs in lead {
+            // `commit_over` puts `child` after `cs` where both change one offset, so
+            // map `cs` as if it came first.
+            after = after.compose(&cs.rebase_first(&ch).ok()?);
+            ch = ch.rebase(cs).ok()?;
+        }
+        Some(after)
+    }
+
     /// Rewrites the scope's redo steps that need revision `child` on the head path to
-    /// need the head instead, which re-applied `child` over `lead`. A step whose edits
-    /// cannot be carried over stays as it is (and finds nothing to redo).
-    fn rehang_redo(&mut self, scope: &UndoScope, child: usize, lead: &[ChangeSet]) {
+    /// need the head instead, which re-applied `child`; `after` leads from the text
+    /// after `child` to the head's text.
+    fn rehang_redo(&mut self, scope: &UndoScope, child: usize, after: &ChangeSet) {
         let head = self.history.head;
         let Some(stack) = self.history.redo.get(scope) else {
-            return;
-        };
-        if !stack.iter().any(|e| e.needs(&self.history.revs) == child) {
-            return;
-        }
-        // From the text after `child` to the head's text.
-        let after = {
-            let mut ch = self.history.revs[child].changes.clone();
-            let mut after = Some(ChangeSet::empty(ch.new_len()));
-            for cs in lead {
-                let (Ok(pre), Ok(next)) = (cs.rebase(&ch), ch.rebase(cs)) else {
-                    after = None;
-                    break;
-                };
-                after = after.map(|a| a.compose(&pre));
-                ch = next;
-            }
-            after
-        };
-        let Some(after) = after else {
             return;
         };
         let revs = &self.history.revs;
@@ -509,7 +509,7 @@ impl Buffer {
                 RedoEntry::Over { rev, base, prefix } if *base == child => RedoEntry::Over {
                     rev: *rev,
                     base: head,
-                    prefix: prefix.compose(&after),
+                    prefix: prefix.compose(after),
                 },
                 e => e.clone(),
             })
@@ -534,7 +534,7 @@ impl Buffer {
         let mut inv = inverse.clone();
         for &later in &path {
             let over = &self.history.revs[later].changes;
-            let (Ok(over_pre), Ok(inv_next)) = (over.rebase(&inv), inv.rebase(over)) else {
+            let (Ok(over_pre), Ok(inv_next)) = (over.rebase_first(&inv), inv.rebase(over)) else {
                 let selection = r.selection_before.as_ref().map(|s| s.map(&r.changes));
                 return self
                     .commit_over(scope, &inverse, selection, &path, Some(rev), false)
@@ -543,8 +543,17 @@ impl Buffer {
             premapped = premapped.map(|s| s.map(&over_pre));
             inv = inv_next;
         }
-        self.commit_over(scope, &inverse, premapped, &path, Some(rev), true)
-            .map(|a| with_group(a, group))
+        let applied = self.commit_over(scope, &inverse, premapped, &path, Some(rev), true)?;
+        // Undoing this revert (a redo, or an undo of a redo) restores the selection
+        // `rev` left, carried over the later edits.
+        let r = &self.history.revs[rev];
+        let restore = r.selection_after.as_ref().map(|s| {
+            path.iter()
+                .fold(s.clone(), |s, &p| s.map(&self.history.revs[p].changes))
+        });
+        let head = self.history.head;
+        self.history.revs[head].selection_before = restore;
+        Ok(with_group(applied, group))
     }
 
     /// The undo group of revision `rev`, or for a revision that reverts another, the

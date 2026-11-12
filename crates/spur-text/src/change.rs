@@ -369,6 +369,39 @@ impl ChangeSet {
             mapped.into_iter().map(|(_, c)| c).collect(),
         ))
     }
+
+    /// Like [`rebase`](Self::rebase), but as if `self` had been committed first: where
+    /// a hunk of `self` starts at the same offset as one of `over`'s, its text goes
+    /// before `over`'s instead of after. So `a.rebase_first(b)` after `b` builds the
+    /// same text as `b.rebase(a)` after `a`, which `a.rebase(b)` does not when both
+    /// change text at one offset.
+    pub(crate) fn rebase_first(&self, over: &ChangeSet) -> Result<ChangeSet, Vec<HunkConflict>> {
+        let tagged: Vec<(usize, Change)> = self.hunks.iter().cloned().enumerate().collect();
+        let mapped = rebase_tagged(&tagged, self.base_len, over)?;
+        let mut hunks = Vec::with_capacity(mapped.len());
+        for (h, (_, plain)) in self.hunks.iter().zip(mapped) {
+            let at = h.range.start;
+            let i = over.hunks.partition_point(|c| c.range.end < at);
+            let Some(k) = over.hunks.get(i).filter(|k| k.range.start == at) else {
+                hunks.push(plain);
+                continue;
+            };
+            let before = over.map_offset(at, Bias::Left);
+            if h.range.is_empty() {
+                hunks.push(Change::new(before..before, h.text.clone()));
+            } else if k.range.is_empty() {
+                // `over` inserted where `h` starts: `h`'s text goes before that insert,
+                // the text it replaces stays after it.
+                if !h.text.is_empty() {
+                    hunks.push(Change::new(before..before, h.text.clone()));
+                }
+                hunks.push(Change::new(plain.range, ""));
+            } else {
+                hunks.push(plain);
+            }
+        }
+        Ok(Self::new(over.new_len(), hunks).expect("rebased hunks stay sorted and in bounds"))
+    }
 }
 
 /// Rebases hunks tagged with their original index. Keeps the tags so conflicts can be
@@ -564,5 +597,53 @@ mod tests {
         let out = apply(t, &cs);
         let inv = cs.invert_with(|r| t[r].to_string());
         assert_eq!(apply(&out, &inv), t);
+    }
+
+    /// Random disjoint hunks over an ASCII text of `len` bytes.
+    fn cs(len: usize, picks: &[(usize, usize, String)]) -> ChangeSet {
+        let mut cuts: Vec<(usize, usize, &String)> = picks
+            .iter()
+            .map(|(o, l, t)| {
+                let start = o % (len + 1);
+                (start, (start + l % 3).min(len), t)
+            })
+            .collect();
+        cuts.sort_by_key(|c| (c.0, c.1));
+        let mut hunks: Vec<Change> = Vec::new();
+        let mut last_end = None;
+        for (start, end, t) in cuts {
+            if last_end.is_some_and(|e| start <= e) {
+                continue;
+            }
+            last_end = Some(end);
+            hunks.push(Change::new(start..end, t.as_str()));
+        }
+        ChangeSet::new(len, hunks).unwrap()
+    }
+
+    #[test]
+    fn rebase_first_mirrors_rebase_at_a_shared_offset() {
+        let t = "abc";
+        let a = ChangeSet::insert(3, 1, "X").unwrap();
+        let b = ChangeSet::replace(3, 1..2, "Y").unwrap();
+        // `a` committed first, then `b`: X goes before Y.
+        let want = apply(&apply(t, &a), &b.rebase(&a).unwrap());
+        assert_eq!(want, "aXYc");
+        assert_eq!(apply(&apply(t, &b), &a.rebase_first(&b).unwrap()), want);
+    }
+
+    proptest::proptest! {
+        /// `a` then `b.rebase(a)` builds the same text as `b` then `a.rebase_first(b)`.
+        #[test]
+        fn rebase_first_converges(
+            t in "[a-z]{0,12}",
+            pa in proptest::collection::vec((0usize..16, 0usize..4, "[A-C]{0,2}"), 0..4),
+            pb in proptest::collection::vec((0usize..16, 0usize..4, "[X-Z]{0,2}"), 0..4),
+        ) {
+            let (a, b) = (cs(t.len(), &pa), cs(t.len(), &pb));
+            if let (Ok(b2), Ok(a2)) = (b.rebase(&a), a.rebase_first(&b)) {
+                proptest::prop_assert_eq!(apply(&apply(&t, &a), &b2), apply(&apply(&t, &b), &a2));
+            }
+        }
     }
 }

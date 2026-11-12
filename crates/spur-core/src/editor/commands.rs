@@ -247,7 +247,9 @@ fn edit(
     let mut txn = Transaction::new(author, snap.version(), changes)
         .with_selections(before, after.clone())
         .with_group(group);
-    txn.lane = undo_scope(cx.actor(), id).lane;
+    if let Some(lane) = undo_scope(cx.actor(), id).lane {
+        txn = txn.with_lane(lane);
+    }
     let applied = cx
         .state
         .docs
@@ -361,9 +363,12 @@ fn undo_redo(cx: C<'_, '_>, redo: bool) -> Result<Value, CommandError> {
                     .views
                     .get_mut(&id)
                     .unwrap_or_else(|| unreachable!());
+                // Restore the recorded selection in the window that made the edit (a
+                // person's lane is the view). An agent's or tool's edit may come from
+                // another view, so this view's cursor just shifts.
                 view.selection = match &applied.selection {
-                    Some(sel) => sel.clone(),
-                    None => view.selection.map(&applied.changes),
+                    Some(sel) if scope.lane.is_some() => sel.clone(),
+                    _ => view.selection.map(&applied.changes),
                 };
                 let doc = cx
                     .state
@@ -881,13 +886,13 @@ pub fn register_editor_commands(core: &mut Core<Editor>) -> Result<(), RegisterE
 
     reg(
         "editor.undo",
-        "Undo your last change in this window.",
+        "Undo your last change (a person's, in this window).",
         plain,
         |cx, _| undo_redo(cx, false),
     )?;
     reg(
         "editor.redo",
-        "Redo your last undone change in this window.",
+        "Redo your last undone change (a person's, in this window).",
         plain,
         |cx, _| undo_redo(cx, true),
     )?;
@@ -1354,7 +1359,8 @@ mod tests {
         let b = c.state.add_view(doc);
         run_in(&mut c, b, 2, "editor.move_down", Value::Null);
         run_in(&mut c, b, 2, "editor.move_down", Value::Null);
-        // Interleaved typing in insert mode, where each view groups its own edits.
+        // Interleaved typing in insert mode: a view's edits join one step only while
+        // nobody else edits in between, so each piece here is its own step.
         for (wa, wb) in ["he", "ll", "o"].iter().zip(["wo", "rl", "d"]) {
             run_in(&mut c, a, 1, "editor.insert_text", json!({ "text": wa }));
             run_in(&mut c, b, 2, "editor.insert_text", json!({ "text": wb }));

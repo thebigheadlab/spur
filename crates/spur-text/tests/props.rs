@@ -257,4 +257,47 @@ proptest! {
             }
         }
     }
+
+    /// One window edits (inserts and deletes), undoes some steps, another window
+    /// inserts capitals anywhere, and the first redoes them. Unless a redo is refused,
+    /// the first window's text comes back exactly, with the capitals in between.
+    #[test]
+    fn redone_steps_land_in_place(
+        edits in prop::collection::vec((any::<bool>(), 0usize..64, 0usize..4, "[a-c]{1,3}"), 1..8),
+        undos in 1usize..8,
+        others in prop::collection::vec((0usize..64, "[X-Z]{1,2}"), 0..4),
+    ) {
+        let a = UndoScope::new(AuthorId::User, Some(UndoLane(1)));
+        let mut buf = Buffer::new("");
+        for (delete, at, n, s) in &edits {
+            let len = buf.len();
+            let cs = if *delete && len > 0 {
+                let at = at % len;
+                ChangeSet::delete(len, at..(at + 1 + n % 3).min(len)).unwrap()
+            } else {
+                ChangeSet::insert(len, at % (len + 1), s).unwrap()
+            };
+            buf.apply(Transaction::new(AuthorId::User, buf.version(), cs).with_lane(UndoLane(1))).unwrap();
+        }
+        let before = full(&buf.snapshot());
+        let mut undone = 0;
+        while undone < undos && buf.undo(&a).unwrap().is_some() {
+            undone += 1;
+        }
+        for (at, s) in &others {
+            let len = buf.len();
+            let t = Transaction::new(AuthorId::User, buf.version(), ChangeSet::insert(len, at % (len + 1), s).unwrap())
+                .with_lane(UndoLane(2));
+            buf.apply(t).unwrap();
+        }
+        for _ in 0..undone {
+            match buf.redo(&a) {
+                Ok(Some(_)) => {}
+                Ok(None) => prop_assert!(false, "redo lost"),
+                Err(_) => return Ok(()),
+            }
+        }
+        let mine: String = full(&buf.snapshot()).chars().filter(char::is_ascii_lowercase).collect();
+        prop_assert_eq!(mine, before);
+    }
 }

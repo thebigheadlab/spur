@@ -101,5 +101,6 @@ Every scenario meets the p50 budget; most of the round trip is the two socket ho
 - Any process that speaks spur-rpc can drive the editor; the terminal and desktop frontends will be clients like the test harness.
 - Clients must keep each surface's last lines to apply the next one; a client that cannot sends `refresh`.
 - Undo is per window. Typing inside text another window just typed makes that window's undo of it a conflict, which it reports instead of undoing part of it.
+- A window's typing joins one undo step only while nobody else edits in between, so two windows typing at once get small steps. Undo could later treat a window's consecutive steps with the same turn as one, now that steps are per window.
 - A reattached client gets a new view, so it cannot undo the edits it made before; reconnect (slice 4) has to carry the view and its lane over.
 - Key bindings come only from layers given to the session; the examples carry a small layer of their own.
