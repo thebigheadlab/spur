@@ -38,7 +38,7 @@ Core changes for this:
 4. `viewport_of`, `scroll_view`, `remove_view` and `view_keys` address any view, not only the focused one. `viewport_of` cuts each line to a width while reading it, so a huge line never costs more than the width.
 5. `editor.open` refuses folders and files over 64 MiB, and `open` and `save` store absolute paths, so one file has one document whatever spelling opened it.
 
-Undo stays per person and document, as with split views in other editors: a human is `User` from every client (ADR 0005), and undo takes that person's newest step, which may have been made in another window. Per-window undo needs a selective undo in `spur-text` and is left as a follow-up decision.
+Undo stays per person and document, as with split views in other editors: a human is `User` from every client (ADR 0005), and undo takes that person's newest step, which may have been made in another window. The owner chose this over per-window undo (which would need a selective undo in `spur-text`).
 
 When a client leaves, every view it owns is removed (`view.closed`) and the others redraw without its cursor.
 
