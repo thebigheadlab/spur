@@ -1,0 +1,75 @@
+# The icon rail. Clicking an icon shows that view and focuses the sidebar;
+# clicking the active icon closes the sidebar. Later on_click entries win when
+# their when holds, as in keys.toml.
+
+[node.rail]
+kind = "column"
+width = 3
+style = "rail"
+padding = [1, 0]
+gap = 1
+children = ["rail_files", "rail_sessions", "rail_search", "rail_git"]
+
+[node.rail_files]
+kind = "icon"
+width = "fill"
+icon = "files"
+style = "rail.item"
+style_active = "rail.item.active"
+active = "ui.sidebar == files && cond.sidebar_shown"
+on_click = [
+  { run = [
+    { command = "ui.set", args = { key = "ui.sidebar", value = "files" } },
+    { command = "ui.set", args = { key = "ui.sidebar_open", value = true } },
+    { command = "ui.focus", args = { region = "sidebar" } },
+  ] },
+  { when = "ui.sidebar == files && cond.sidebar_shown", command = "ui.set", args = { key = "ui.sidebar_open", value = false } },
+]
+
+[node.rail_sessions]
+kind = "icon"
+width = "fill"
+icon = "sessions"
+style = "rail.item"
+style_active = "rail.item.active"
+active = "ui.sidebar == sessions && cond.sidebar_shown"
+on_click = [
+  { run = [
+    { command = "ui.set", args = { key = "ui.sidebar", value = "sessions" } },
+    { command = "ui.set", args = { key = "ui.sidebar_open", value = true } },
+    { command = "ui.focus", args = { region = "sidebar" } },
+  ] },
+  { when = "ui.sidebar == sessions && cond.sidebar_shown", command = "ui.set", args = { key = "ui.sidebar_open", value = false } },
+]
+
+[node.rail_search]
+kind = "icon"
+width = "fill"
+icon = "search"
+style = "rail.item"
+style_active = "rail.item.active"
+active = "ui.sidebar == search && cond.sidebar_shown"
+on_click = [
+  { run = [
+    { command = "ui.set", args = { key = "ui.sidebar", value = "search" } },
+    { command = "ui.set", args = { key = "ui.sidebar_open", value = true } },
+    { command = "ui.focus", args = { region = "sidebar" } },
+  ] },
+  { when = "ui.sidebar == search && cond.sidebar_shown", command = "ui.set", args = { key = "ui.sidebar_open", value = false } },
+]
+
+[node.rail_git]
+kind = "icon"
+width = "fill"
+icon = "git"
+style = "rail.item"
+style_active = "rail.item.active"
+active = "ui.sidebar == git && cond.sidebar_shown"
+on_click = [
+  { run = [
+    { command = "ui.set", args = { key = "ui.sidebar", value = "git" } },
+    { command = "ui.set", args = { key = "ui.sidebar_open", value = true } },
+    { command = "ui.focus", args = { region = "sidebar" } },
+  ] },
+  { when = "ui.sidebar == git && cond.sidebar_shown", command = "ui.set", args = { key = "ui.sidebar_open", value = false } },
+]

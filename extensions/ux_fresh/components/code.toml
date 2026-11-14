@@ -1,0 +1,38 @@
+# The code column: a header line over the code surface.
+
+[node.main]
+kind = "card"
+style = "panel"
+padding = [0, 1]
+gap = 1
+children = ["code_header", "code"]
+
+[node.code_header]
+kind = "row"
+height = 1
+gap = 1
+children = ["code_title", "code_modified", "code_header_space", "code_lang"]
+
+[node.code_title]
+kind = "text"
+text = "{doc.name}"
+style = "title"
+
+[node.code_modified]
+kind = "icon"
+icon = "modified"
+style = "modified"
+when = "buffer.modified"
+
+[node.code_header_space]
+kind = "spacer"
+
+[node.code_lang]
+kind = "text"
+text = "{doc.language}"
+style = "subtitle"
+
+[node.code]
+kind = "surface"
+gutter = true
+current_line = true

@@ -1,0 +1,121 @@
+# The agent column (locked shape: plan on top, project chat with four tabs).
+# Agents arrive in slice 5; until then each tab shows an empty state.
+
+[node.agent]
+kind = "card"
+width = 44
+style = "panel"
+padding = [1, 2]
+gap = 1
+when = "cond.agent_shown"
+children = ["agent_header", "agent_tabs", "chat_view", "threads_view", "library_view", "memory_view", "agent_space", "agent_input"]
+
+[node.agent_header]
+kind = "text"
+text = "Project chat"
+style = "title"
+style_active = "title.focused"
+active = "ui.focus == agent"
+
+[node.agent_tabs]
+kind = "row"
+height = 1
+gap = 1
+children = ["tab_chat", "tab_threads", "tab_library", "tab_memory"]
+
+[node.tab_chat]
+kind = "text"
+text = " Chat "
+style = "tab"
+style_active = "tab.active"
+active = "ui.agent_tab == chat"
+on_click = [{ command = "ui.set", args = { key = "ui.agent_tab", value = "chat" } }]
+
+[node.tab_threads]
+kind = "text"
+text = " Threads "
+style = "tab"
+style_active = "tab.active"
+active = "ui.agent_tab == threads"
+on_click = [{ command = "ui.set", args = { key = "ui.agent_tab", value = "threads" } }]
+
+[node.tab_library]
+kind = "text"
+text = " Library "
+style = "tab"
+style_active = "tab.active"
+active = "ui.agent_tab == library"
+on_click = [{ command = "ui.set", args = { key = "ui.agent_tab", value = "library" } }]
+
+[node.tab_memory]
+kind = "text"
+text = " Memory "
+style = "tab"
+style_active = "tab.active"
+active = "ui.agent_tab == memory"
+on_click = [{ command = "ui.set", args = { key = "ui.agent_tab", value = "memory" } }]
+
+[node.chat_view]
+kind = "column"
+gap = 1
+when = "ui.agent_tab == chat"
+children = ["plan_label", "plan_empty", "chat_label", "chat_empty"]
+
+[node.plan_label]
+kind = "text"
+text = "PLAN"
+style = "label"
+
+[node.plan_empty]
+kind = "text"
+text = "No plan yet."
+style = "empty"
+
+[node.chat_label]
+kind = "text"
+text = "CONVERSATION"
+style = "label"
+
+[node.chat_empty]
+kind = "text"
+text = "Ask a question to start."
+style = "empty"
+
+[node.threads_view]
+kind = "column"
+when = "ui.agent_tab == threads"
+children = ["threads_empty"]
+
+[node.threads_empty]
+kind = "text"
+text = "No threads yet."
+style = "empty"
+
+[node.library_view]
+kind = "column"
+when = "ui.agent_tab == library"
+children = ["library_empty"]
+
+[node.library_empty]
+kind = "text"
+text = "No files yet."
+style = "empty"
+
+[node.memory_view]
+kind = "column"
+when = "ui.agent_tab == memory"
+children = ["memory_empty"]
+
+[node.memory_empty]
+kind = "text"
+text = "Nothing remembered yet."
+style = "empty"
+
+[node.agent_space]
+kind = "spacer"
+
+[node.agent_input]
+kind = "text"
+width = "fill"
+text = " Ask about this project…"
+style = "input"

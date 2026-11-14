@@ -1,0 +1,2 @@
+tab_width = 4              # tab stop for drawing; keys.toml's Tab inserts 4 spaces
+icons = "unicode"          # "unicode" or "ascii"

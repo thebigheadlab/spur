@@ -1,0 +1,36 @@
+[node.topbar]
+kind = "row"
+height = 1
+padding = [0, 1]
+gap = 1
+style = "topbar"
+children = ["brand", "brand_sep", "workspace", "topbar_space", "notice", "doc_tab"]
+
+[node.brand]
+kind = "text"
+text = "spur"
+style = "topbar.brand"
+
+[node.brand_sep]
+kind = "text"
+text = "/"
+style = "topbar.path"
+
+[node.workspace]
+kind = "text"
+text = "{workspace.name}"
+style = "topbar.path"
+
+[node.topbar_space]
+kind = "spacer"
+
+[node.notice]
+kind = "text"
+text = "{ui.notice}"
+style = "notice"
+when = "ui.notice"
+
+[node.doc_tab]
+kind = "text"
+text = " {doc.name} "
+style = "topbar.tab"

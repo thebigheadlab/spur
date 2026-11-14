@@ -1,0 +1,68 @@
+# Graphite theme. Palette names are used only inside this file.
+dark = true
+
+[palette]
+bg = "#111215"
+panel = "#17181c"
+soft = "#202227"
+line = "#2a2c32"
+t1 = "#ecedf0"
+t2 = "#a4a7b0"
+t3 = "#6c707a"
+t4 = "#474a52"
+sel = "#262a4a"
+accent = "#8b93ff"
+need = "#f0b37e"
+ok = "#6fcf97"
+kw = "#c49cde"
+fn = "#7fb8f0"
+ty = "#e6c98f"
+num = "#7fd1c7"
+punct = "#80858f"
+str = "#a5cf9a"
+comment = "#6c707a"
+
+[tokens]
+# Surfaces and text
+"app" = { fg = "t2", bg = "bg" }
+"panel" = { bg = "panel" }
+"topbar" = { bg = "bg" }
+"topbar.brand" = { fg = "t1", bold = true }
+"topbar.path" = { fg = "t3" }
+"topbar.tab" = { fg = "t1", bg = "soft" }
+"rail" = { bg = "panel" }
+"rail.item" = { fg = "t3" }
+"rail.item.active" = { fg = "accent", bg = "soft" }
+"label" = { fg = "t3", bold = true }
+"label.focused" = { fg = "accent", bold = true }
+"title" = { fg = "t1", bold = true }
+"title.focused" = { fg = "accent", bold = true }
+"subtitle" = { fg = "t3" }
+"modified" = { fg = "need" }
+"notice" = { fg = "need" }
+"tab" = { fg = "t3" }
+"tab.active" = { fg = "t1", bg = "soft", bold = true }
+"empty" = { fg = "t3" }
+"input" = { fg = "t3", bg = "soft" }
+
+# Fixed tokens (named by the protocol)
+"gutter" = { fg = "t4" }
+"gutter.current" = { fg = "t2" }
+"line.current" = { bg = "soft" }
+"selection" = { bg = "sel" }
+"cursor.secondary" = { fg = "bg", bg = "accent" }
+"cursor.peer" = { fg = "bg", bg = "need" }
+"list.row" = { fg = "t2" }
+"list.row.selected" = { bg = "soft" }
+"list.row.selected.focused" = { fg = "t1", bg = "sel" }
+"list.dir" = { fg = "t1" }
+"list.icon" = { fg = "t3" }
+"list.more" = { fg = "t3", italic = true }
+"list.error" = { fg = "need" }
+"syntax.keyword" = { fg = "kw" }
+"syntax.type" = { fg = "ty" }
+"syntax.function" = { fg = "fn" }
+"syntax.string" = { fg = "str" }
+"syntax.number" = { fg = "num" }
+"syntax.comment" = { fg = "comment", italic = true }
+"syntax.punctuation" = { fg = "punct" }

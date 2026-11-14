@@ -1,0 +1,20 @@
+# The shell: top bar over a row of rail | sidebar | code | agent column (layout C).
+
+[node.root]
+kind = "column"
+style = "app"
+children = ["topbar", "body"]
+
+[node.body]
+kind = "row"
+padding = [0, 1]
+gap = 1
+children = ["rail", "sidebar", "main", "agent"]
+
+[node.sidebar]
+kind = "card"
+width = 28
+style = "panel"
+padding = [1, 2]
+when = "cond.sidebar_shown"
+children = ["files_view", "sessions_view", "search_view", "git_view"]

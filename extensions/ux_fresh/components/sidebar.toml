@@ -1,0 +1,72 @@
+# Sidebar views. The sidebar card itself is in layout.toml.
+
+[node.files_view]
+kind = "column"
+gap = 1
+when = "ui.sidebar == files"
+children = ["files_label", "files_list"]
+
+[node.files_label]
+kind = "text"
+text = "FILES"
+style = "label"
+style_active = "label.focused"
+active = "ui.focus == sidebar"
+
+[node.files_list]
+kind = "list"
+source = "workspace.files"
+
+[node.sessions_view]
+kind = "column"
+gap = 1
+when = "ui.sidebar == sessions"
+children = ["sessions_label", "sessions_empty"]
+
+[node.sessions_label]
+kind = "text"
+text = "SESSIONS"
+style = "label"
+style_active = "label.focused"
+active = "ui.focus == sidebar"
+
+[node.sessions_empty]
+kind = "text"
+text = "No sessions yet."
+style = "empty"
+
+[node.search_view]
+kind = "column"
+gap = 1
+when = "ui.sidebar == search"
+children = ["search_label", "search_empty"]
+
+[node.search_label]
+kind = "text"
+text = "SEARCH"
+style = "label"
+style_active = "label.focused"
+active = "ui.focus == sidebar"
+
+[node.search_empty]
+kind = "text"
+text = "Search is coming soon."
+style = "empty"
+
+[node.git_view]
+kind = "column"
+gap = 1
+when = "ui.sidebar == git"
+children = ["git_label", "git_empty"]
+
+[node.git_label]
+kind = "text"
+text = "GIT"
+style = "label"
+style_active = "label.focused"
+active = "ui.focus == sidebar"
+
+[node.git_empty]
+kind = "text"
+text = "Git is coming soon."
+style = "empty"

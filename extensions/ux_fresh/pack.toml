@@ -1,0 +1,62 @@
+# ux_fresh: Spur's default look. Every colour, glyph, label and key lives in this folder.
+id = "ux_fresh"            # keymap layer name is "ux:ux_fresh"
+name = "Fresh"
+format = 0                 # pack format version
+root = "root"              # id of the root node (layout.toml)
+theme = "graphite"         # themes/graphite.toml
+
+[state]                    # per-client UI state: key -> default
+"ui.sidebar" = "files"
+"ui.sidebar_open" = true
+"ui.agent_open" = true
+"ui.agent_tab" = "chat"
+
+[state_values]             # allowed values for string keys (also the ui.cycle order)
+"ui.sidebar" = ["files", "sessions", "search", "git"]
+"ui.agent_tab" = ["chat", "threads", "library", "memory"]
+
+[conditions]               # named when clauses, readable as cond.<name>
+# The sidebar shows when open and the code column keeps >= 64 cells (100 cols),
+# or whenever it has focus.
+sidebar_shown = "ui.sidebar_open && (client.cols >= 100 || ui.focus == sidebar)"
+# The agent column shows when open and there is room beside an open sidebar
+# (144 cols), or whenever it has focus.
+agent_shown = "ui.agent_open && (client.cols >= 144 || ui.focus == agent)"
+
+[regions]                  # focusable regions: name -> node and key mode
+editor = { node = "code" }                       # the surface; mode = the view's own mode
+sidebar = { node = "sidebar", mode = "sidebar" }
+agent = { node = "agent", mode = "agent" }
+
+[icons]                    # one cell wide each; ascii is the fallback
+files = { glyph = "≡", ascii = "F" }
+sessions = { glyph = "◇", ascii = "T" }
+search = { glyph = "⌕", ascii = "S" }
+git = { glyph = "⑂", ascii = "G" }
+folder = { glyph = "▸", ascii = "+" }
+folder_open = { glyph = "▾", ascii = "-" }
+file = { glyph = "·", ascii = " " }
+modified = { glyph = "●", ascii = "*" }
+
+[languages]                # language id -> label shown in the code header
+c = "C"
+cpp = "C++"
+go = "Go"
+java = "Java"
+javascript = "JavaScript"
+json = "JSON"
+markdown = "Markdown"
+python = "Python"
+rust = "Rust"
+shell = "Shell"
+text = "Plain text"
+toml = "TOML"
+typescript = "TypeScript"
+yaml = "YAML"
+
+[messages]                 # text the server produces
+"doc.untitled" = "untitled"
+"quit.unsaved" = "Unsaved changes in {doc}. Press ctrl+q again to quit."
+"command.failed" = "{command}: {reason}"
+"list.more" = "{count} more"
+"list.unreadable" = "cannot read: {reason}"
