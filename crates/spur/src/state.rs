@@ -245,7 +245,8 @@ mod tests {
             .collect();
         assert!(names[0].starts_with("notes.txt.") && names[0].ends_with(".0.txt"));
         assert!(names[1].starts_with("untitled."));
-        assert!(names[2].ends_with(".1.txt"));
+        // Same second: `.1`; a second later: a new stamp. Either way a new file.
+        assert!(names[2].starts_with("notes.txt.") && names[2] != names[0]);
         assert_eq!(std::fs::read_to_string(&written[1]).unwrap(), "b");
         #[cfg(unix)]
         {
