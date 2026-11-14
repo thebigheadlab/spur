@@ -6,6 +6,7 @@ pub mod eval;
 pub mod files;
 pub mod pack;
 pub mod state;
+pub mod watch;
 
 use files::Files;
 

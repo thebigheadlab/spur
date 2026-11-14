@@ -61,9 +61,10 @@ fn editor(run: args::Run) -> ExitCode {
     let log = state::Log::new(base.as_ref().map(|b| b.join("log")));
     let rescue = state::Rescue::new(base.as_ref().map(|b| b.join("rescue")), log.clone());
     install_panic_hook(log.clone());
-    let pack = match run.ux {
-        Some(dir) => PackSource::Dir(dir),
-        None => PackSource::Embedded(embedded::UX_FRESH),
+    // A pack folder is watched and reloaded on change; the embedded one is fixed.
+    let (pack, watch) = match run.ux {
+        Some(dir) => (PackSource::Dir(dir), Some(Duration::from_millis(250))),
+        None => (PackSource::Embedded(embedded::UX_FRESH), None),
     };
     let sink_log = log.clone();
     let sink_rescue = rescue.clone();
@@ -75,6 +76,7 @@ fn editor(run: args::Run) -> ExitCode {
         root: run.root,
         log: Some(LogSink(Arc::new(move |l| sink_log.write(l)))),
         rescue: Some(RescueSink(Arc::new(move |docs| sink_rescue.write(docs)))),
+        watch,
         ..SessionConfig::default()
     }) {
         Ok(s) => s,

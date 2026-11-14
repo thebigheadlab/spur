@@ -90,6 +90,9 @@ pub struct SessionConfig {
     pub log: Option<LogSink>,
     /// Saves modified documents if the session thread fails.
     pub rescue: Option<RescueSink>,
+    /// How often a pack folder is checked for changes; `None` for never. An
+    /// embedded pack is never watched.
+    pub watch: Option<Duration>,
     /// Runs on the core before the session starts (tests register commands here).
     #[doc(hidden)]
     pub setup: Option<fn(&mut Core<Editor>)>,
@@ -167,6 +170,8 @@ enum In {
     },
     Inspect(Probe),
     Modified(SyncSender<Modified>),
+    /// The pack folder's files changed: their paths and text.
+    PackFiles(Vec<(String, String)>),
     /// Panics outside the per-message guard (tests of the rescue path).
     Panic,
     Shutdown,
@@ -175,6 +180,8 @@ enum In {
 /// A running session. Dropping it shuts the session down.
 pub struct Session {
     tx: Sender<In>,
+    /// Dropping it stops the pack watcher.
+    _watch: Option<Sender<()>>,
     next_conn: Arc<AtomicU64>,
     samples: Arc<Mutex<Vec<Duration>>>,
     thread: Option<JoinHandle<()>>,
@@ -216,14 +223,38 @@ impl Session {
             message: e.to_string(),
         })?;
         let samples = Arc::new(Mutex::new(Vec::new()));
+        let watched = match (&cfg.pack, cfg.watch) {
+            (Some(PackSource::Dir(dir)), Some(every)) => Some((dir.clone(), every)),
+            _ => None,
+        };
+        let log = cfg.log.clone();
         let state = State::new(cfg, samples.clone())?;
         let (tx, rx) = mpsc::channel();
+        let watch = watched.and_then(|(dir, every)| {
+            let (stop_tx, stop_rx) = mpsc::channel::<()>();
+            let inbox = tx.clone();
+            std::thread::Builder::new()
+                .name("spur-pack-watch".into())
+                .spawn(move || {
+                    let log = |l: &str| {
+                        if let Some(s) = &log {
+                            (s.0)(l);
+                        }
+                    };
+                    crate::ux::watch::watch(&dir, every, &stop_rx, &log, &|files| {
+                        inbox.send(In::PackFiles(files)).is_ok()
+                    });
+                })
+                .ok()
+                .map(|_| stop_tx)
+        });
         let thread = std::thread::Builder::new()
             .name("spur-session".into())
             .spawn(move || state.run(&rx))
             .map_err(|e| SessionError::Thread(e.to_string()))?;
         Ok(Self {
             tx,
+            _watch: watch,
             next_conn: Arc::new(AtomicU64::new(1)),
             samples,
             thread: Some(thread),
@@ -517,6 +548,68 @@ impl State {
         })
     }
 
+    /// Loads changed pack files: on success swaps the pack in for every client; on
+    /// failure keeps the old one and shows the first error.
+    fn reload(&mut self, files: &[(String, String)]) {
+        let Some(ux) = self.ux.as_mut() else {
+            return;
+        };
+        let mut known: BTreeSet<String> = self
+            .core
+            .commands()
+            .iter()
+            .map(|m| m.id.to_string())
+            .collect();
+        known.extend(UI_COMMANDS.iter().map(|s| (*s).to_owned()));
+        let loaded = Pack::load(files, &|id| known.contains(id)).and_then(|p| {
+            match p.theme_named(ux.theme.as_deref()) {
+                Some(_) => Ok(p),
+                None => Err(vec![PackError {
+                    file: "pack.toml".into(),
+                    line: None,
+                    path: "theme".into(),
+                    message: format!(
+                        "no theme {:?}",
+                        ux.theme.clone().unwrap_or_else(|| p.theme.clone())
+                    ),
+                }]),
+            }
+        });
+        match loaded {
+            Ok(pack) => {
+                let old_layer = ux.pack.keys.name.clone();
+                ux.pack = pack;
+                ux.pack_error = None;
+                ux.generation += 1;
+                for c in self.clients.values_mut() {
+                    let Some(ui) = c.ui.as_mut() else {
+                        continue;
+                    };
+                    c.keymap.remove_layer(&old_layer);
+                    c.keymap.push_layer(ux.pack.keys.clone());
+                    ui.migrate(&ux.pack, &mut ux.files, &mut c.scope);
+                    c.dirty = true;
+                }
+                self.log("pack reloaded");
+            }
+            Err(errors) => {
+                for e in &errors {
+                    self.log(&format!("pack: {e}"));
+                }
+                if let Some(ux) = self.ux.as_mut() {
+                    ux.pack_error = errors.first().map(ToString::to_string);
+                }
+                for c in self.clients.values_mut().filter(|c| c.ui.is_some()) {
+                    c.dirty = true;
+                }
+            }
+        }
+        let conns: Vec<u64> = self.clients.keys().copied().collect();
+        for conn in conns {
+            self.check_focus(conn);
+        }
+    }
+
     /// Writes a line to the session log, if there is one.
     pub(crate) fn log(&self, line: &str) {
         if let Some(l) = &self.log {
@@ -727,6 +820,7 @@ impl State {
             In::Modified(tx) => {
                 let _ = tx.try_send(self.modified());
             }
+            In::PackFiles(files) => self.reload(&files),
             In::Panic | In::Shutdown => {}
         }
     }

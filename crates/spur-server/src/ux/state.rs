@@ -70,7 +70,6 @@ impl UiState {
     }
 
     /// Keeps values that still fit a new pack; resets the rest and adds new keys.
-    #[allow(dead_code)] // used by pack reload (next phase)
     pub fn migrate(&mut self, pack: &Pack, files: &mut Files, scope: &mut Context) {
         let old = std::mem::take(&mut self.values);
         for k in old.keys() {
@@ -213,4 +212,58 @@ pub fn shown(pack: &Pack, node: &str, look: &impl ContextLookup) -> bool {
         n = pack.parent.get(id).map(String::as_str);
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::*;
+    use crate::ux::pack::{PackSource, default_commands, read_source};
+
+    /// `ux_fresh` with extra `[state]` lines and `[state_values]` lines.
+    fn pack(state: &str, values: &str) -> Pack {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../extensions/ux_fresh");
+        let mut files = read_source(&PackSource::Dir(dir)).unwrap();
+        let toml = &mut files.iter_mut().find(|(p, _)| p == "pack.toml").unwrap().1;
+        *toml = toml
+            .replacen("[state]", &format!("[state]\n{state}"), 1)
+            .replacen("[state_values]", &format!("[state_values]\n{values}"), 1);
+        let ids = default_commands();
+        Pack::load(&files, &|id| ids.contains(id)).unwrap_or_else(|e| panic!("{e:#?}"))
+    }
+
+    #[test]
+    fn migrate_keeps_values_that_still_fit() {
+        let old = pack(
+            "\"ui.extra\" = true\n\"ui.mode\" = \"a\"\n\"ui.gone\" = 1",
+            "\"ui.mode\" = [\"a\", \"b\"]",
+        );
+        let new = pack(
+            "\"ui.extra\" = \"on\"\n\"ui.mode\" = \"a\"",
+            "\"ui.mode\" = [\"a\", \"c\"]",
+        );
+        let mut files = Files::new(std::env::temp_dir());
+        let mut ui = UiState::new(&old, &mut files, None);
+        ui.values
+            .insert("ui.sidebar_open".into(), StateValue::Bool(false));
+        ui.values.insert("ui.extra".into(), StateValue::Bool(false));
+        ui.values
+            .insert("ui.mode".into(), StateValue::Str("b".into()));
+        ui.focus = "nowhere".into();
+        let mut scope = Context::default();
+        scope.set("ui.gone", 1).unwrap();
+        ui.migrate(&new, &mut files, &mut scope);
+        // Same key, same type: kept.
+        assert_eq!(ui.values["ui.sidebar_open"], StateValue::Bool(false));
+        // The type changed: the new default.
+        assert_eq!(ui.values["ui.extra"], StateValue::Str("on".into()));
+        // No longer an allowed value: the new default.
+        assert_eq!(ui.values["ui.mode"], StateValue::Str("a".into()));
+        // Gone from the pack: gone from the values and the scope.
+        assert!(!ui.values.contains_key("ui.gone"));
+        assert!(scope.get("ui.gone").is_none());
+        assert_eq!(ui.focus, EDITOR_REGION);
+        assert_eq!(ui.trees.len(), 1);
+    }
 }

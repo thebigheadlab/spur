@@ -54,6 +54,7 @@ struct Client {
     end: ClientEnd,
     log: Vec<ServerMsg>,
     theme: Option<String>,
+    app_bg: Option<String>,
     root: Option<Node>,
     focus: Option<String>,
     lists: BTreeMap<String, ListView>,
@@ -70,6 +71,7 @@ impl Client {
             end,
             log: Vec::new(),
             theme: None,
+            app_bg: None,
             root: None,
             focus: None,
             lists: BTreeMap::new(),
@@ -94,7 +96,10 @@ impl Client {
 
     fn take(&mut self, m: ServerMsg) {
         match &m {
-            ServerMsg::Theme { name, .. } => self.theme = Some(name.clone()),
+            ServerMsg::Theme { name, tokens, .. } => {
+                self.theme = Some(name.clone());
+                self.app_bg = tokens.get("app").and_then(|t| t.bg.clone());
+            }
             ServerMsg::Ui { root, focus } => {
                 self.lists.retain(|k, _| find(root, k).is_some());
                 self.root = Some(root.clone());
@@ -902,4 +907,94 @@ fn a_session_that_fails_writes_rescue_copies() {
         *got.lock().unwrap(),
         [(Some(root.join("notes.txt")), "xone\ntwo\n".to_owned())]
     );
+}
+
+/// A copy of `ux_fresh` to edit.
+fn pack_copy(test: &str) -> PathBuf {
+    let dst = std::env::temp_dir().join(format!("spur-pack-{}-{test}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dst);
+    for sub in ["", "components", "themes"] {
+        std::fs::create_dir_all(dst.join(sub)).unwrap();
+        for e in std::fs::read_dir(pack_dir().join(sub)).unwrap().flatten() {
+            if e.path().is_file() {
+                std::fs::copy(e.path(), dst.join(sub).join(e.file_name())).unwrap();
+            }
+        }
+    }
+    dst
+}
+
+fn edit(path: &Path, from: &str, to: &str) {
+    let text = std::fs::read_to_string(path).unwrap();
+    assert!(text.contains(from), "{from}");
+    std::fs::write(path, text.replacen(from, to, 1)).unwrap();
+}
+
+/// Syncs until `f` holds.
+fn until(c: &mut Client, what: &str, mut f: impl FnMut(&mut Client) -> bool) {
+    let end = std::time::Instant::now() + WAIT;
+    while !f(c) {
+        assert!(
+            std::time::Instant::now() < end,
+            "timed out waiting for {what}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+        c.sync();
+    }
+}
+
+#[test]
+fn the_pack_reloads_when_its_files_change() {
+    let root = workspace("reload");
+    let pack = pack_copy("reload");
+    let s = Session::spawn(SessionConfig {
+        open: vec![root.join("notes.txt")],
+        pack: Some(PackSource::Dir(pack.clone())),
+        root: root.clone(),
+        watch: Some(Duration::from_millis(10)),
+        ..Default::default()
+    })
+    .unwrap();
+    let mut c = Client::attach(&s, 160, 30);
+    assert_eq!(c.app_bg.as_deref(), Some("#111215"));
+    // A same-size colour edit.
+    edit(
+        &pack.join("themes/graphite.toml"),
+        "bg = \"#111215\"",
+        "bg = \"#121215\"",
+    );
+    until(&mut c, "the new colour", |c| {
+        c.app_bg.as_deref() == Some("#121215")
+    });
+
+    // A new state key appears; the old values stay.
+    c.keys("<C-b>");
+    assert!(!c.shows("sidebar"));
+    edit(
+        &pack.join("pack.toml"),
+        "[state]",
+        "[state]\n\"ui.extra\" = true",
+    );
+    until(&mut c, "the new key", |c| {
+        matches!(
+            c.command("ui.toggle", json!({ "key": "ui.extra" })),
+            Reply::Ok(_)
+        )
+    });
+    assert!(!c.shows("sidebar"), "kept ui.sidebar_open = false");
+
+    // A broken edit keeps the old pack and shows the error, also to a new client.
+    edit(&pack.join("layout.toml"), "width = 28", "width = \"wide\"");
+    until(&mut c, "the error notice", |c| c.notice().is_some());
+    let notice = c.notice().unwrap();
+    assert!(notice.starts_with("layout.toml:"), "{notice}");
+    let late = Client::attach(&s, 160, 30);
+    assert_eq!(late.notice(), Some(notice));
+    assert_eq!(late.app_bg.as_deref(), Some("#121215"));
+    // Fixing it clears the notice; removing the key removes it.
+    edit(&pack.join("layout.toml"), "width = \"wide\"", "width = 28");
+    edit(&pack.join("pack.toml"), "\n\"ui.extra\" = true", "");
+    until(&mut c, "the fix", |c| c.notice().is_none());
+    let r = c.command("ui.toggle", json!({ "key": "ui.extra" }));
+    assert!(matches!(r, Reply::Error(_)), "{r:?}");
 }
