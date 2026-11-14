@@ -100,7 +100,7 @@ style = "empty.title"
 
 [node.chat_empty_text]
 kind = "text"
-text = "Ask a question to start."
+text = "Agent replies show here."
 style = "empty"
 
 [node.threads_view]
@@ -167,5 +167,5 @@ style = "prompt"
 
 [node.ask_text]
 kind = "text"
-text = "Ask about this project..."
+text = "Chat input is coming soon"
 style = "input"

@@ -9,7 +9,7 @@
   ±  │   · main.rs              │ │                                                                               │ │  Chat   Threads   Library   Memory      │
      │ · notes.txt              │ │                                                                               │ │                                         │
      │ · README.md              │ │                                                                               │ │  No messages yet                        │
-     │                          │ │                                                                               │ │  Ask a question to start.               │
+     │                          │ │                                                                               │ │  Agent replies show here.               │
      │                          │ │                                                                               │ │                                         │
      │                          │ │                                                                               │ │                                         │
      │                          │ │                                                                               │ │                                         │
@@ -40,6 +40,6 @@
      │                          │ │                                                                               │ │                                         │
      │                          │ │                                                                               │ │                                         │
      │                          │ │                                                                               │ │                                         │
-     │                          │ │                                                                               │ │   › Ask about this project...           │
+     │                          │ │                                                                               │ │   › Chat input is coming soon           │
      │                          │ │                                                                               │ │                                         │
      ╰──────────────────────────╯ ╰───────────────────────────────────────────────────────────────────────────────╯ ╰─────────────────────────────────────────╯

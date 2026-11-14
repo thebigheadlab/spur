@@ -782,7 +782,7 @@
                           "id": "chat_empty_text",
                           "kind": "text",
                           "style": "empty",
-                          "text": "Ask a question to start.",
+                          "text": "Agent replies show here.",
                           "width": {
                             "type": "fit"
                           }
@@ -825,7 +825,7 @@
                           "id": "ask_text",
                           "kind": "text",
                           "style": "input",
-                          "text": "Ask about this project...",
+                          "text": "Chat input is coming soon",
                           "width": {
                             "type": "fit"
                           }

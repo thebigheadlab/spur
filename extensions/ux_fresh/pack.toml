@@ -16,9 +16,10 @@ theme = "graphite"         # themes/graphite.toml
 "ui.agent_tab" = ["chat", "threads", "library", "memory"]
 
 [conditions]               # named when clauses, readable as cond.<name>
-# The sidebar shows when open and the code column keeps >= 64 cells: from 100 cols,
-# but below 144 cols not while the agent column has focus (the two do not fit beside
-# the code together). It always shows while it has focus itself.
+# The sidebar shows when open from 100 cols, where the code column keeps >= 64 cells
+# beside it. Below 144 cols it gives way while the agent column has focus: the two do
+# not fit beside the code together, and the code column is then narrower than 64
+# (about 47 cells at 100 cols). It always shows while it has focus itself.
 sidebar_shown = "ui.sidebar_open && ((client.cols >= 100 && (client.cols >= 144 || ui.focus != agent)) || ui.focus == sidebar)"
 # The agent column shows when open and there is room beside an open sidebar
 # (144 cols), or whenever it has focus.
@@ -66,7 +67,7 @@ yaml = "YAML"
 
 [messages]                 # text the server produces
 "doc.untitled" = "untitled"
-"quit.unsaved" = "Unsaved changes in {doc}. Press ctrl+q again to quit."
+"quit.unsaved" = "ctrl+q again to quit without saving {doc}"
 "command.failed" = "{command}: {reason}"
 "list.more" = "{count} more"
 "list.unreadable" = "cannot read: {reason}"

@@ -50,7 +50,7 @@ fn ux_fresh_loads() {
     );
     assert_eq!(
         pack.message("quit.unsaved", &[("doc", "a.rs")]),
-        "Unsaved changes in a.rs. Press ctrl+q again to quit."
+        "ctrl+q again to quit without saving a.rs"
     );
 }
 

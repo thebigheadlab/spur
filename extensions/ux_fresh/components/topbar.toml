@@ -52,7 +52,7 @@ kind = "row"
 width = "fit"
 gap = 1
 when = "!ui.notice"
-children = ["keys_code", "keys_files", "at_sidebar", "keys_agent", "keys_back", "k_quit", "h_quit"]
+children = ["keys_code", "keys_files", "keys_sidebar", "keys_agent", "keys_back", "k_quit", "h_quit"]
 
 # Code.
 [node.keys_code]
@@ -139,11 +139,28 @@ text = "open "
 style = "hint"
 
 # The other sidebar views have no keys of their own yet; their card title names them.
+# The one key shown is the way back to Files.
+[node.keys_sidebar]
+kind = "row"
+width = "fit"
+gap = 1
+when = "ui.focus == sidebar && ui.sidebar != files"
+children = ["at_sidebar", "k_to_files", "h_to_files"]
+
 [node.at_sidebar]
 kind = "text"
 text = " SIDEBAR "
 style = "focus"
-when = "ui.focus == sidebar && ui.sidebar != files"
+
+[node.k_to_files]
+kind = "text"
+text = " ctrl+k e "
+style = "key"
+
+[node.h_to_files]
+kind = "text"
+text = "files "
+style = "hint"
 
 # Agent column.
 [node.keys_agent]

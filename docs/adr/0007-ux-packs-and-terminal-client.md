@@ -104,11 +104,13 @@ The `no_look` test covers the core crates and `spur-tui`: no hex colours, no key
 
 | Scenario | p50 ms | p99 ms | Budget (p50) |
 |---|---|---|---|
-| Typing in a Rust file, 80x24, ux_fresh with colours | 0.130 | 0.170 | < 0.2 |
-| Typing in a Rust file, 300x100, ux_fresh with colours | 0.176 | 0.364 | < 0.2 |
-| Tree Down/Up in a 5,000-entry folder | 0.177 | 0.222 | < 0.3 |
-| Save, bare session | 1.388 | 2.078 | reference |
-| Save with the modified dot, ux_fresh | 1.613 | 2.341 | see deviations |
+| Typing in a Rust file, 80x24, ux_fresh with colours | 0.15 | 0.25 | < 0.2 |
+| Typing in a Rust file, 300x100, ux_fresh with colours | 0.21 | 0.47 | < 0.2 |
+| Tree Down/Up in a 5,000-entry folder | 0.21 | 0.46 | < 0.3 |
+| Save, bare session | 1.56 | 3.59 | reference |
+| Save with the modified dot, ux_fresh | 2.10 | 5.75 | see deviations |
+
+Medians of three runs with the card look. The machine these were taken on was slower than for the first version of this table: in the same session, interleaved runs gave 0.19 to 0.22 ms (typing, 300x100) for the earlier look and 0.19 to 0.25 ms for the card look, so the look adds no measurable cost, but typing at 300x100 sits at the budget there. The server's own part is about 0.065 ms; most of the rest is the transport and the test client.
 
 ## Consequences
 

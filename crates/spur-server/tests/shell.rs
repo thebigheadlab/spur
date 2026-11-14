@@ -656,10 +656,7 @@ fn a_failed_command_shows_until_the_next_key() {
     c.keys("<C-s>");
     c.keys("<C-q>");
     let notice = c.notice().expect("the prompt");
-    assert!(
-        notice.starts_with("Unsaved changes in untitled"),
-        "{notice}"
-    );
+    assert!(notice.ends_with("without saving untitled"), "{notice}");
     // The wire command message returns its error and sets no notice.
     c.keys("<Right>");
     let r = c.command("buffer.save", json!({}));
