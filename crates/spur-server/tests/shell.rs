@@ -1072,3 +1072,17 @@ fn code_is_coloured_and_copied_rows_keep_their_colours() {
     assert_eq!(hl(&c, 0), first);
     assert_eq!(hl(&c, 1)[0], ("let".into(), Some("syntax.keyword".into())));
 }
+
+#[test]
+fn saving_under_a_new_language_recolours_every_row() {
+    let root = workspace("save-as");
+    let s = session_in(&root, &["notes.txt"]);
+    let mut c = Client::attach(&s, 160, 30);
+    c.keys("<C-Home>fn ");
+    let plain = &c.view.as_ref().unwrap().lines[0].spans;
+    assert!(plain.iter().all(|s| s.hl.is_none()), "{plain:?}");
+    let r = c.command("buffer.save", json!({ "path": root.join("notes.rs") }));
+    assert!(matches!(r, Reply::Ok(_)), "{r:?}");
+    let line = &c.view.as_ref().unwrap().lines[0].spans;
+    assert_eq!(line[0].hl.as_deref(), Some("syntax.keyword"), "{line:?}");
+}

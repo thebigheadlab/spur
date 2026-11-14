@@ -1426,9 +1426,11 @@ fn render_ux(c: &mut Client, ux: &mut Ux, ed: &Editor, ctx: &Context, others: &[
     }
     let surface = surface_shown.then(|| {
         let view = frame::surface(ed, c.active, rows, others);
-        // A surface new in the tree starts from a full frame.
+        // A surface new in the tree starts from a full frame, and so does a new
+        // path (a save under another name may mean another language, so no row
+        // coloured for the old one is copied).
         let base = if surface_was_shown {
-            c.last_view.as_ref()
+            c.last_view.as_ref().filter(|b| b.path == view.path)
         } else {
             None
         };

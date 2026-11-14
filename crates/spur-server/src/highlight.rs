@@ -21,6 +21,8 @@ struct Lang {
     quotes: &'static [char],
     /// Rust: `'x'` is a char, `'ident` a lifetime; `name!` is a macro call.
     rust: bool,
+    /// Shell: `#` starts a comment only at a word start.
+    shell: bool,
 }
 
 const SLASH_BLOCK: Option<(&str, &str)> = Some(("/*", "*/"));
@@ -297,6 +299,7 @@ fn lang(id: &str) -> Option<Lang> {
         block_comment: SLASH_BLOCK,
         quotes,
         rust: false,
+        shell: false,
     };
     let hash = |keywords, quotes| Lang {
         keywords,
@@ -304,6 +307,7 @@ fn lang(id: &str) -> Option<Lang> {
         block_comment: None,
         quotes,
         rust: false,
+        shell: false,
     };
     Some(match id {
         "rust" => Lang {
@@ -317,7 +321,10 @@ fn lang(id: &str) -> Option<Lang> {
         "javascript" => slash(JS, &['"', '\'', '`']),
         "typescript" => slash(TS, &['"', '\'', '`']),
         "python" => hash(PYTHON, &['"', '\'']),
-        "shell" => hash(SHELL, &['"', '\'']),
+        "shell" => Lang {
+            shell: true,
+            ..hash(SHELL, &['"', '\''])
+        },
         "toml" => hash(&["true", "false"], &['"', '\'']),
         "yaml" => hash(LITERALS, &['"', '\'']),
         "json" => Lang {
@@ -326,6 +333,7 @@ fn lang(id: &str) -> Option<Lang> {
             block_comment: None,
             quotes: &['"'],
             rust: false,
+            shell: false,
         },
         // markdown and text stay plain.
         _ => return None,
@@ -399,8 +407,10 @@ fn token(lang: &Lang, chars: &[char], i: usize) -> (usize, Option<&'static str>)
         let end = (i..n).find(|&k| !chars[k].is_whitespace()).unwrap_or(n);
         return (end, None);
     }
+    // Shell: `#` starts a comment only at a word start (`${#a}` is not one).
     if let Some(lc) = lang.line_comment
         && starts(chars, i, lc)
+        && (!lang.shell || i == 0 || chars[i - 1].is_whitespace())
     {
         return (n, Some(COMMENT));
     }
@@ -466,10 +476,7 @@ fn string_end(chars: &[char], i: usize, q: char) -> usize {
 fn rust_quote(chars: &[char], i: usize) -> (usize, Option<&'static str>) {
     let n = chars.len();
     match chars.get(i + 1) {
-        Some('\\') => {
-            let close = (i + 2..n).find(|&k| chars[k] == '\'' && chars[k - 1] != '\\');
-            close.map_or((n, Some(STRING)), |k| (k + 1, Some(STRING)))
-        }
+        Some('\\') => (string_end(chars, i, '\''), Some(STRING)),
         Some(_) if chars.get(i + 2) == Some(&'\'') => (i + 3, Some(STRING)),
         Some(&c) if is_ident(c) => {
             let end = (i + 1..n).find(|&k| !is_ident(chars[k])).unwrap_or(n);
@@ -589,6 +596,14 @@ mod tests {
     }
 
     #[test]
+    fn rust_escaped_chars_close() {
+        assert_eq!(
+            show("rust", r"c == '\\' {"),
+            ["-:c", "punctuation:==", r"string:'\\'", "punctuation:{"]
+        );
+    }
+
+    #[test]
     fn block_comments_and_strings_stop_at_the_line_end() {
         assert_eq!(
             show("c", "int x = 1; /* a */ y"),
@@ -649,6 +664,16 @@ mod tests {
                 "string:\"$x\"",
                 "punctuation:];",
                 "keyword:then"
+            ]
+        );
+        assert_eq!(
+            show("shell", "n=${#a} # c"),
+            [
+                "-:n",
+                "punctuation:=${#",
+                "-:a",
+                "punctuation:}",
+                "comment:# c"
             ]
         );
         assert_eq!(
