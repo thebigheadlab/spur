@@ -109,15 +109,6 @@ impl StateValue {
             _ => None,
         }
     }
-
-    /// As text in a template.
-    pub fn render(&self) -> String {
-        match self {
-            Self::Str(s) => s.clone(),
-            Self::Bool(b) => b.to_string(),
-            Self::Int(i) => i.to_string(),
-        }
-    }
 }
 
 /// A `{key}` template.
@@ -290,41 +281,41 @@ impl Theme {
 #[derive(Clone, Debug)]
 pub struct Pack {
     /// Pack id.
-    pub id: String,
+    pub(crate) id: String,
     /// Display name.
-    pub name: String,
+    pub(crate) name: String,
     /// Root node id.
-    pub root: String,
+    pub(crate) root: String,
     /// Default theme (file stem).
-    pub theme: String,
+    pub(crate) theme: String,
     /// State keys and defaults.
-    pub state: BTreeMap<String, StateValue>,
+    pub(crate) state: BTreeMap<String, StateValue>,
     /// Allowed values for string keys, in order.
-    pub state_values: BTreeMap<String, Vec<String>>,
+    pub(crate) state_values: BTreeMap<String, Vec<String>>,
     /// Named conditions (`cond.<name>`).
-    pub conditions: Vec<(String, When)>,
+    pub(crate) conditions: Vec<(String, When)>,
     /// Regions by name.
-    pub regions: BTreeMap<String, Region>,
+    pub(crate) regions: BTreeMap<String, Region>,
     /// Icons by name.
-    pub icons: BTreeMap<String, Icon>,
+    pub(crate) icons: BTreeMap<String, Icon>,
     /// Language labels.
-    pub languages: BTreeMap<String, String>,
+    pub(crate) languages: BTreeMap<String, String>,
     /// Message templates.
-    pub messages: BTreeMap<String, Template>,
+    pub(crate) messages: BTreeMap<String, Template>,
     /// Tab stop.
-    pub tab_width: u32,
+    pub(crate) tab_width: u32,
     /// Draw icons as ASCII.
-    pub ascii_icons: bool,
+    pub(crate) ascii_icons: bool,
     /// Nodes by id.
-    pub nodes: BTreeMap<String, NodeSpec>,
+    pub(crate) nodes: BTreeMap<String, NodeSpec>,
     /// Parent of each node.
-    pub parent: BTreeMap<String, String>,
+    pub(crate) parent: BTreeMap<String, String>,
     /// The key layer (`ux:<id>`).
-    pub keys: Layer,
+    pub(crate) keys: Layer,
     /// Themes by name.
-    pub themes: BTreeMap<String, Theme>,
+    pub(crate) themes: BTreeMap<String, Theme>,
     /// The one surface node (the editor region).
-    pub surface: String,
+    pub(crate) surface: String,
 }
 
 impl Pack {
@@ -333,7 +324,7 @@ impl Pack {
     /// # Errors
     ///
     /// Every problem found, or one if the folder cannot be read.
-    pub fn from_source(
+    pub(crate) fn from_source(
         src: &PackSource,
         known: &dyn Fn(&str) -> bool,
     ) -> Result<Self, Vec<PackError>> {
@@ -347,7 +338,7 @@ impl Pack {
     /// # Errors
     ///
     /// Every problem found.
-    pub fn load(
+    pub(crate) fn load(
         files: &[(String, String)],
         known: &dyn Fn(&str) -> bool,
     ) -> Result<Self, Vec<PackError>> {
@@ -370,7 +361,7 @@ impl Pack {
     }
 
     /// The theme to use: `want` if given, else the pack's default.
-    pub fn theme_named(&self, want: Option<&str>) -> Option<(&str, &Theme)> {
+    pub(crate) fn theme_named(&self, want: Option<&str>) -> Option<(&str, &Theme)> {
         let name = want.unwrap_or(&self.theme);
         self.themes
             .get_key_value(name)
@@ -378,7 +369,7 @@ impl Pack {
     }
 
     /// True if `node` is `ancestor` or inside it.
-    pub fn within(&self, node: &str, ancestor: &str) -> bool {
+    pub(crate) fn within(&self, node: &str, ancestor: &str) -> bool {
         let mut n = node;
         loop {
             if n == ancestor {
@@ -392,7 +383,7 @@ impl Pack {
     }
 
     /// The region whose node contains `node`, if any.
-    pub fn region_of(&self, node: &str) -> Option<&str> {
+    pub(crate) fn region_of(&self, node: &str) -> Option<&str> {
         self.regions
             .iter()
             .find(|(_, r)| self.within(node, &r.node))
@@ -400,7 +391,7 @@ impl Pack {
     }
 
     /// A message with its placeholders filled.
-    pub fn message(&self, id: &str, args: &[(&str, &str)]) -> String {
+    pub(crate) fn message(&self, id: &str, args: &[(&str, &str)]) -> String {
         self.messages.get(id).map_or_else(
             || id.to_owned(),
             |t| {

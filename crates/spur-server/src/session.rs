@@ -520,11 +520,16 @@ impl State {
         };
         let before = ux.files.generation;
         while let Some(d) = sub.try_recv() {
-            if let Delivery::Event(e) = d
-                && let Some(path) = e.payload.get("path").and_then(Value::as_str)
-                && let Some(rel) = ux.files.rel(Path::new(path))
-            {
-                ux.files.reread(parent_of(&rel));
+            match d {
+                Delivery::Event(e) => {
+                    if let Some(path) = e.payload.get("path").and_then(Value::as_str)
+                        && let Some(rel) = ux.files.rel(Path::new(path))
+                    {
+                        ux.files.reread(parent_of(&rel));
+                    }
+                }
+                // Some saves were missed: read every folder again.
+                Delivery::Lagged { .. } => ux.files.reread_all(),
             }
         }
         if ux.files.generation != before {
@@ -1124,7 +1129,7 @@ fn load_ux(core: &Core<Editor>, src: &PackSource, cfg: &SessionConfig) -> Result
 }
 
 /// True if `id` is `n` or one of its descendants.
-fn has_node(n: &Node, id: &str) -> bool {
+pub(crate) fn has_node(n: &Node, id: &str) -> bool {
     n.id == id || n.children.iter().any(|c| has_node(c, id))
 }
 
@@ -1200,7 +1205,6 @@ fn render_ux(c: &mut Client, ux: &mut Ux, ed: &Editor, ctx: &Context, others: &[
             ui.sent_lists.insert(id.clone(), window);
         }
     }
-    ui.shown_lists = built.lists;
     let surface = surface_shown.then(|| {
         let view = frame::surface(ed, c.active, rows, others);
         // A surface new in the tree starts from a full frame.

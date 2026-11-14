@@ -8,7 +8,9 @@ use spur_core::{Actor, CommandId, Invocation, Scoped, Target};
 use spur_keymap::{Dispatch, parse_keys};
 use spur_rpc::{MouseAction, NodeKind, ServerMsg, Size, SurfaceSize};
 
-use crate::session::{SCROLL_MARGIN, State};
+use crate::client::MAX_ROWS;
+use crate::session::{SCROLL_MARGIN, State, has_node};
+use crate::ux::EDITOR_REGION;
 
 /// The command id of an invocation, for notices.
 fn command_name(inv: &Invocation) -> String {
@@ -51,6 +53,14 @@ impl State {
             for d in feed.run {
                 self.dispatch(conn, &d);
             }
+            self.input_done(conn);
+        }
+    }
+
+    /// The quit prompt counts as confirmed only during the input that saw it.
+    fn input_done(&mut self, conn: u64) {
+        if let Some(ui) = self.clients.get_mut(&conn).and_then(|c| c.ui.as_mut()) {
+            ui.quit_armed = false;
         }
     }
 
@@ -75,7 +85,11 @@ impl State {
             let name = command_name(&inv);
             match self.run_as(conn, inv) {
                 None => return,
-                Some(Err(e)) => self.set_status(conn, &name, &e.message),
+                // Later steps assumed this one worked.
+                Some(Err(e)) => {
+                    self.set_status(conn, &name, &e.message);
+                    return;
+                }
                 Some(Ok(_)) => {}
             }
         }
@@ -89,8 +103,9 @@ impl State {
             .clients
             .get(&conn)
             .and_then(|c| c.ui.as_ref())
-            .is_some_and(|u| u.focus != "editor");
+            .is_some_and(|u| u.focus != EDITOR_REGION);
         if elsewhere {
+            self.input_done(conn);
             return;
         }
         self.end_step(conn);
@@ -101,6 +116,7 @@ impl State {
             self.error(conn, e.message);
         }
         self.end_step(conn);
+        self.input_done(conn);
     }
 
     /// Ends the undo step of `conn`'s active view, so the next edit starts a new one.
@@ -120,6 +136,14 @@ impl State {
         item: Option<&str>,
     ) {
         let (line, col, lines) = at;
+        // Only what the client was last shown can be pressed.
+        let in_tree = self.clients.get(&conn).is_none_or(|c| {
+            c.ui.as_ref()
+                .is_none_or(|u| u.sent_ui.as_ref().is_some_and(|(n, _)| has_node(n, node)))
+        });
+        if !in_tree {
+            return;
+        }
         let surface = node == self.surface_id();
         let (region, kind) = match self.ux.as_ref() {
             Some(ux) => (
@@ -175,6 +199,7 @@ impl State {
             }
             MouseAction::Scroll | MouseAction::Unknown => {}
         }
+        self.input_done(conn);
         self.check_focus(conn);
     }
 
@@ -253,7 +278,7 @@ impl State {
                     .get(&s.node)
                     .is_some_and(|n| n.kind == NodeKind::List);
                 if list {
-                    ui.list_rows.insert(s.node.clone(), s.rows);
+                    ui.list_rows.insert(s.node.clone(), s.rows.min(MAX_ROWS));
                 }
             }
         }

@@ -24,6 +24,8 @@ pub struct Entry {
     pub dir: bool,
     /// The name was valid UTF-8 (otherwise it cannot be opened).
     pub utf8: bool,
+    /// A symlink to a folder: listed as an entry, never followed or opened.
+    pub link_dir: bool,
 }
 
 /// What reading a folder gave.
@@ -85,6 +87,14 @@ impl Files {
         }
     }
 
+    /// Reads every folder read before again (some saves were missed).
+    pub fn reread_all(&mut self) {
+        let dirs: Vec<String> = self.dirs.keys().cloned().collect();
+        for d in dirs {
+            self.reread(&d);
+        }
+    }
+
     /// The relative id of an absolute path under the root.
     pub fn rel(&self, path: &Path) -> Option<String> {
         let rel = path.strip_prefix(&self.root).ok()?;
@@ -119,15 +129,18 @@ fn read_capped(path: &Path, cap: usize) -> Listing {
             None => (os.to_string_lossy().into_owned(), false),
         };
         // `file_type` does not follow symlinks, so a link to a folder is a leaf.
-        let dir = e.file_type().is_ok_and(|t| t.is_dir());
-        entries.push(Entry { name, dir, utf8 });
+        let ty = e.file_type().ok();
+        let dir = ty.is_some_and(|t| t.is_dir());
+        let link_dir = ty.is_some_and(|t| t.is_symlink())
+            && std::fs::metadata(e.path()).is_ok_and(|m| m.is_dir());
+        entries.push(Entry {
+            name,
+            dir,
+            utf8,
+            link_dir,
+        });
     }
-    entries.sort_by(|a, b| {
-        b.dir
-            .cmp(&a.dir)
-            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-            .then_with(|| a.name.cmp(&b.name))
-    });
+    entries.sort_by_cached_key(|e| (!e.dir, e.name.to_lowercase(), e.name.clone()));
     Listing::Read { entries, more }
 }
 
@@ -201,14 +214,14 @@ impl Tree {
         if self.rows.iter().any(|r| r.id == sel) {
             return;
         }
-        // The nearest ancestor still shown.
-        let mut id = sel.as_str();
-        while let Some(i) = id.rfind('/') {
-            id = &id[..i];
+        // The nearest folder above it still shown.
+        let mut id = row_parent(&sel);
+        while !id.is_empty() {
             if self.rows.iter().any(|r| r.id == id) {
                 self.selected = Some(id.to_owned());
                 return;
             }
+            id = parent_of(id);
         }
         self.selected = self.rows.first().map(|r| r.id.clone());
     }
@@ -233,7 +246,10 @@ impl Tree {
         }
         let cur = self.index_of_selected().unwrap_or(0);
         let last = i64::try_from(n - 1).unwrap_or(i64::MAX);
-        let to = (i64::try_from(cur).unwrap_or(0) + by).clamp(0, last);
+        let to = i64::try_from(cur)
+            .unwrap_or(0)
+            .saturating_add(by)
+            .clamp(0, last);
         let to = usize::try_from(to).unwrap_or(0);
         self.selected = Some(self.rows[to].id.clone());
         self.keep_visible(to, height);
@@ -283,10 +299,30 @@ impl Tree {
             self.expanded.remove(&r.id);
             self.generation += 1;
         } else if r.depth > 0 {
-            let parent = parent_of(&r.id);
+            let parent = row_parent(&r.id);
             if !parent.is_empty() {
                 self.selected = Some(parent.to_owned());
             }
+        }
+    }
+
+    /// Activates the selected row: a folder toggles, a file asks to be opened.
+    pub fn activate(&mut self, files: &mut Files) -> Activate {
+        self.rows(files);
+        let Some(r) = self.selected_row().cloned() else {
+            return Activate::Nothing;
+        };
+        match r.kind {
+            ItemKind::Dir if r.open => {
+                self.collapse();
+                Activate::Toggled
+            }
+            ItemKind::Dir => {
+                self.expand(files);
+                Activate::Toggled
+            }
+            ItemKind::Entry if r.openable => Activate::Open(files.root().join(&r.id)),
+            _ => Activate::Nothing,
         }
     }
 
@@ -351,9 +387,28 @@ impl Tree {
     }
 }
 
-/// The parent folder id of a row id (`""` at the top).
+/// What activating a row asks for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Activate {
+    /// Nothing happens.
+    Nothing,
+    /// A folder was expanded or collapsed.
+    Toggled,
+    /// Open this file.
+    Open(PathBuf),
+}
+
+/// The parent folder id of a path id (`""` at the top).
 pub fn parent_of(id: &str) -> &str {
     id.rfind('/').map_or("", |i| &id[..i])
+}
+
+/// The folder a row sits in: its parent, or for a "more" or "unreadable" row the
+/// folder it reports on.
+pub fn row_parent(id: &str) -> &str {
+    id.strip_prefix("#more:")
+        .or_else(|| id.strip_prefix("#error:"))
+        .unwrap_or_else(|| parent_of(id))
 }
 
 fn push_rows(
@@ -391,7 +446,7 @@ fn push_rows(
                         ItemKind::Entry
                     },
                     open,
-                    openable: !e.dir && e.utf8,
+                    openable: !e.dir && e.utf8 && !e.link_dir,
                 });
                 if open {
                     push_rows(files, expanded, &id, depth + 1, out);
@@ -459,6 +514,7 @@ mod tests {
                     name: "a".into(),
                     dir: false,
                     utf8: true,
+                    link_dir: false,
                 }],
                 more: 12,
             },
@@ -488,5 +544,34 @@ mod tests {
         assert_eq!(files.rel(&d.join("a/b")).as_deref(), Some("a/b"));
         assert_eq!(parent_of("a/b"), "a");
         assert_eq!(parent_of("a"), "");
+    }
+
+    #[test]
+    fn left_on_an_error_row_selects_its_folder() {
+        let d = temp("errrow");
+        let mut files = Files::new(d.clone());
+        files.dirs.insert(
+            String::new(),
+            Listing::Read {
+                entries: vec![Entry {
+                    name: "src".into(),
+                    dir: true,
+                    utf8: true,
+                    link_dir: false,
+                }],
+                more: 0,
+            },
+        );
+        files
+            .dirs
+            .insert("src".into(), Listing::Failed("denied".into()));
+        let mut t = Tree::default();
+        t.expanded.insert("src".into());
+        t.rows(&mut files);
+        assert!(t.select("#error:src"));
+        t.collapse();
+        assert_eq!(t.selected.as_deref(), Some("src"));
+        assert_eq!(row_parent("#more:a/b"), "a/b");
+        assert_eq!(row_parent("a/b"), "a");
     }
 }

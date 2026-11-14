@@ -124,9 +124,7 @@ impl Client {
                 cols,
             })
             .collect();
-        self.end
-            .send(ClientMsg::Layout { surfaces })
-            .expect("send");
+        self.end.send(ClientMsg::Layout { surfaces }).expect("send");
         self.sync();
     }
 

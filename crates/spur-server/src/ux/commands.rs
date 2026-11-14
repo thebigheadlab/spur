@@ -3,11 +3,13 @@
 //! them here before any of its own bookkeeping.
 
 use serde_json::{Value, json};
-use spur_core::{Actor, CommandError, CommandId, Invocation, Scoped};
-use spur_rpc::{ItemKind, ServerMsg};
+use spur_core::{Actor, CommandError, CommandId, Context, Invocation, Scoped};
+use spur_rpc::ServerMsg;
 
+use super::EDITOR_REGION;
+use super::files::Activate;
 use super::pack::StateValue;
-use super::state::shown;
+use super::state::{first_list, shown};
 use crate::session::State;
 
 /// Every `ui.*` command id.
@@ -79,7 +81,7 @@ impl State {
                 let (Some(ux), Some(c)) = (self.ux.as_mut(), self.clients.get_mut(&conn)) else {
                     return Ok(Value::Null);
                 };
-                if let Some(list) = focused_list(ux, c)
+                if let Some(list) = focused_list(ux, c, self.core.context())
                     && let Some(t) = c.ui.as_mut().and_then(|u| u.trees.get_mut(&list))
                 {
                     if expand {
@@ -127,7 +129,7 @@ impl State {
                 let by = arg_int(args, "by")?;
                 let at = list.iter().position(|v| v == s).unwrap_or(0);
                 let n = i64::try_from(list.len()).unwrap_or(1);
-                let i = (i64::try_from(at).unwrap_or(0) + by).rem_euclid(n);
+                let i = (i64::try_from(at).unwrap_or(0) + by.rem_euclid(n)).rem_euclid(n);
                 StateValue::Str(list[usize::try_from(i).unwrap_or(0)].clone())
             }
             _ => {
@@ -175,8 +177,8 @@ impl State {
             ux.pack.regions.get(&ui.focus).is_some_and(|r| {
                 shown(&ux.pack, &r.node, &Scoped(&[self.core.context(), &c.scope]))
             });
-        if !ok && ui.focus != "editor" {
-            ui.focus = "editor".into();
+        if !ok && ui.focus != EDITOR_REGION {
+            ui.focus = EDITOR_REGION.into();
             c.keymap.reset();
             c.dirty = true;
             self.refresh_client(conn);
@@ -187,7 +189,7 @@ impl State {
         let (Some(ux), Some(c)) = (self.ux.as_mut(), self.clients.get_mut(&conn)) else {
             return;
         };
-        let Some(list) = focused_list(ux, c) else {
+        let Some(list) = focused_list(ux, c, self.core.context()) else {
             return;
         };
         let rows = c.rows_hint();
@@ -195,7 +197,7 @@ impl State {
         let height = ui.list_rows.get(&list).copied().unwrap_or(rows);
         if let Some(t) = ui.trees.get_mut(&list) {
             let step = if page {
-                by * i64::from(height.max(1))
+                by.saturating_mul(i64::from(height.max(1)))
             } else {
                 by
             };
@@ -208,36 +210,24 @@ impl State {
         let (Some(ux), Some(c)) = (self.ux.as_mut(), self.clients.get_mut(&conn)) else {
             return;
         };
-        let Some(list) = list.or_else(|| focused_list(ux, c)) else {
+        let Some(list) = list.or_else(|| focused_list(ux, c, self.core.context())) else {
             return;
         };
         let Some(t) = c.ui.as_mut().and_then(|u| u.trees.get_mut(&list)) else {
             return;
         };
         c.dirty = true;
-        t.rows(&mut ux.files);
-        let Some(row) = t.selected_row().cloned() else {
-            return;
-        };
-        match row.kind {
-            ItemKind::Dir if row.open => t.collapse(),
-            ItemKind::Dir => {
-                t.expand(&mut ux.files);
+        if let Activate::Open(path) = t.activate(&mut ux.files) {
+            let inv = Invocation::new(
+                CommandId::new("editor.open").unwrap_or_else(|e| unreachable!("{e}")),
+                Actor::User,
+            )
+            .args(json!({ "path": path }));
+            match self.run_as(conn, inv) {
+                Some(Ok(_)) => self.set_focus(conn, EDITOR_REGION),
+                Some(Err(e)) => self.set_status(conn, "editor.open", &e.message),
+                None => {}
             }
-            ItemKind::Entry if row.openable => {
-                let path = ux.files.root().join(&row.id);
-                let inv = Invocation::new(
-                    CommandId::new("editor.open").unwrap_or_else(|e| unreachable!("{e}")),
-                    Actor::User,
-                )
-                .args(json!({ "path": path }));
-                match self.run_as(conn, inv) {
-                    Some(Ok(_)) => self.set_focus(conn, "editor"),
-                    Some(Err(e)) => self.set_status(conn, "editor.open", &e.message),
-                    None => {}
-                }
-            }
-            _ => {}
         }
     }
 
@@ -302,14 +292,12 @@ impl State {
     }
 }
 
-/// The first shown list node inside the focused region.
-fn focused_list(ux: &super::Ux, c: &crate::client::Client) -> Option<String> {
+/// The first shown list node inside the focused region, under the client's
+/// current scope (keys handled before the next render see the new state).
+fn focused_list(ux: &super::Ux, c: &crate::client::Client, global: &Context) -> Option<String> {
     let ui = c.ui.as_ref()?;
     let region = ux.pack.regions.get(&ui.focus)?;
-    ui.shown_lists
-        .iter()
-        .find(|l| ux.pack.within(l, &region.node))
-        .cloned()
+    first_list(&ux.pack, &region.node, &Scoped(&[global, &c.scope]))
 }
 
 /// True if `inv` is a `ui.*` command; its id.

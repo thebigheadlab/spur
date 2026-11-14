@@ -81,10 +81,28 @@ mod bench {
             ("bare 300x100, 1 client", (300, 100), &big, 1, Kind::Bare),
             ("bare 300x100, 2 clients", (300, 100), &big, 2, Kind::Bare),
             ("typing 80x24, 1 client", (80, 24), &small, 1, Kind::Typing),
-            ("typing 300x100, 1 client", (300, 100), &big, 1, Kind::Typing),
-            ("typing 300x100, 2 clients", (300, 100), &big, 2, Kind::Typing),
+            (
+                "typing 300x100, 1 client",
+                (300, 100),
+                &big,
+                1,
+                Kind::Typing,
+            ),
+            (
+                "typing 300x100, 2 clients",
+                (300, 100),
+                &big,
+                2,
+                Kind::Typing,
+            ),
             ("tree 160x45, 1 client", (160, 45), &small, 1, Kind::Tree),
-            ("bare save 160x45, 1 client", (160, 45), &small, 1, Kind::BareSave),
+            (
+                "bare save 160x45, 1 client",
+                (160, 45),
+                &small,
+                1,
+                Kind::BareSave,
+            ),
             ("save 160x45, 1 client", (160, 45), &small, 1, Kind::Save),
         ] {
             let n = if matches!(kind, Kind::Save | Kind::BareSave) {
@@ -200,9 +218,15 @@ mod bench {
         let stats = session.stats();
         let server: Vec<Duration> = if matches!(kind, Kind::Save | Kind::BareSave) {
             // Only the samples of the saves.
-            server_keys.iter().filter_map(|&n| stats.get(n).copied()).collect()
+            server_keys
+                .iter()
+                .filter_map(|&n| stats.get(n).copied())
+                .collect()
         } else {
-            stats.get(start + WARMUP..).map(<[_]>::to_vec).unwrap_or_default()
+            stats
+                .get(start + WARMUP..)
+                .map(<[_]>::to_vec)
+                .unwrap_or_default()
         };
         drop(c);
         session.join();

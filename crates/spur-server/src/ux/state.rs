@@ -9,6 +9,7 @@ use spur_rpc::{ListView, Node};
 
 use super::files::{Files, Tree};
 use super::pack::{Pack, StateValue};
+use super::{EDITOR_REGION, FILES_SOURCE};
 use crate::lang;
 
 /// A client's UI state.
@@ -28,8 +29,6 @@ pub struct UiState {
     pub trees: BTreeMap<String, Tree>,
     /// Rows each list node was given by the client's layout.
     pub list_rows: BTreeMap<String, u32>,
-    /// List nodes in the tree last built, in tree order.
-    pub shown_lists: Vec<String>,
     /// The windows last sent, by list node; forgotten when the node is not shown.
     pub sent_lists: BTreeMap<String, ListView>,
     /// The theme generation last sent.
@@ -44,18 +43,17 @@ impl UiState {
         let trees = pack
             .nodes
             .iter()
-            .filter(|(_, n)| n.source.as_deref() == Some("workspace.files"))
+            .filter(|(_, n)| n.source.as_deref() == Some(FILES_SOURCE))
             .map(|(id, _)| (id.clone(), Tree::revealing(files, reveal)))
             .collect();
         Self {
             values: pack.state.clone(),
-            focus: "editor".into(),
+            focus: EDITOR_REGION.into(),
             prompt: None,
             status: None,
             quit_armed: false,
             trees,
             list_rows: BTreeMap::new(),
-            shown_lists: Vec::new(),
             sent_lists: BTreeMap::new(),
             sent_theme: None,
             sent_ui: None,
@@ -92,11 +90,11 @@ impl UiState {
                 .insert(k.clone(), keep.unwrap_or(default).clone());
         }
         if !pack.regions.contains_key(&self.focus) {
-            self.focus = "editor".into();
+            self.focus = EDITOR_REGION.into();
         }
         let mut trees = std::mem::take(&mut self.trees);
         for (id, n) in &pack.nodes {
-            if n.source.as_deref() == Some("workspace.files") {
+            if n.source.as_deref() == Some(FILES_SOURCE) {
                 let t = trees
                     .remove(id)
                     .or_else(|| trees.values().next().cloned())
@@ -180,6 +178,26 @@ pub fn text_of(v: &CtxValue) -> String {
         CtxValue::Str(s) => s.to_string(),
         CtxValue::List(l) => l.join(", "),
     }
+}
+
+/// The first list node under `node` (itself included) in tree order, among the
+/// nodes whose `when` holds. `node` is taken as shown.
+pub fn first_list(pack: &Pack, node: &str, look: &impl ContextLookup) -> Option<String> {
+    let spec = pack.nodes.get(node)?;
+    if spec.kind == spur_rpc::NodeKind::List {
+        return Some(node.to_owned());
+    }
+    spec.children.iter().find_map(|c| {
+        let shown = pack
+            .nodes
+            .get(c)
+            .is_some_and(|s| s.when.as_ref().is_none_or(|w| w.eval(look)));
+        if shown {
+            first_list(pack, c, look)
+        } else {
+            None
+        }
+    })
 }
 
 /// True if `node` and every node above it pass their `when`.

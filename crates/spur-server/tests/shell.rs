@@ -781,3 +781,94 @@ fn bad_packs_and_themes_stop_the_session() {
         "{err}"
     );
 }
+
+#[test]
+fn keys_in_one_message_see_the_state_the_earlier_ones_made() {
+    let root = workspace("batched");
+    let s = session_in(&root, &["notes.txt"]);
+    let mut c = Client::attach(&s, 80, 24);
+    // The sidebar is hidden: the list it shows appears only with the first key.
+    c.keys("<C-S-e><Up>");
+    assert_eq!(c.focus(), "sidebar");
+    assert_eq!(c.selected(), "src");
+    // Switching to Sessions hides the Files list: Down then moves nothing.
+    c.keys("<A-2><Down><A-1>");
+    assert_eq!(c.selected(), "src");
+}
+
+#[test]
+fn an_unreadable_folder_shows_one_error_row() {
+    let base = std::env::temp_dir().join(format!("spur-shell-{}-missing", std::process::id()));
+    let s = Session::spawn(SessionConfig {
+        pack: Some(PackSource::Dir(pack_dir())),
+        root: base.join("not-there"),
+        ..Default::default()
+    })
+    .unwrap();
+    let c = Client::attach(&s, 160, 30);
+    let items = &c.files().items;
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].id, "#error:");
+    assert_eq!(items[0].kind, ItemKind::Error);
+    assert!(
+        items[0].text.starts_with("cannot read: "),
+        "{}",
+        items[0].text
+    );
+}
+
+#[test]
+fn refresh_sends_everything_again() {
+    let root = workspace("refresh");
+    let s = session_in(&root, &["notes.txt"]);
+    let mut c = Client::attach(&s, 160, 30);
+    c.send(ClientMsg::Refresh);
+    let got = c.sync();
+    assert_eq!(kinds(&got), ["theme", "ui", "list", "surface", "flush"]);
+    let ServerMsg::Surface { view, .. } = &got[3] else {
+        unreachable!()
+    };
+    assert_eq!(view.base, None, "a full surface");
+}
+
+#[test]
+fn the_quit_prompt_is_confirmed_only_by_the_next_quit_key() {
+    let root = workspace("quitwire");
+    let s = session_in(&root, &["notes.txt"]);
+    let mut c = Client::attach(&s, 160, 30);
+    c.keys("x");
+    c.keys("<C-q>");
+    c.keys("<Right>");
+    // The prompt is gone: a quit from elsewhere asks again.
+    let r = c.command("ui.quit", json!({}));
+    assert!(matches!(r, Reply::Ok(_)), "{r:?}");
+    assert_eq!(c.bye, None);
+    assert!(c.notice().is_some());
+}
+
+#[test]
+fn presses_on_nodes_the_client_was_not_shown_are_ignored() {
+    let root = workspace("hidden");
+    let s = session_in(&root, &["notes.txt"]);
+    let mut c = Client::attach(&s, 80, 24);
+    assert!(!c.shows("agent"));
+    c.press("tab_threads", None);
+    c.keys("<C-A-b>");
+    assert!(c.shows("chat_view"), "the hidden tab was not clicked");
+    c.press("tab_threads", None);
+    assert!(c.shows("threads_view"));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlink_to_a_folder_is_listed_but_not_opened() {
+    let root = workspace("symlink");
+    std::os::unix::fs::symlink(root.join("src"), root.join("link")).unwrap();
+    let s = session_in(&root, &["notes.txt"]);
+    let mut c = Client::attach(&s, 160, 30);
+    let item = c.files().items.iter().find(|i| i.id == "link").unwrap();
+    assert_eq!(item.kind, ItemKind::Entry);
+    c.press("files_list", Some("link"));
+    assert_eq!(c.node("code_title").text.as_deref(), Some("notes.txt"));
+    assert_eq!(c.notice(), None);
+}

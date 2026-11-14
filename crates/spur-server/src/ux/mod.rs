@@ -8,6 +8,11 @@ pub mod pack;
 pub mod state;
 
 use files::Files;
+
+/// The region of the code surface; focus returns here.
+pub const EDITOR_REGION: &str = "editor";
+/// The list source of the Files tree.
+pub const FILES_SOURCE: &str = "workspace.files";
 use pack::{Pack, Theme};
 
 /// The session's UX: the loaded pack and what every client shares.
