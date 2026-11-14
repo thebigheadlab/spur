@@ -36,6 +36,10 @@ struct Shared {
     paths: Vec<Path32>,
     /// The same paths, to look one up.
     known: std::collections::HashSet<Path32>,
+    /// Saved files the last walk did not list (ignored or hidden, or new).
+    missed: std::collections::HashSet<String>,
+    /// A walk aside is running.
+    aside: bool,
     done: bool,
     capped: bool,
     /// Matchers fed by the walk, by client.
@@ -128,7 +132,11 @@ impl Index {
                 s.capped = false;
                 s.sinks.clear();
                 (s.generation, true)
+            } else if s.aside {
+                // One walk aside at a time: it is not restarted for staleness.
+                return s.generation;
             } else {
+                s.aside = true;
                 (s.generation, false)
             }
         };
@@ -141,11 +149,21 @@ impl Index {
                     walk(&root, &shared, &stop, generation);
                     lock(&shared).sinks.iter().map(|(c, _)| *c).collect()
                 } else {
-                    let Some((paths, capped)) = collect(&root, &stop) else {
+                    let found = collect(&root, &stop);
+                    let mut s = lock(&shared);
+                    s.aside = false;
+                    let Some((paths, capped)) = found else {
                         return;
                     };
-                    let mut s = lock(&shared);
                     if stop.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    s.missed.clear();
+                    // The same files: nothing to swap, no matcher refills.
+                    if capped == s.capped
+                        && paths.len() == s.known.len()
+                        && paths.iter().all(|p| s.known.contains(p))
+                    {
                         return;
                     }
                     s.generation += 1;
@@ -196,12 +214,19 @@ impl Index {
         lock(&self.shared).sinks.retain(|(c, _)| *c != client);
     }
 
-    /// A file was saved: if the index does not list it, the next palette open
-    /// walks again (the walk decides whether ignore rules hide it).
+    /// A file was saved: if the index does not list it, and it was not saved
+    /// since the last walk already, the next palette open walks again (the walk
+    /// decides whether ignore rules hide it).
     pub fn saved(&mut self, rel: &str) {
-        if !lock(&self.shared).known.contains(rel) {
+        let mut s = lock(&self.shared);
+        if !s.known.contains(rel) && s.missed.insert(rel.to_owned()) {
             self.started = None;
         }
+    }
+
+    /// Some saves were missed: the next palette open walks again.
+    pub fn mark_stale(&mut self) {
+        self.started = None;
     }
 }
 
@@ -328,6 +353,11 @@ mod tests {
         assert!(!idx.stale(), "a listed file changes nothing");
         idx.saved("src/new.rs");
         assert!(idx.stale());
+        idx.started = Some(Instant::now());
+        idx.saved("src/new.rs");
+        assert!(!idx.stale(), "saved again before a walk: no second walk");
+        idx.mark_stale();
+        assert!(idx.stale());
         let g = idx.status().generation;
         idx.walk(None);
         let t = Instant::now();
@@ -336,6 +366,14 @@ mod tests {
         }
         assert_eq!(idx.status().count, 3);
         assert!(idx.status().done);
+        // The same files again: no swap, the generation stays.
+        let g = idx.status().generation;
+        idx.walk(None);
+        let t = Instant::now();
+        while lock(&idx.shared).aside && t.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(idx.status().generation, g);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

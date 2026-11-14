@@ -720,7 +720,10 @@ impl State {
                     }
                 }
                 // Some saves were missed: read every folder again.
-                Delivery::Lagged { .. } => ux.files.reread_all(),
+                Delivery::Lagged { .. } => {
+                    ux.files.reread_all();
+                    ux.index.mark_stale();
+                }
             }
         }
         if ux.files.generation != before {

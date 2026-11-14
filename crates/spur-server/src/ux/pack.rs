@@ -2452,7 +2452,15 @@ impl<'k> Loader<'k> {
                 for (id, a) in &pack.actions {
                     match a.bindings() {
                         Ok(b) => expanded.extend(b),
-                        Err(e) => self.push(src.err(None, &format!("actions.{id}"), e)),
+                        Err(e) => {
+                            let (file, line) = self.action_at.get(id).cloned().unwrap_or_default();
+                            self.push(PackError {
+                                file,
+                                line: Some(line),
+                                path: format!("actions.{id}"),
+                                message: e,
+                            });
+                        }
                     }
                 }
                 layer.bindings.splice(0..0, expanded);

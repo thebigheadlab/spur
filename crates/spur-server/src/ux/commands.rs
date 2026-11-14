@@ -136,6 +136,9 @@ fn emit(cx: &mut Cx<'_, Editor>, name: &str, payload: Value) {
     }
 }
 
+/// Longest wait for file matches when Enter comes before their frame.
+const FINISH_MS: u64 = 100;
+
 impl ClientHost<Editor> for UiHost<'_> {
     #[allow(clippy::too_many_lines)]
     fn call(
@@ -443,6 +446,17 @@ impl UiHost<'_> {
     /// runs the action (after the call, as a key press in the restored region).
     fn palette_run(&mut self, cx: &mut Cx<'_, Editor>) {
         let (ux, c) = (&mut *self.ux, &mut *self.client);
+        // Enter on a query no frame has shown: let the file matches finish first,
+        // so the row run is this query's best, not an older query's.
+        let unseen = c.ui.as_ref().is_some_and(|u| {
+            u.palette
+                .shown
+                .as_ref()
+                .is_none_or(|(g, _)| *g != u.palette.generation)
+        });
+        if unseen && let Some(m) = ux.matchers.get_mut(&c.id.0) {
+            m.finish(FINISH_MS);
+        }
         let Some(rows) = palette_rows(ux, c, cx.state, cx.context) else {
             return;
         };

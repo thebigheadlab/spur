@@ -500,31 +500,37 @@ fn run_entry<S>(
     args: &Value,
 ) -> Result<Value, CommandError> {
     let id = &entry.meta.id;
-    cx.owner = match &entry.meta.source {
+    let owner_of = |src: &Source| match src {
         Source::Extension { id } => Some(id.clone()),
         _ => None,
     };
     let hooks = registry.middleware.get(id).map_or(&[][..], Vec::as_slice);
     let mut args = Cow::Borrowed(args);
+    // Each hook runs as its own extension (no client host for an extension's).
     for mw in hooks {
-        if let Hook::Rewrite(f) = &mw.hook
-            && let Some(new) = f(cx, id, &args)
-        {
-            args = Cow::Owned(new);
+        if let Hook::Rewrite(f) = &mw.hook {
+            cx.owner = owner_of(&mw.source);
+            if let Some(new) = f(cx, id, &args) {
+                args = Cow::Owned(new);
+            }
         }
     }
-    let result = hooks
-        .iter()
-        .try_for_each(|mw| match &mw.hook {
-            Hook::Gate(f) => f(cx, id, &args),
-            _ => Ok(()),
-        })
-        .and_then(|()| (entry.handler)(cx, &args));
+    let gated = hooks.iter().try_for_each(|mw| match &mw.hook {
+        Hook::Gate(f) => {
+            cx.owner = owner_of(&mw.source);
+            f(cx, id, &args)
+        }
+        _ => Ok(()),
+    });
+    cx.owner = owner_of(&entry.meta.source);
+    let result = gated.and_then(|()| (entry.handler)(cx, &args));
     for mw in hooks {
         if let Hook::After(f) = &mw.hook {
+            cx.owner = owner_of(&mw.source);
             f(cx, id, &result);
         }
     }
+    cx.owner = owner_of(&entry.meta.source);
     result
 }
 

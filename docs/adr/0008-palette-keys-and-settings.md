@@ -14,7 +14,7 @@ ADR 0007 gave Spur its shell and left recorded debt: the `ui.*` commands sat out
 
 ### `ui.*` commands are core commands with a client host
 
-`ui.*` commands are registered in the core table, so they go through `Cx::execute`, middleware, auditing and events. Their handler cannot see a client's UI state, so `Core::execute_with` takes an optional `ClientHost`, the calling client's side of the call. The `ui` handler takes it with `Cx::take_host`, runs the command against the client's UI state, the shared pack state and the editor state, and puts it back. A nested call gets no host. A handler that belongs to an extension gets none either: client UI goes through `ui.*` commands.
+`ui.*` commands are registered in the core table, so they go through `Cx::execute`, middleware, auditing and events. Their handler cannot see a client's UI state, so `Core::execute_with` takes an optional `ClientHost`, the calling client's side of the call. The `ui` handler takes it with `Cx::take_host`, runs the command against the client's UI state, the shared pack state and the editor state, and puts it back. A nested call gets no host. A handler or middleware hook that belongs to an extension gets none either (hooks now run as their own extension): client UI goes through `ui.*` commands.
 
 Steps that change the session itself (moving focus back when a region is hidden, dropping a client on quit, running a pack action as a key press) cannot run while the core is borrowed for the call. The host returns them as effects, which `run_as` applies after the call.
 
@@ -48,11 +48,11 @@ Protocol additions: `ui` carries `overlays`; `input` messages; `ListView.generat
 
 Rows are built per frame from enum-dispatched sources: recent documents, actions that apply (titled, bound in the mode, `when` true), the line row, and the matched files. Small sources are matched on the session thread; files are matched by `nucleo` off it.
 
-**File index.** A walker thread (the `ignore` crate: `.gitignore` and `.ignore` honoured, hidden files skipped, links not followed, at most 200,000 files) starts with the session. The first walk streams paths straight into every client's matcher. A walk older than 30 seconds is redone when a palette opens; that walk runs aside while the old paths keep serving, then swaps in, and each matcher refills. Saving a file the index does not list marks it stale.
+**File index.** A walker thread (the `ignore` crate: `.gitignore` and `.ignore` honoured, hidden files skipped, links not followed, at most 200,000 files) starts with the session. The first walk streams paths straight into every client's matcher. A walk older than 30 seconds is redone when a palette opens; that walk runs aside while the old paths keep serving (one at a time), and swaps in only if the files changed, after which each matcher refills. While a matcher refills, a selected file that has not come back stays selected. Saving a file the index does not list marks it stale, once per file until the next walk; missed save events mark it stale too.
 
 **Matcher.** One `nucleo` instance per client, configured for paths. A query that extends the previous one reuses its matches. `nucleo`'s notify is coalesced into one `MatchReady` per client until the session thread has ticked.
 
-**Selection.** The selection is stored by row id and index and follows the first row until the person moves it. A selected file that moves is found again among the best 10,000 matches. Enter runs the row as it was last drawn or chosen in the current query generation, so a tick between drawing and Enter cannot change what runs.
+**Selection.** The selection is stored by row id and index and follows the first row until the person moves it. A selected file that moves is found again among the best 10,000 matches. Enter runs the row as it was last drawn or chosen in the current query generation, so a tick between drawing and Enter cannot change what runs. When Enter arrives before any frame showed the current query (keys in one batch, a paste), the session waits up to 100 ms for the file matches to finish, so the row run is the current query's best.
 
 **Go to line.** `:` or ctrl+g takes `line` or `line:column` (1-based on screen); a number past the end goes to the last line. `view.move_to`'s column is optional and defaults to the first non-blank.
 

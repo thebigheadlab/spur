@@ -46,6 +46,10 @@ pub struct Matcher {
     pub index_generation: u64,
     /// For match indices of shown rows.
     indices: nucleo::Matcher,
+    /// Paths the index held when it was (re)filled, and whether the last tick
+    /// left matching unfinished: until both settle, rows can still move in.
+    expected: u32,
+    running: bool,
 }
 
 impl std::fmt::Debug for Matcher {
@@ -75,14 +79,17 @@ impl Matcher {
             query: String::new(),
             index_generation,
             indices: nucleo::Matcher::new(Config::DEFAULT.match_paths()),
+            expected: u32::try_from(index.status().count).unwrap_or(u32::MAX),
+            running: true,
         }
     }
 
     /// Refills from a newer walk of `index`.
     pub fn refill(&mut self, conn: u64, index: &Index) {
-        self.nucleo.restart(true);
+        self.nucleo.restart(false);
         self.index_generation = index.attach(conn, self.nucleo.injector());
-        self.nucleo.tick(0);
+        self.expected = u32::try_from(index.status().count).unwrap_or(u32::MAX);
+        self.running = self.nucleo.tick(0).running;
     }
 
     /// Gives the matcher a new query and starts matching; returns at once.
@@ -96,13 +103,28 @@ impl Matcher {
             .pattern
             .reparse(0, query, CaseMatching::Smart, Normalization::Smart, append);
         query.clone_into(&mut self.query);
-        self.nucleo.tick(0);
+        self.running = self.nucleo.tick(0).running;
     }
 
     /// Takes in the latest results (after a notify). True if they changed.
     pub fn ready(&mut self) -> bool {
         self.pending.store(false, Ordering::Release);
-        self.nucleo.tick(0).changed
+        let st = self.nucleo.tick(0);
+        self.running = st.running;
+        st.changed
+    }
+
+    /// True while rows can still move in: matching is unfinished, or the
+    /// matcher holds fewer paths than the index had when it was filled.
+    pub fn filling(&self) -> bool {
+        self.running || self.nucleo.snapshot().item_count() < self.expected
+    }
+
+    /// Waits up to `ms` for matching of the current query to finish (Enter on a
+    /// query no frame has shown yet).
+    pub fn finish(&mut self, ms: u64) {
+        let st = self.nucleo.tick(ms);
+        self.running = st.running;
     }
 
     /// Matched files.
@@ -393,6 +415,11 @@ impl Rows {
                 st.index = i;
                 return;
             }
+            // A file not (yet) back after a refill stays selected; it is found
+            // again when its row arrives.
+            if id.starts_with("f:") && m.is_some_and(Matcher::filling) {
+                return;
+            }
         }
         if let Some(i) = self.selectable(0, true, m, root) {
             st.index = i;
@@ -554,7 +581,11 @@ impl Rows {
             .selected
             .is_some()
             .then_some(st.index)
-            .filter(|i| *i < total);
+            .filter(|i| *i < total)
+            .filter(|i| {
+                self.at(*i, m.as_deref(), Path::new(""))
+                    .is_some_and(|(id, _, _)| Some(&id) == st.selected.as_ref())
+            });
         ListView {
             offset: st.offset,
             total,

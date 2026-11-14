@@ -1301,6 +1301,27 @@ fn the_palette_opens_matches_files_and_opens_one() {
 }
 
 #[test]
+fn enter_typed_with_the_query_runs_that_querys_best_file() {
+    let root = workspace("palette-batch");
+    let s = session_in(&root, &["notes.txt"]);
+    let mut c = Client::attach(&s, 160, 45);
+    // Wait for the index, then close.
+    c.keys("<C-p>mainrs");
+    c.until("main.rs in the rows", |c| {
+        c.palette_ids().contains(&"f:src/main.rs")
+    });
+    c.keys("<Esc><C-p>notes");
+    c.until("notes.txt in the rows", |c| {
+        c.palette_ids().contains(&"f:notes.txt")
+    });
+    c.keys("<Esc>");
+    // One batch: no frame shows "mainrs" before Enter.
+    c.keys("<C-p>mainrs<CR>");
+    assert!(c.overlays.is_empty());
+    assert_eq!(c.text(), "fn main() {}\n");
+}
+
+#[test]
 fn palette_scopes_switch_by_key_and_prefix() {
     let root = workspace("palette-scopes");
     let s = session_in(&root, &["notes.txt"]);
