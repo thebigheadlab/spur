@@ -92,6 +92,10 @@ fn editor(run: args::Run) -> ExitCode {
     let opts = spur_tui::Options {
         name: "tui".into(),
         log: Some(Arc::new(move |l| client_log.write(l))),
+        ascii_icons: ascii_icons(
+            std::env::var("SPUR_ICONS").ok().as_deref(),
+            std::env::var("TERM").ok().as_deref(),
+        ),
         ..spur_tui::Options::default()
     };
     let res = catch_unwind(AssertUnwindSafe(|| runner.run(end, opts)));
@@ -144,6 +148,16 @@ fn install_panic_hook(log: state::Log) {
     }));
 }
 
+/// Icons as ASCII: asked for with `SPUR_ICONS=ascii`, or the Linux console,
+/// whose font lacks the glyphs. `SPUR_ICONS=unicode` keeps the glyphs.
+fn ascii_icons(icons: Option<&str>, term: Option<&str>) -> bool {
+    match icons {
+        Some("ascii") => true,
+        Some("unicode") => false,
+        _ => term == Some("linux"),
+    }
+}
+
 /// SIGHUP and SIGTERM stop the client, so modified work is rescued.
 #[cfg(all(feature = "tui", unix))]
 fn watch_signals(stop: spur_tui::StopHandle) {
@@ -171,5 +185,14 @@ mod tests {
         if let Err(errors) = spur_server::Pack::check(super::embedded::UX_FRESH) {
             panic!("{errors:?}");
         }
+    }
+
+    #[test]
+    fn icons_fall_back_to_ascii() {
+        use super::ascii_icons;
+        assert!(!ascii_icons(None, Some("xterm-256color")));
+        assert!(ascii_icons(None, Some("linux")));
+        assert!(ascii_icons(Some("ascii"), Some("xterm")));
+        assert!(!ascii_icons(Some("unicode"), Some("linux")));
     }
 }
