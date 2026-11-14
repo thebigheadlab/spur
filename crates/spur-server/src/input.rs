@@ -113,10 +113,21 @@ impl State {
         // `run_as` replaces the actor with the client's.
         let inv = Invocation::new(id, Actor::User).args(json!({ "text": text }));
         if let Some(Err(e)) = self.run_as(conn, inv) {
-            self.error(conn, e.message);
+            self.input_failed(conn, "editor.insert_text", e.message);
         }
         self.end_step(conn);
         self.input_done(conn);
+    }
+
+    /// A step the person triggered failed: a status notice where the client has UI
+    /// state, else an `error` message.
+    fn input_failed(&mut self, conn: u64, command: &str, message: String) {
+        let has_ui = self.clients.get(&conn).is_some_and(|c| c.ui.is_some());
+        if self.ux.is_some() && has_ui {
+            self.set_status(conn, command, &message);
+        } else {
+            self.error(conn, message);
+        }
     }
 
     /// Ends the undo step of `conn`'s active view, so the next edit starts a new one.
@@ -164,7 +175,7 @@ impl State {
                     let inv =
                         Invocation::new(id, Actor::User).args(json!({ "line": line, "col": col }));
                     if let Some(Err(e)) = self.run_as(conn, inv) {
-                        self.error(conn, e.message);
+                        self.input_failed(conn, "view.move_to", e.message);
                     }
                 } else if kind == Some(NodeKind::List) {
                     if let Some(item) = item

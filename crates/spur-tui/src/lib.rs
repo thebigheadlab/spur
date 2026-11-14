@@ -19,7 +19,7 @@ mod term;
 
 use std::io::{self, Write as _};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, Sender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread::ThreadId;
 
@@ -199,7 +199,19 @@ impl Runner {
             }
             let _ = tx.send(Ev::Closed);
         });
-        let send = |msgs: Vec<ClientMsg>| out.send(msgs).is_ok();
+        // Never block: a server that left 1,024 batches unread is stuck, and a
+        // blocked client would ignore its stop signal with the terminal still set up.
+        let stall_log = opts.log.clone();
+        let send = |msgs: Vec<ClientMsg>| match out.try_send(msgs) {
+            Ok(()) => true,
+            Err(TrySendError::Full(_)) => {
+                if let Some(l) = &stall_log {
+                    l("the server stopped reading; leaving");
+                }
+                false
+            }
+            Err(TrySendError::Disconnected(_)) => false,
+        };
         let hello = ClientMsg::Hello {
             protocols: vec![PROTOCOL_VERSION],
             kind: ClientKind::Frontend,
@@ -332,9 +344,7 @@ impl App {
                     return;
                 };
                 let msg = match m.kind {
-                    MouseEventKind::Down(MouseButton::Left) => {
-                        frame.target(&self.screen, x, y).map(press)
-                    }
+                    MouseEventKind::Down(MouseButton::Left) => frame.target(x, y).map(press),
                     MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
                         let lines = if m.kind == MouseEventKind::ScrollUp {
                             -WHEEL_LINES
@@ -359,6 +369,9 @@ impl App {
             }
             Event::Resize(c, r) => {
                 self.flush_keys(msgs);
+                // A terminal may drop cells on any resize, even one that ends at the
+                // size drawn last: redraw everything.
+                self.shown = None;
                 self.size = (u32::from(c), u32::from(r));
                 msgs.push(ClientMsg::Resize {
                     size: Size {
@@ -649,19 +662,18 @@ mod shell_tests {
         let frame = app.frame.as_ref().unwrap();
         let rail = rect(&app, "rail_files");
         assert_eq!(
-            frame.target(&app.screen, rail.x + 1, rail.y),
+            frame.target(rail.x + 1, rail.y),
             Some(Target::Click("rail_files".into()))
         );
         let list = rect(&app, "files_list");
-        let Some(Target::List { node, item }) = frame.target(&app.screen, list.x + 3, list.y)
-        else {
+        let Some(Target::List { node, item }) = frame.target(list.x + 3, list.y) else {
             panic!("no list target");
         };
         assert_eq!(node, "files_list");
         assert_eq!(item.as_deref(), Some("docs"));
         let code = rect(&app, "code");
         // Gutter of 4 cells: column 2 of the first line.
-        let t = frame.target(&app.screen, code.x + 4 + 2, code.y);
+        let t = frame.target(code.x + 4 + 2, code.y);
         assert_eq!(
             t,
             Some(Target::Surface {
@@ -682,6 +694,9 @@ mod shell_tests {
         let bytes = app.draw(&mut msgs);
         let took = start.elapsed();
         assert!(!bytes.is_empty());
-        assert!(took < std::time::Duration::from_millis(50), "{took:?}");
+        // The budget is 5 ms in a release build (about 3.4 ms measured); debug
+        // builds, which CI runs, get ten times that.
+        let budget = if cfg!(debug_assertions) { 50 } else { 5 };
+        assert!(took < std::time::Duration::from_millis(budget), "{took:?}");
     }
 }

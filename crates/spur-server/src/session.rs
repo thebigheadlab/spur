@@ -228,11 +228,16 @@ impl Session {
             _ => None,
         };
         let log = cfg.log.clone();
+        // Hashed before the pack is loaded: an edit in between is seen as a change.
+        let first = watched
+            .as_ref()
+            .and_then(|(dir, _)| crate::ux::watch::hash(dir));
         let state = State::new(cfg, samples.clone())?;
         let (tx, rx) = mpsc::channel();
         let watch = watched.and_then(|(dir, every)| {
             let (stop_tx, stop_rx) = mpsc::channel::<()>();
             let inbox = tx.clone();
+            let spawn_log = log.clone();
             std::thread::Builder::new()
                 .name("spur-pack-watch".into())
                 .spawn(move || {
@@ -241,9 +246,14 @@ impl Session {
                             (s.0)(l);
                         }
                     };
-                    crate::ux::watch::watch(&dir, every, &stop_rx, &log, &|files| {
+                    crate::ux::watch::watch(&dir, every, first, &stop_rx, &log, &|files| {
                         inbox.send(In::PackFiles(files)).is_ok()
                     });
+                })
+                .map_err(|e| {
+                    if let Some(s) = &spawn_log {
+                        (s.0)(&format!("pack watcher not started: {e}"));
+                    }
                 })
                 .ok()
                 .map(|_| stop_tx)
@@ -411,11 +421,22 @@ impl Session {
     }
 }
 
+/// How long dropping a session waits for its thread before leaving it running.
+const DROP_WAIT: Duration = Duration::from_secs(2);
+
 impl Drop for Session {
+    /// Shuts the session down and waits for it, at most [`DROP_WAIT`]: a session
+    /// stuck in a command must not keep the process from exiting.
     fn drop(&mut self) {
         let _ = self.tx.send(In::Shutdown);
         if let Some(t) = self.thread.take() {
-            let _ = t.join();
+            let end = Instant::now() + DROP_WAIT;
+            while !t.is_finished() && Instant::now() < end {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            if t.is_finished() {
+                let _ = t.join();
+            }
         }
     }
 }
@@ -577,18 +598,29 @@ impl State {
         });
         match loaded {
             Ok(pack) => {
+                // Migrate copies first: a panic here leaves every client on the
+                // old pack, and the commit below only moves values.
+                let mut next = Vec::new();
+                for (id, c) in &self.clients {
+                    let Some(ui) = c.ui.as_ref() else {
+                        continue;
+                    };
+                    let (mut ui, mut scope) = (ui.clone(), c.scope.clone());
+                    ui.migrate(&pack, &mut ux.files, &mut scope);
+                    next.push((*id, ui, scope));
+                }
                 let old_layer = ux.pack.keys.name.clone();
                 ux.pack = pack;
                 ux.pack_error = None;
                 ux.generation += 1;
-                for c in self.clients.values_mut() {
-                    let Some(ui) = c.ui.as_mut() else {
-                        continue;
-                    };
-                    c.keymap.remove_layer(&old_layer);
-                    c.keymap.push_layer(ux.pack.keys.clone());
-                    ui.migrate(&ux.pack, &mut ux.files, &mut c.scope);
-                    c.dirty = true;
+                for (id, ui, scope) in next {
+                    if let Some(c) = self.clients.get_mut(&id) {
+                        c.keymap.remove_layer(&old_layer);
+                        c.keymap.push_layer(ux.pack.keys.clone());
+                        c.ui = Some(ui);
+                        c.scope = scope;
+                        c.dirty = true;
+                    }
                 }
                 self.log("pack reloaded");
             }
@@ -679,11 +711,13 @@ impl State {
         if res.is_err() {
             self.core.state.focus = self.anchor;
             self.log("the session failed; writing rescue copies of modified documents");
-            let docs = self.modified();
+            // Guarded again: the state that panicked may panic once more.
+            let docs = catch_unwind(AssertUnwindSafe(|| self.modified())).unwrap_or_default();
             if let Some(r) = &self.rescue
                 && !docs.is_empty()
+                && catch_unwind(AssertUnwindSafe(|| (r.0)(&docs))).is_err()
             {
-                (r.0)(&docs);
+                self.log("writing rescue copies failed");
             }
         }
     }
@@ -820,7 +854,17 @@ impl State {
             In::Modified(tx) => {
                 let _ = tx.try_send(self.modified());
             }
-            In::PackFiles(files) => self.reload(&files),
+            In::PackFiles(files) => {
+                if catch_unwind(AssertUnwindSafe(|| self.reload(&files))).is_err() {
+                    self.log("caught a panic while loading the pack; keeping the old one");
+                    if let Some(ux) = self.ux.as_mut() {
+                        ux.pack_error = Some("internal error while loading the pack".into());
+                    }
+                    for c in self.clients.values_mut().filter(|c| c.ui.is_some()) {
+                        c.dirty = true;
+                    }
+                }
+            }
             In::Panic | In::Shutdown => {}
         }
     }

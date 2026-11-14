@@ -69,6 +69,7 @@ cargo run --release -- --theme paper    # another bundled theme: graphite, paper
 | ctrl+shift+e / j / f / g | Sidebar: Files, Sessions, Search, Git |
 | alt+1..4, or ctrl+k then e / j / f / g | The same, for terminals that cannot send ctrl+shift |
 | Up, Down, PageUp, PageDown, Right, Left, Enter | Move in the Files tree, expand, collapse, open |
+| Left, Right (agent column focused) | Switch the agent column's tabs |
 | Esc | Back to the code |
 | ctrl+q | Quit (asks once if anything is unsaved) |
 
@@ -81,7 +82,7 @@ Terminal notes:
 - On macOS, alt+digit needs Option set to act as Meta in the terminal's settings.
 - Set `SPUR_ICONS=ascii` if the rail icons look wrong (the Linux console gets ASCII icons by default).
 
-If Spur ends in any way other than a quit, modified files are saved as rescue copies under `~/.local/state/spur/rescue/` (or `$XDG_STATE_HOME/spur/rescue/`), and their paths are printed.
+If Spur ends in any way other than a quit, modified files are saved as rescue copies under `~/.local/state/spur/rescue/` (or `$XDG_STATE_HOME/spur/rescue/`; `%LOCALAPPDATA%\spur\rescue\` on Windows), and their paths are printed.
 
 ## Change the look
 
@@ -92,7 +93,7 @@ cp -r extensions/ux_fresh ~/my-pack
 cargo run --release -- --ux ~/my-pack src/main.rs
 ```
 
-Edit any file in `~/my-pack` (for example `accent` in `themes/graphite.toml`, `theme` in `pack.toml`, or a binding in `keys.toml`) and the running editor picks it up within a second. A mistake keeps the last good pack and shows the error, with its file and line, at the bottom of the screen.
+Edit any file in `~/my-pack` (for example `accent` in `themes/graphite.toml`, `theme` in `pack.toml`, or a binding in `keys.toml`) and the running editor picks it up within a second. A mistake keeps the last good pack and shows the error, with its file and line, in the top bar.
 
 ## License
 

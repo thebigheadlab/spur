@@ -994,7 +994,57 @@ fn the_pack_reloads_when_its_files_change() {
     // Fixing it clears the notice; removing the key removes it.
     edit(&pack.join("layout.toml"), "width = \"wide\"", "width = 28");
     edit(&pack.join("pack.toml"), "\n\"ui.extra\" = true", "");
-    until(&mut c, "the fix", |c| c.notice().is_none());
-    let r = c.command("ui.toggle", json!({ "key": "ui.extra" }));
-    assert!(matches!(r, Reply::Error(_)), "{r:?}");
+    until(&mut c, "the key to go", |c| {
+        matches!(
+            c.command("ui.toggle", json!({ "key": "ui.extra" })),
+            Reply::Error(_)
+        )
+    });
+    assert_eq!(c.notice(), None);
+}
+
+#[test]
+fn a_reload_keeps_the_theme_override_and_swaps_the_keys() {
+    let root = workspace("reload-theme");
+    let pack = pack_copy("reload-theme");
+    let s = Session::spawn(SessionConfig {
+        open: vec![root.join("notes.txt")],
+        pack: Some(PackSource::Dir(pack.clone())),
+        theme: Some("paper".into()),
+        root: root.clone(),
+        watch: Some(Duration::from_millis(10)),
+        ..Default::default()
+    })
+    .unwrap();
+    let mut c = Client::attach(&s, 160, 30);
+    assert_eq!(c.app_bg.as_deref(), Some("#f3f3f1"));
+    // The override survives a reload of the theme it names.
+    edit(
+        &pack.join("themes/paper.toml"),
+        "bg = \"#f3f3f1\"",
+        "bg = \"#f3f3f2\"",
+    );
+    until(&mut c, "the paper edit", |c| {
+        c.app_bg.as_deref() == Some("#f3f3f2")
+    });
+    // A new binding works after the reload; the old ones still do.
+    let keys = pack.join("keys.toml");
+    let mut text = std::fs::read_to_string(&keys).unwrap();
+    text.push_str(
+        "\n[[bind]]\nmode = \"insert\"\nkeys = \"<C-t>\"\ncommand = \"ui.set\"\n\
+         args = { key = \"ui.sidebar_open\", value = false }\n",
+    );
+    std::fs::write(&keys, text).unwrap();
+    until(&mut c, "the new binding", |c| {
+        c.keys("<C-t>");
+        !c.shows("sidebar")
+    });
+    c.keys("x");
+    assert!(c.text().starts_with('x'), "{}", c.text());
+    // Removing the theme the session asked for is a load error.
+    std::fs::remove_file(pack.join("themes/paper.toml")).unwrap();
+    until(&mut c, "the notice", |c| c.notice().is_some());
+    let notice = c.notice().unwrap();
+    assert!(notice.contains("paper"), "{notice}");
+    assert_eq!(c.app_bg.as_deref(), Some("#f3f3f2"));
 }

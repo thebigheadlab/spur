@@ -107,7 +107,7 @@ fn editor(run: args::Run) -> ExitCode {
         Ok(Err(e)) => log.write(&format!("client failed: {e}")),
         Err(_) => log.write("client panicked"),
     }
-    if !quit && let Some(docs) = session.modified_documents(Duration::from_secs(1)) {
+    if !quit && let Some(docs) = session.modified_documents(Duration::from_secs(3)) {
         rescue.write(&docs);
     }
     drop(session);
@@ -116,14 +116,14 @@ fn editor(run: args::Run) -> ExitCode {
     if !written.is_empty() {
         let _ = writeln!(err, "spur: unsaved work was saved to:");
         for p in &written {
-            let _ = writeln!(err, "  {}", p.display());
+            let _ = writeln!(err, "  {}", state::printable(p));
         }
     }
     if let Ok(Err(e)) = &res {
         let _ = writeln!(err, "spur: {e}");
     }
     if let Some(p) = log.written() {
-        let _ = writeln!(err, "spur: log at {}", p.display());
+        let _ = writeln!(err, "spur: log at {}", state::printable(&p));
     }
     if quit {
         ExitCode::SUCCESS

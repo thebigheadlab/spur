@@ -26,27 +26,35 @@ pub struct Piece {
     pub width: u32,
 }
 
+/// A char's own cell, or `None` when it joins the cell before it (zero width).
+/// Unsafe chars become the replacement char.
+pub fn cell(c: char) -> Option<Piece> {
+    if is_unsafe(c) {
+        return Some(Piece {
+            text: char::REPLACEMENT_CHARACTER.to_string(),
+            width: 1,
+        });
+    }
+    match c.width() {
+        Some(0) | None => None,
+        Some(w) => Some(Piece {
+            text: c.to_string(),
+            width: if w >= 2 { 2 } else { 1 },
+        }),
+    }
+}
+
 /// Splits `s` into cells.
 pub fn pieces(s: &str) -> Vec<Piece> {
     let mut out: Vec<Piece> = Vec::with_capacity(s.len());
     for c in s.chars() {
-        if is_unsafe(c) {
-            out.push(Piece {
-                text: char::REPLACEMENT_CHARACTER.to_string(),
-                width: 1,
-            });
-            continue;
-        }
-        match c.width() {
-            Some(0) | None => {
+        match cell(c) {
+            Some(p) => out.push(p),
+            None => {
                 if let Some(last) = out.last_mut() {
                     last.text.push(c);
                 }
             }
-            Some(w) => out.push(Piece {
-                text: c.to_string(),
-                width: if w >= 2 { 2 } else { 1 },
-            }),
         }
     }
     out

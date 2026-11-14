@@ -22,6 +22,10 @@ sidebar_shown = "ui.sidebar_open && (client.cols >= 100 || ui.focus == sidebar)"
 # The agent column shows when open and there is room beside an open sidebar
 # (144 cols), or whenever it has focus.
 agent_shown = "ui.agent_open && (client.cols >= 144 || ui.focus == agent)"
+# The widths alone, for keys.toml (conditions cannot read each other, so the
+# numbers above repeat here; keep them in step).
+sidebar_fits = "client.cols >= 100"
+agent_fits = "client.cols >= 144"
 
 [regions]                  # focusable regions: name -> node and key mode
 editor = { node = "code" }                       # the surface; mode = the view's own mode

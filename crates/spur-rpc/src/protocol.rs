@@ -34,7 +34,9 @@ pub enum Layout {
     /// On a character grid (a terminal). Sizes are cells.
     #[default]
     Cells,
-    /// In pixels (a window). Sizes are logical pixels.
+    /// In pixels (a window). Protocol v0 still speaks cells to every client: a
+    /// pixel client divides its window by its cell size before it sends a size,
+    /// and multiplies the sizes it receives.
     Pixels,
     /// A layout this version does not know.
     #[serde(other)]
@@ -57,7 +59,7 @@ pub struct Caps {
     pub native: Vec<String>,
 }
 
-/// A size in layout units (cells or logical pixels, see [`Layout`]).
+/// A size in cells, for every client in protocol v0 (see [`Layout`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Size {
     /// Width.
@@ -348,7 +350,7 @@ pub enum Dim {
         /// Relative weight.
         weight: u32,
     },
-    /// Exactly this many layout units.
+    /// Exactly this many cells.
     Units {
         /// How many.
         n: u32,

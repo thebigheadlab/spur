@@ -204,7 +204,10 @@ pub fn diff(prev: Option<&Grid>, next: &Grid, cursor: Option<(u32, u32)>) -> Str
                 1
             };
             x += w;
-            pos = (x < next.w).then_some((x, y));
+            // Terminals disagree on the width of clusters (emoji with VS16, ZWJ
+            // sequences): after one, move explicitly before the next write.
+            let cluster = c.text.chars().nth(1).is_some();
+            pos = (x < next.w && !cluster).then_some((x, y));
         }
     }
     out.push_str("\x1b[0m");

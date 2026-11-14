@@ -57,19 +57,26 @@ fn content(n: &Node) -> (u32, u32) {
         NodeKind::Row | NodeKind::Column | NodeKind::Card | NodeKind::Unknown => {
             let (pv, ph) = padding(n);
             let sizes: Vec<(u32, u32)> = n.children.iter().map(fixed_or_content).collect();
-            let gaps = n.gap * u32::try_from(sizes.len().saturating_sub(1)).unwrap_or(0);
+            // Saturating: sizes come from the server and may be anything.
+            let gaps = n
+                .gap
+                .saturating_mul(u32::try_from(sizes.len().saturating_sub(1)).unwrap_or(0));
+            let sum = |it: &mut dyn Iterator<Item = u32>| it.fold(0u32, u32::saturating_add);
             let (w, h) = if horizontal(n) {
                 (
-                    sizes.iter().map(|s| s.0).sum::<u32>() + gaps,
+                    sum(&mut sizes.iter().map(|s| s.0)).saturating_add(gaps),
                     sizes.iter().map(|s| s.1).max().unwrap_or(0),
                 )
             } else {
                 (
                     sizes.iter().map(|s| s.0).max().unwrap_or(0),
-                    sizes.iter().map(|s| s.1).sum::<u32>() + gaps,
+                    sum(&mut sizes.iter().map(|s| s.1)).saturating_add(gaps),
                 )
             };
-            (w + 2 * ph, h + 2 * pv)
+            (
+                w.saturating_add(ph.saturating_mul(2)),
+                h.saturating_add(pv.saturating_mul(2)),
+            )
         }
     }
 }
@@ -146,8 +153,8 @@ fn place<'a>(n: &'a Node, r: Rect, out: &mut Vec<Placed<'a>>) {
     let inner = Rect {
         x: r.x + ph.min(r.w),
         y: r.y + pv.min(r.h),
-        w: r.w.saturating_sub(2 * ph),
-        h: r.h.saturating_sub(2 * pv),
+        w: r.w.saturating_sub(ph.saturating_mul(2)),
+        h: r.h.saturating_sub(pv.saturating_mul(2)),
     };
     let row = horizontal(n);
     let (main, cross) = if row {
@@ -185,9 +192,9 @@ fn place<'a>(n: &'a Node, r: Rect, out: &mut Vec<Placed<'a>>) {
             }
         };
         place(c, rect, out);
-        at += size;
+        at = at.saturating_add(size);
         if i + 1 < n.children.len() {
-            at += n.gap;
+            at = at.saturating_add(n.gap);
         }
     }
 }

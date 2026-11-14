@@ -14,11 +14,42 @@ pub fn base() -> Option<PathBuf> {
     }
     #[cfg(not(windows))]
     {
-        if let Some(d) = std::env::var_os("XDG_STATE_HOME").filter(|d| !d.is_empty()) {
-            return Some(PathBuf::from(d).join("spur"));
+        // Relative values are ignored (the XDG rule), so copies never land in the
+        // current folder.
+        let abs = |v: std::ffi::OsString| Some(PathBuf::from(v)).filter(|p| p.is_absolute());
+        if let Some(d) = std::env::var_os("XDG_STATE_HOME").and_then(abs) {
+            return Some(d.join("spur"));
         }
-        std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state/spur"))
+        std::env::var_os("HOME")
+            .and_then(abs)
+            .map(|h| h.join(".local/state/spur"))
     }
+}
+
+/// A file name for a rescue copy: control chars become `_`, and it is cut to 100
+/// chars so the suffix still fits the system's name limit.
+fn safe_name(name: &str) -> String {
+    let s: String = name
+        .chars()
+        .map(|c| if c.is_control() { '_' } else { c })
+        .take(100)
+        .collect();
+    if s.is_empty() { "untitled".into() } else { s }
+}
+
+/// A path for the terminal: control chars shown escaped.
+pub fn printable(p: &Path) -> String {
+    p.display()
+        .to_string()
+        .chars()
+        .flat_map(|c| {
+            if c.is_control() {
+                c.escape_default().collect::<Vec<_>>()
+            } else {
+                vec![c]
+            }
+        })
+        .collect()
 }
 
 /// Creates `dir` (and parents), private to the user.
@@ -81,12 +112,24 @@ impl Log {
             return;
         };
         if l.file.is_none() && !l.failed {
+            // A log left by an earlier process with the same id is kept: the
+            // new one gets a suffix.
             let opened = l.path.clone().and_then(|p| {
                 private_dir(p.parent()?).ok()?;
-                private_file(&p).ok()
+                (0..100).find_map(|n| {
+                    let q = if n == 0 {
+                        p.clone()
+                    } else {
+                        p.with_extension(format!("{n}.log"))
+                    };
+                    private_file(&q).ok().map(|f| (q, f))
+                })
             });
             l.failed = opened.is_none();
-            l.file = opened;
+            if let Some((p, f)) = opened {
+                l.path = Some(p);
+                l.file = Some(f);
+            }
         }
         if let Some(f) = l.file.as_mut() {
             let _ = writeln!(f, "{line}");
@@ -138,7 +181,7 @@ impl Rescue {
             let name = path
                 .as_deref()
                 .and_then(Path::file_name)
-                .map_or_else(|| "untitled".into(), |n| n.to_string_lossy().into_owned());
+                .map_or_else(|| "untitled".into(), |n| safe_name(&n.to_string_lossy()));
             let mut n = 0;
             let file = loop {
                 let p = dir.join(format!("{name}.{secs}.{n}.txt"));
@@ -152,7 +195,7 @@ impl Rescue {
                 }
             };
             if let Some((p, mut f)) = file {
-                match f.write_all(text.as_bytes()) {
+                match f.write_all(text.as_bytes()).and_then(|()| f.sync_all()) {
                     Ok(()) => {
                         let from = path
                             .as_deref()
@@ -173,6 +216,14 @@ impl Rescue {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rescue_names_are_safe_and_short() {
+        assert_eq!(safe_name("a\u{1b}]52;c;x\u{7}.rs"), "a_]52;c;x_.rs");
+        assert_eq!(safe_name(&"n".repeat(300)).len(), 100);
+        assert_eq!(safe_name(""), "untitled");
+        assert_eq!(printable(Path::new("/x/a\u{1b}b")), "/x/a\\u{1b}b");
+    }
 
     #[test]
     fn rescue_copies_are_private_new_files() {

@@ -37,7 +37,7 @@ fn ux_fresh_loads() {
     assert_eq!(pack.surface, "code");
     assert_eq!(pack.themes.len(), 4);
     assert_eq!(pack.regions.len(), 3);
-    assert_eq!(pack.conditions.len(), 2);
+    assert_eq!(pack.conditions.len(), 4);
     assert!(pack.within("files_list", "sidebar"));
     assert_eq!(pack.region_of("files_list"), Some("sidebar"));
     assert_eq!(pack.region_of("rail_files"), None);

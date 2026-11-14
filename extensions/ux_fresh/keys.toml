@@ -116,7 +116,7 @@ run = [
 [[bind]]
 mode = "insert sidebar agent"
 keys = "<C-b>"
-when = "client.cols >= 100 && !ui.sidebar_open"
+when = "cond.sidebar_fits && !ui.sidebar_open"
 command = "ui.set"
 args = { key = "ui.sidebar_open", value = true }
 
@@ -138,7 +138,7 @@ run = [
 [[bind]]
 mode = "insert sidebar agent"
 keys = "<C-A-b>"
-when = "client.cols >= 144 && !ui.agent_open"
+when = "cond.agent_fits && !ui.agent_open"
 command = "ui.set"
 args = { key = "ui.agent_open", value = true }
 
@@ -160,7 +160,7 @@ run = [
 [[bind]]
 mode = "insert sidebar agent"
 keys = "<C-k>a"
-when = "client.cols >= 144 && !ui.agent_open"
+when = "cond.agent_fits && !ui.agent_open"
 command = "ui.set"
 args = { key = "ui.agent_open", value = true }
 

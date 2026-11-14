@@ -113,7 +113,7 @@
 //! `key` carries one or more keys in key notation, fed one by one: plain chars
 //! (`a`, `A`), named keys in angle brackets (`<Esc>`, `<CR>`, `<Tab>`, `<BS>`,
 //! `<Del>`, `<Up>`, `<Down>`, `<Left>`, `<Right>`, `<Home>`, `<End>`, `<PageUp>`,
-//! `<PageDown>`, `<Insert>`, `<Space>`, `<F1>`..`<F12>`), modifiers as prefixes
+//! `<PageDown>`, `<Insert>`, `<Space>`, `<F1>`..`<F24>`), modifiers as prefixes
 //! (`C-` control, `A-` or `M-` alt, `S-` shift, `D-` super: `<C-s>`, `<S-Left>`), and
 //! `<lt>` for a literal `<`. What a key does comes from the bindings the session was
 //! given; a key nothing binds is ignored, and bad notation gets an `error`.

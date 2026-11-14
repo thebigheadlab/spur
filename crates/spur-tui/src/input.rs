@@ -19,13 +19,19 @@ pub fn key(code: KeyCode, mods: KeyModifiers) -> Option<String> {
     let ctrl = mods.contains(KeyModifiers::CONTROL);
     let alt = mods.contains(KeyModifiers::ALT);
     let shift = mods.contains(KeyModifiers::SHIFT);
+    let sup = mods.contains(KeyModifiers::SUPER);
+    // Keys with hyper or meta (kitty protocol only) have no notation.
+    if mods.intersects(KeyModifiers::HYPER | KeyModifiers::META) {
+        return None;
+    }
     let (name, shift) = match code {
         KeyCode::Char(c) => {
-            // AltGr arrives as ctrl+alt: only letters and digits are chords.
-            if ctrl && alt && !c.is_ascii_alphanumeric() {
+            // Windows reports AltGr as ctrl+alt: there only letters and digits are
+            // chords.
+            if cfg!(windows) && ctrl && alt && !sup && !c.is_ascii_alphanumeric() {
                 return Some(plain(c));
             }
-            if !ctrl && !alt {
+            if !ctrl && !alt && !sup {
                 return Some(if c == ' ' && shift {
                     "<S-Space>".into()
                 } else {
@@ -33,8 +39,13 @@ pub fn key(code: KeyCode, mods: KeyModifiers) -> Option<String> {
                 });
             }
             if c.is_alphabetic() {
-                let upper = c.is_uppercase();
-                (c.to_lowercase().to_string(), shift || upper)
+                // A char whose lower case is several chars (U+0130) stays as is,
+                // as the keymap reads it.
+                let mut lower = c.to_lowercase();
+                match (lower.next(), lower.next()) {
+                    (Some(l), None) => (l.to_string(), shift || c.is_uppercase()),
+                    _ => (c.to_string(), shift),
+                }
             } else {
                 let name = match c {
                     ' ' => "Space".to_owned(),
@@ -73,6 +84,9 @@ pub fn key(code: KeyCode, mods: KeyModifiers) -> Option<String> {
     }
     if shift {
         out.push_str("S-");
+    }
+    if sup {
+        out.push_str("D-");
     }
     out.push_str(&name);
     out.push('>');
@@ -114,8 +128,21 @@ mod tests {
             (k(KeyCode::Char('E'), C | S), "<C-S-e>"),
             (k(KeyCode::Char('b'), C | A), "<C-A-b>"),
             (k(KeyCode::Char('1'), A), "<A-1>"),
-            (k(KeyCode::Char('@'), C | A), "@"),
-            (k(KeyCode::Char('\u{e9}'), C | A), "\u{e9}"),
+            // AltGr: Windows only; elsewhere ctrl+alt is a chord.
+            (
+                k(KeyCode::Char('@'), C | A),
+                if cfg!(windows) { "@" } else { "<C-A-@>" },
+            ),
+            (
+                k(KeyCode::Char('\u{e9}'), C | A),
+                if cfg!(windows) {
+                    "\u{e9}"
+                } else {
+                    "<C-A-\u{e9}>"
+                },
+            ),
+            (k(KeyCode::Char('s'), KeyModifiers::SUPER), "<D-s>"),
+            (k(KeyCode::Char('\u{130}'), C), "<C-\u{130}>"),
             (k(KeyCode::Char('<'), C), "<C-lt>"),
             (k(KeyCode::Char('|'), A), "<A-bar>"),
             (k(KeyCode::BackTab, S), "<S-Tab>"),
@@ -135,6 +162,8 @@ mod tests {
             assert_eq!(spur_keymap::format_keys(&keys), got);
         }
         assert_eq!(key(KeyCode::F(25), N), None);
+        assert_eq!(key(KeyCode::Char('s'), KeyModifiers::HYPER), None);
+        assert_eq!(key(KeyCode::Char('s'), KeyModifiers::META), None);
         assert_eq!(key(KeyCode::CapsLock, N), None);
     }
 

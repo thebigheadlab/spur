@@ -101,6 +101,7 @@ impl UiState {
                 self.trees.insert(id.clone(), t);
             }
         }
+        self.list_rows.retain(|id, _| pack.nodes.contains_key(id));
         self.sent_lists.clear();
         self.sent_ui = None;
     }

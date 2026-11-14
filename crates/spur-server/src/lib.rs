@@ -2,10 +2,12 @@
 //! commands, keymaps) and serves any number of clients over [`spur_rpc`]. Each client
 //! has its own view, size, key state and context keys; documents are shared.
 //!
-//! The server never draws and holds no look: no colours, glyphs or key bindings. Key
-//! bindings arrive as keymap layers in [`SessionConfig`] (from UX packs, later).
+//! The server never draws and holds no look: no colours, glyphs or key bindings. They
+//! come from a UX pack ([`SessionConfig::pack`]), which the server evaluates into a
+//! plain UI tree, theme tokens and lists for each client.
 //!
-//! Design: `docs/adr/0006-editor-server-and-protocol-v0.md`.
+//! Design: `docs/adr/0006-editor-server-and-protocol-v0.md` and
+//! `docs/adr/0007-ux-packs-and-terminal-client.md`.
 
 mod client;
 mod frame;

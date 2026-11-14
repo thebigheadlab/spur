@@ -4,9 +4,8 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 fn walk(dir: &Path, rel: &str, out: &mut Vec<(String, PathBuf)>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
+    let entries = std::fs::read_dir(dir)
+        .unwrap_or_else(|e| panic!("cannot read the UX pack folder {}: {e}", dir.display()));
     for e in entries.flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
         if name.starts_with('.') {
@@ -36,6 +35,11 @@ fn main() {
     let mut files = Vec::new();
     walk(&pack, "", &mut files);
     files.sort();
+    assert!(
+        files.iter().any(|(rel, _)| rel == "pack.toml"),
+        "no pack.toml in {}",
+        pack.display()
+    );
     let mut code = String::from("/// The `ux_fresh` pack files: relative path, text.\n");
     code.push_str("pub static UX_FRESH: &[(&str, &str)] = &[\n");
     for (rel, path) in &files {

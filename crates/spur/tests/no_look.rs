@@ -87,11 +87,21 @@ fn rust_files(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// Lines before the first `#[cfg(test)]`, numbered from 0.
+/// Lines before the file's test module (an unindented `#[cfg(test)]` whose item,
+/// after any more attributes, is a `mod`), numbered from 0. A `#[cfg(test)]` on a
+/// single item does not stop the scan.
 fn non_test_lines(text: &str) -> impl Iterator<Item = (usize, &str)> {
-    text.lines()
-        .enumerate()
-        .take_while(|(_, l)| l.trim() != "#[cfg(test)]")
+    let lines: Vec<&str> = text.lines().collect();
+    let end = (0..lines.len())
+        .find(|&i| {
+            lines[i] == "#[cfg(test)]"
+                && lines[i + 1..]
+                    .iter()
+                    .find(|l| !l.starts_with("#["))
+                    .is_some_and(|l| l.starts_with("mod ") || l.starts_with("pub mod "))
+        })
+        .unwrap_or(lines.len());
+    text.lines().enumerate().take(end)
 }
 
 fn problems(line: &str) -> Vec<String> {

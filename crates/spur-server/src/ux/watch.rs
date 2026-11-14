@@ -18,17 +18,28 @@ fn snapshot(dir: &Path) -> Result<(u64, Vec<(String, String)>), String> {
     Ok((h.finish(), files))
 }
 
-/// Polls `dir` every `every` until `stop` is dropped; calls `send` with the files
-/// after each change (contents are hashed, so same-size edits count). Returns when
+/// The hash of the pack's files, if they could all be read.
+pub fn hash(dir: &Path) -> Option<u64> {
+    snapshot(dir).ok().map(|(h, _)| h)
+}
+
+/// The shortest interval: a zero one would spin.
+const MIN_EVERY: Duration = Duration::from_millis(10);
+
+/// Polls `dir` every `every` (at least 10 ms), starting from the hash `first`,
+/// until `stop` is dropped; calls `send` with the files after each change
+/// (contents are hashed, so same-size edits count). Returns when
 /// `send` returns false. A read error is logged once until it changes.
 pub fn watch(
     dir: &Path,
     every: Duration,
+    first: Option<u64>,
     stop: &Receiver<()>,
     log: &dyn Fn(&str),
     send: &dyn Fn(Vec<(String, String)>) -> bool,
 ) {
-    let mut last = snapshot(dir).ok().map(|(h, _)| h);
+    let every = every.max(MIN_EVERY);
+    let mut last = first;
     let mut failed: Option<String> = None;
     loop {
         match stop.recv_timeout(every) {

@@ -4,9 +4,8 @@
 use std::collections::BTreeMap;
 
 use spur_rpc::{CursorKind, ItemKind, ListView, Node, NodeKind, SurfaceSize, SurfaceView, tokens};
-use unicode_width::UnicodeWidthChar;
 
-use crate::clean::{Piece, is_unsafe};
+use crate::clean::{Piece, cell};
 use crate::color::{Palette, Style};
 use crate::grid::Grid;
 use crate::layout::{Rect, layout};
@@ -70,10 +69,20 @@ struct Hit {
     kind: HitKind,
 }
 
+/// What was drawn under a hit, so a press resolves against what the person saw,
+/// not against messages that arrived after the draw.
 #[derive(Clone, Debug)]
 enum HitKind {
-    Surface { text_x: u32 },
-    List,
+    Surface {
+        text_x: u32,
+        top_line: u32,
+        hscroll: u32,
+        tab: u32,
+        lines: Vec<String>,
+    },
+    List {
+        items: Vec<String>,
+    },
     Click,
 }
 
@@ -91,35 +100,27 @@ pub struct Frame {
 
 impl Frame {
     /// The deepest surface, list or clickable node under `(x, y)`.
-    pub fn target(&self, screen: &Screen, x: u32, y: u32) -> Option<Target> {
+    pub fn target(&self, x: u32, y: u32) -> Option<Target> {
         let hit = self.hits.iter().rev().find(|h| h.rect.contains(x, y))?;
-        let row = y - hit.rect.y;
-        Some(match hit.kind {
+        let row = (y - hit.rect.y) as usize;
+        Some(match &hit.kind {
             HitKind::Click => Target::Click(hit.node.clone()),
-            HitKind::List => {
-                let item = screen
-                    .lists
-                    .get(&hit.node)
-                    .and_then(|l| l.items.get(row as usize))
-                    .map(|i| i.id.clone());
-                Target::List {
-                    node: hit.node.clone(),
-                    item,
-                }
-            }
-            HitKind::Surface { text_x } => {
-                let s = screen.surfaces.get(&hit.node)?;
-                let line = s.view.top_line + row;
-                let dc = s.hscroll + x.saturating_sub(text_x);
-                let tab = tab_width_of(screen, &hit.node);
-                let col = s
-                    .view
-                    .lines
-                    .get(row as usize)
-                    .map_or(0, |l| col_at(&line_text(l), dc, tab));
+            HitKind::List { items } => Target::List {
+                node: hit.node.clone(),
+                item: items.get(row).cloned(),
+            },
+            HitKind::Surface {
+                text_x,
+                top_line,
+                hscroll,
+                tab,
+                lines,
+            } => {
+                let dc = hscroll + x.saturating_sub(*text_x);
+                let col = lines.get(row).map_or(0, |l| col_at(l, dc, *tab));
                 Target::Surface {
                     node: hit.node.clone(),
-                    line,
+                    line: top_line + u32::try_from(row).unwrap_or(u32::MAX),
                     col,
                 }
             }
@@ -131,24 +132,51 @@ impl Frame {
         self.hits
             .iter()
             .rev()
-            .filter(|h| matches!(h.kind, HitKind::Surface { .. } | HitKind::List))
+            .filter(|h| matches!(h.kind, HitKind::Surface { .. } | HitKind::List { .. }))
             .find(|h| h.rect.contains(x, y))
             .map(|h| h.node.as_str())
     }
 }
 
-fn tab_width_of(screen: &Screen, node: &str) -> u32 {
-    fn find<'a>(n: &'a Node, id: &str) -> Option<&'a Node> {
-        if n.id == id {
-            return Some(n);
-        }
-        n.children.iter().find_map(|c| find(c, id))
+/// A list's hit, with the item ids drawn in its rows.
+fn list_hit(screen: &Screen, node: &str, r: Rect) -> Hit {
+    let items = screen.lists.get(node).map_or_else(Vec::new, |l| {
+        l.items
+            .iter()
+            .take(r.h as usize)
+            .map(|i| i.id.clone())
+            .collect()
+    });
+    Hit {
+        rect: r,
+        node: node.to_owned(),
+        kind: HitKind::List { items },
     }
-    screen
-        .root
-        .as_ref()
-        .and_then(|r| find(r, node))
-        .map_or(4, |n| if n.tab_width == 0 { 4 } else { n.tab_width })
+}
+
+/// A surface's hit, with the lines drawn in its rows.
+fn surface_hit(screen: &Screen, node: &str, r: Rect, text_x: u32, tab: u32) -> Hit {
+    let (top_line, hscroll, lines) = screen.surfaces.get(node).map_or((0, 0, Vec::new()), |s| {
+        let lines = s
+            .view
+            .lines
+            .iter()
+            .take(r.h as usize)
+            .map(line_text)
+            .collect();
+        (s.view.top_line, s.hscroll, lines)
+    });
+    Hit {
+        rect: r,
+        node: node.to_owned(),
+        kind: HitKind::Surface {
+            text_x,
+            top_line,
+            hscroll,
+            tab,
+            lines,
+        },
+    }
 }
 
 fn line_text(l: &spur_rpc::Line) -> String {
@@ -185,33 +213,16 @@ fn columns(text: &str, tab: u32) -> (Vec<u32>, Vec<(u32, Piece)>) {
             }
             continue;
         }
-        if is_unsafe(c) {
-            cells.push((
-                dc,
-                Piece {
-                    text: char::REPLACEMENT_CHARACTER.to_string(),
-                    width: 1,
-                },
-            ));
-            dc += 1;
-            continue;
-        }
-        match c.width() {
-            Some(0) | None => {
+        match cell(c) {
+            Some(p) => {
+                let w = p.width;
+                cells.push((dc, p));
+                dc += w;
+            }
+            None => {
                 if let Some((_, p)) = cells.last_mut() {
                     p.text.push(c);
                 }
-            }
-            Some(w) => {
-                let w = if w >= 2 { 2 } else { 1 };
-                cells.push((
-                    dc,
-                    Piece {
-                        text: c.to_string(),
-                        width: w,
-                    },
-                ));
-                dc += w;
             }
         }
     }
@@ -279,11 +290,7 @@ pub fn paint(screen: &mut Screen, w: u32, h: u32) -> Frame {
                     rows: r.h,
                     cols: r.w,
                 });
-                frame.hits.push(Hit {
-                    rect: r,
-                    node: n.id.clone(),
-                    kind: HitKind::List,
-                });
+                frame.hits.push(list_hit(screen, &n.id, r));
             }
             NodeKind::Surface => {
                 let focused = n.id == focus;
@@ -302,11 +309,7 @@ pub fn paint(screen: &mut Screen, w: u32, h: u32) -> Frame {
                     rows: r.h,
                     cols: text_w,
                 });
-                frame.hits.push(Hit {
-                    rect: r,
-                    node: n.id.clone(),
-                    kind: HitKind::Surface { text_x },
-                });
+                frame.hits.push(surface_hit(screen, &n.id, r, text_x, tab));
             }
             _ => {}
         }
@@ -391,7 +394,7 @@ fn gutter_width(n: &Node, line_count: u32, w: u32) -> u32 {
 }
 
 /// A surface line: char start columns, cells, and each char's highlight name.
-type LineCells = (Vec<u32>, Vec<(u32, Piece)>, Vec<Option<String>>);
+type LineCells<'a> = (Vec<u32>, Vec<(u32, Piece)>, Vec<Option<&'a str>>);
 
 /// Draws a surface; returns the text area's x and width, and the primary cursor.
 fn paint_surface(
@@ -408,7 +411,7 @@ fn paint_surface(
     let tw = r.w - gw;
     let primary = v.cursors.iter().find(|c| c.kind == CursorKind::Primary);
     let row_of = |line: u32| line.checked_sub(v.top_line).filter(|row| *row < r.h);
-    let lines: Vec<LineCells> = v
+    let lines: Vec<LineCells<'_>> = v
         .lines
         .iter()
         .take(r.h as usize)
@@ -416,10 +419,10 @@ fn paint_surface(
             let text = line_text(l);
             let (starts, cells) = columns(&text, tab);
             // The highlight name of each char.
-            let hl: Vec<Option<String>> = l
+            let hl: Vec<Option<&str>> = l
                 .spans
                 .iter()
-                .flat_map(|sp| sp.text.chars().map(|_| sp.hl.clone()))
+                .flat_map(|sp| sp.text.chars().map(|_| sp.hl.as_deref()))
                 .collect();
             (starts, cells, hl)
         })
@@ -510,7 +513,7 @@ fn paint_text(
     at: Row,
     starts: &[u32],
     cells: &[(u32, Piece)],
-    hl: &[Option<String>],
+    hl: &[Option<&str>],
     pal: &Palette,
 ) {
     let mut ci = 0;
@@ -521,7 +524,7 @@ fn paint_text(
         if *dc < at.hs || *dc + piece.width > at.hs + at.tw {
             continue;
         }
-        let st = hl.get(ci).cloned().flatten().and_then(|h| pal.get(&h));
+        let st = hl.get(ci).copied().flatten().and_then(|h| pal.get(h));
         g.pieces(
             at.text_x + dc - at.hs,
             at.y,
