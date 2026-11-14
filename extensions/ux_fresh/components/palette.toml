@@ -1,0 +1,38 @@
+# The palette (pack.toml [overlays.palette]): the scope and the query on top, a
+# note when there is one (indexing, no matches), then the rows. No outline: the
+# card's colour and the dimmed shell behind it set it apart.
+
+[node.palette]
+kind = "card"
+style = "palette"
+padding = [1, 2]
+gap = 1
+children = ["palette_head", "palette_note", "palette_list"]
+
+[node.palette_head]
+kind = "row"
+height = 1
+gap = 1
+children = ["palette_scope", "palette_query"]
+
+[node.palette_scope]
+kind = "text"
+text = " {palette.label} "
+style = "palette.scope"
+
+[node.palette_query]
+kind = "input"
+source = "palette"
+text = "Search files and actions   > actions   : line"
+style = "palette.input"
+placeholder_style = "palette.placeholder"
+
+[node.palette_note]
+kind = "text"
+text = "{palette.note}"
+style = "palette.note"
+when = "palette.note"
+
+[node.palette_list]
+kind = "list"
+source = "palette"

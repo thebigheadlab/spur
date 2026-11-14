@@ -82,6 +82,53 @@ impl Grid {
         }
     }
 
+    /// Blanks a rectangle: spaces, no colours or attributes.
+    pub fn clear(&mut self, x: u32, y: u32, w: u32, h: u32) {
+        for yy in y..(y + h).min(self.h) {
+            for xx in x..(x + w).min(self.w) {
+                let i = self.at(xx, yy);
+                self.cells[i] = Cell::default();
+            }
+        }
+    }
+
+    /// Mixes every cell `pct`% toward `target` (an overlay's dim). Without true
+    /// colour the background becomes `target` and the text is marked dim.
+    pub fn dim(&mut self, pct: u8, target: Option<Color>) {
+        if pct == 0 {
+            return;
+        }
+        let p = u32::from(pct.min(100));
+        let mix = |c: Option<Color>, t: (u8, u8, u8)| -> Option<Color> {
+            match c {
+                Some(Color::Rgb(r, g, b)) => {
+                    let f = |a: u8, b: u8| {
+                        let v = (u32::from(a) * (100 - p) + u32::from(b) * p + 50) / 100;
+                        u8::try_from(v).unwrap_or(u8::MAX)
+                    };
+                    Some(Color::Rgb(f(r, t.0), f(g, t.1), f(b, t.2)))
+                }
+                other => other,
+            }
+        };
+        for c in &mut self.cells {
+            match target {
+                Some(Color::Rgb(r, g, b)) => {
+                    c.fg = mix(c.fg, (r, g, b));
+                    c.bg = mix(c.bg, (r, g, b)).or(target);
+                    if c.fg.is_none() {
+                        c.attrs |= attr::DIM;
+                    }
+                }
+                Some(t) => {
+                    c.bg = Some(t);
+                    c.attrs |= attr::DIM;
+                }
+                None => c.attrs |= attr::DIM,
+            }
+        }
+    }
+
     /// Writes cleaned text from `(x, y)`, stopping before `max_x`; each cell gets
     /// `style` painted over it. Returns the x after the text.
     pub fn text(&mut self, x: u32, y: u32, max_x: u32, text: &str, style: Option<Style>) -> u32 {

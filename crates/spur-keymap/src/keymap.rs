@@ -960,6 +960,24 @@ impl Keymap {
         }
     }
 
+    /// What `keys` in `mode` run now, as [`Keymap::describe_key`]'s `chosen`
+    /// but without describing the rest: the winning layer's name and the action.
+    /// `None` if nothing applies or the winner unbinds.
+    pub fn resolve_key(
+        &self,
+        mode: &str,
+        keys: &[Key],
+        cx: &impl ContextLookup,
+    ) -> Option<(&str, &Action)> {
+        let node = self.node(mode, keys)?;
+        let c = node
+            .candidates
+            .iter()
+            .find(|c| c.binding.when.as_ref().is_none_or(|w| w.eval(cx)))?;
+        (c.binding.action != Action::Unbind)
+            .then(|| (&*self.layers[c.layer].name, &c.binding.action))
+    }
+
     /// Bindings that run `command` (first step), as (mode, keys, layer).
     pub fn bindings_of(&self, command: &CommandId) -> Vec<(Arc<str>, String, Arc<str>)> {
         let mut out = Vec::new();

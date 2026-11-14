@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 use spur_rpc::{
-    Caps, ClientEnd, ClientKind, ClientMsg, ItemKind, ListView, MouseAction, Node, Reply,
+    Caps, ClientEnd, ClientKind, ClientMsg, ItemKind, ListView, MouseAction, Node, Overlay, Reply,
     ServerMsg, Size, SurfaceSize, SurfaceView, in_process,
 };
 use spur_server::{PackSource, Session, SessionConfig};
@@ -56,6 +56,8 @@ struct Client {
     theme: Option<String>,
     app_bg: Option<String>,
     root: Option<Node>,
+    overlays: Vec<Overlay>,
+    inputs: BTreeMap<String, (String, u32)>,
     focus: Option<String>,
     lists: BTreeMap<String, ListView>,
     view: Option<SurfaceView>,
@@ -73,6 +75,8 @@ impl Client {
             theme: None,
             app_bg: None,
             root: None,
+            overlays: Vec::new(),
+            inputs: BTreeMap::new(),
             focus: None,
             lists: BTreeMap::new(),
             view: None,
@@ -100,10 +104,24 @@ impl Client {
                 self.theme = Some(name.clone());
                 self.app_bg = tokens.get("app").and_then(|t| t.bg.clone());
             }
-            ServerMsg::Ui { root, focus } => {
-                self.lists.retain(|k, _| find(root, k).is_some());
+            ServerMsg::Ui {
+                root,
+                focus,
+                overlays,
+            } => {
+                let shown = |k: &str| {
+                    find(root, k).is_some() || overlays.iter().any(|o| find(&o.node, k).is_some())
+                };
+                self.lists.retain(|k, _| shown(k));
+                self.inputs.retain(|k, _| shown(k));
                 self.root = Some(root.clone());
+                self.overlays.clone_from(overlays);
                 self.focus.clone_from(focus);
+            }
+            ServerMsg::Input {
+                node, text, cursor, ..
+            } => {
+                self.inputs.insert(node.clone(), (text.clone(), *cursor));
             }
             ServerMsg::List { node, list } => {
                 self.lists.insert(node.clone(), list.clone());
@@ -194,6 +212,43 @@ impl Client {
                 _ => None,
             })
             .expect("a result")
+    }
+
+    /// Syncs until `cond` holds (matching runs off the session thread).
+    fn until(&mut self, what: &str, cond: impl Fn(&Self) -> bool) {
+        let start = std::time::Instant::now();
+        while !cond(self) {
+            assert!(start.elapsed() < WAIT, "timed out waiting for {what}");
+            std::thread::sleep(Duration::from_millis(5));
+            self.sync();
+        }
+    }
+
+    fn palette(&self) -> &ListView {
+        &self.lists["palette_list"]
+    }
+
+    fn palette_ids(&self) -> Vec<&str> {
+        self.palette().items.iter().map(|i| i.id.as_str()).collect()
+    }
+
+    fn palette_selected(&self) -> String {
+        let l = self.palette();
+        let i = l.selected.expect("a selection") - l.offset;
+        l.items[i as usize].id.clone()
+    }
+
+    fn query(&self) -> &str {
+        self.inputs
+            .get("palette_query")
+            .map_or("", |(t, _)| t.as_str())
+    }
+
+    fn overlay_node(&self, id: &str) -> &Node {
+        self.overlays
+            .iter()
+            .find_map(|o| find(&o.node, id))
+            .unwrap_or_else(|| panic!("no overlay node {id}"))
     }
 
     fn shows(&self, id: &str) -> bool {
@@ -1120,4 +1175,282 @@ fn saving_under_a_new_language_recolours_every_row() {
     assert!(matches!(r, Reply::Ok(_)), "{r:?}");
     let line = &c.view.as_ref().unwrap().lines[0].spans;
     assert_eq!(line[0].hl.as_deref(), Some("syntax.keyword"), "{line:?}");
+}
+
+#[test]
+fn ui_commands_are_core_commands_with_events() {
+    let root = workspace("uievents");
+    let s = session_in(&root, &["notes.txt"]);
+    let mut c = Client::attach(&s, 160, 30);
+    c.send(ClientMsg::Subscribe {
+        filters: vec!["ui.*".into()],
+    });
+    c.sync();
+    // Through a key: ctrl+b runs ui.set steps; the events name the client.
+    let msgs = c.keys("<C-b>");
+    let names: Vec<(String, Value)> = msgs
+        .iter()
+        .filter_map(|m| match m {
+            ServerMsg::Event { name, payload, .. } => Some((name.clone(), payload.clone())),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        names.iter().any(|(n, p)| n == "ui.changed"
+            && p["key"] == "ui.sidebar_open"
+            && p["client"].is_u64()),
+        "{names:?}"
+    );
+    // Focus changes publish ui.focused once.
+    assert!(matches!(
+        c.command("ui.focus", json!({ "region": "agent" })),
+        Reply::Ok(_)
+    ));
+    let msgs = c.sync();
+    let _ = msgs;
+    let focused = c
+        .log
+        .iter()
+        .filter(|m| matches!(m, ServerMsg::Event { name, .. } if name == "ui.focused"))
+        .count();
+    assert_eq!(focused, 1);
+    // A second focus on the same region publishes nothing.
+    assert!(matches!(
+        c.command("ui.focus", json!({ "region": "agent" })),
+        Reply::Ok(_)
+    ));
+    let focused = c
+        .log
+        .iter()
+        .filter(|m| matches!(m, ServerMsg::Event { name, .. } if name == "ui.focused"))
+        .count();
+    assert_eq!(focused, 1);
+}
+
+#[test]
+fn quit_from_a_command_drops_the_client_after_the_call() {
+    let root = workspace("uiquit");
+    let s = session_in(&root, &["notes.txt"]);
+    let mut c = Client::attach(&s, 160, 30);
+    c.send(ClientMsg::Command {
+        req: 3,
+        id: "ui.quit".into(),
+        args: json!({}),
+    });
+    c.sync();
+    assert_eq!(c.bye.as_deref(), Some("quit"));
+}
+
+#[test]
+fn the_palette_opens_matches_files_and_opens_one() {
+    let root = workspace("palette-files");
+    let s = session_in(&root, &["notes.txt"]);
+    let mut c = Client::attach(&s, 160, 45);
+    c.keys("<C-Space>");
+    assert_eq!(c.focus(), "palette_query");
+    assert_eq!(c.overlays.len(), 1);
+    assert_eq!(
+        (c.overlays[0].width, c.overlays[0].top, c.overlays[0].dim),
+        (72, 3, 50)
+    );
+    assert_eq!(
+        c.overlay_node("palette_scope").text.as_deref(),
+        Some(" Go to ")
+    );
+    // An empty query: actions (no other document was active yet), with key hints.
+    let save = c
+        .palette()
+        .items
+        .iter()
+        .find(|i| i.id == "a:save")
+        .expect("a Save row");
+    assert_eq!(save.key.as_deref(), Some("ctrl+s"));
+    assert_eq!(c.palette().items[0].kind, ItemKind::Section);
+    // Typing matches files off the session thread.
+    c.keys("mainrs");
+    assert_eq!(c.query(), "mainrs");
+    c.until("main.rs in the rows", |c| {
+        c.palette_ids().contains(&"f:src/main.rs")
+    });
+    let row = c
+        .palette()
+        .items
+        .iter()
+        .find(|i| i.id == "f:src/main.rs")
+        .unwrap();
+    assert_eq!(row.text, "main.rs");
+    assert_eq!(row.detail.as_deref(), Some("src"));
+    assert_eq!(row.matches, [[0, 4], [5, 7]]);
+    assert_eq!(c.palette_selected(), "f:src/main.rs");
+    let generation = c.palette().generation;
+    assert!(generation > 0);
+    // Enter opens it, closes the palette and focuses the code.
+    c.keys("<CR>");
+    assert!(c.overlays.is_empty());
+    assert_eq!(c.focus(), "code");
+    assert_eq!(c.text(), "fn main() {}\n");
+    // ctrl+e lists the previous document first.
+    c.keys("<C-e>");
+    assert_eq!(
+        c.overlay_node("palette_scope").text.as_deref(),
+        Some(" Recent ")
+    );
+    assert_eq!(c.palette_ids(), ["r:notes.txt"]);
+    c.keys("<CR>");
+    assert_eq!(c.text(), "one\ntwo\n");
+}
+
+#[test]
+fn enter_typed_with_the_query_runs_that_querys_best_file() {
+    let root = workspace("palette-batch");
+    let s = session_in(&root, &["notes.txt"]);
+    let mut c = Client::attach(&s, 160, 45);
+    // Wait for the index, then close.
+    c.keys("<C-p>mainrs");
+    c.until("main.rs in the rows", |c| {
+        c.palette_ids().contains(&"f:src/main.rs")
+    });
+    c.keys("<Esc><C-p>notes");
+    c.until("notes.txt in the rows", |c| {
+        c.palette_ids().contains(&"f:notes.txt")
+    });
+    c.keys("<Esc>");
+    // One batch: no frame shows "mainrs" before Enter.
+    c.keys("<C-p>mainrs<CR>");
+    assert!(c.overlays.is_empty());
+    assert_eq!(c.text(), "fn main() {}\n");
+}
+
+#[test]
+fn palette_scopes_switch_by_key_and_prefix() {
+    let root = workspace("palette-scopes");
+    let s = session_in(&root, &["notes.txt"]);
+    let mut c = Client::attach(&s, 160, 45);
+    c.keys("<C-Space>main");
+    // ctrl+p inside the palette shows files and keeps the query.
+    c.keys("<C-p>");
+    assert_eq!(
+        c.overlay_node("palette_scope").text.as_deref(),
+        Some(" Files ")
+    );
+    assert_eq!(c.query(), "main");
+    c.until("main.rs", |c| {
+        c.palette_ids().first() == Some(&"f:src/main.rs")
+    });
+    // esc closes; ctrl+space opens empty; ">" switches to actions and is not kept.
+    c.keys("<Esc>");
+    assert!(c.overlays.is_empty());
+    assert_eq!(c.focus(), "code");
+    c.keys("<C-Space>>");
+    assert_eq!(
+        c.overlay_node("palette_scope").text.as_deref(),
+        Some(" Actions ")
+    );
+    assert_eq!(c.query(), "");
+    assert!(c.palette_ids().iter().all(|i| i.starts_with("a:")));
+    c.keys("tog side");
+    assert_eq!(c.palette_selected(), "a:toggle_sidebar");
+    // Backspace in an empty query goes back to the scope it opened with.
+    for _ in 0..8 {
+        c.keys("<BS>");
+    }
+    assert_eq!(c.query(), "");
+    assert_eq!(
+        c.overlay_node("palette_scope").text.as_deref(),
+        Some(" Actions ")
+    );
+    c.keys("<BS>");
+    assert_eq!(
+        c.overlay_node("palette_scope").text.as_deref(),
+        Some(" Go to ")
+    );
+    // Running an action runs it as its key would where focus was: ctrl+b on a
+    // shown sidebar hides it.
+    assert!(c.shows("sidebar"));
+    c.keys(">tog side<CR>");
+    assert!(c.overlays.is_empty());
+    assert!(!c.shows("sidebar"));
+}
+
+#[test]
+fn go_to_line_moves_the_cursor() {
+    let root = workspace("palette-line");
+    std::fs::write(root.join("notes.txt"), "one\n  two\nthree\n").unwrap();
+    let s = session_in(&root, &["notes.txt"]);
+    let mut c = Client::attach(&s, 160, 45);
+    c.keys("<C-g>");
+    assert!(c.palette_ids().is_empty());
+    assert_eq!(
+        c.overlay_node("palette_note").text.as_deref(),
+        Some("Type a line number, or line:column")
+    );
+    c.keys("2");
+    assert_eq!(c.palette().items[0].text, "Go to line 2");
+    c.keys("<CR>");
+    let cur = c.view.as_ref().unwrap().cursors[0];
+    assert_eq!((cur.line, cur.col), (1, 2), "the first non-blank of line 2");
+    c.keys("<C-g>3:4<CR>");
+    let cur = c.view.as_ref().unwrap().cursors[0];
+    assert_eq!((cur.line, cur.col), (2, 3));
+    c.keys("<C-g>99");
+    assert_eq!(c.palette().items[0].text, "Go to the last line (4)");
+}
+
+#[test]
+fn go_to_line_scrolls_a_long_file() {
+    let root = workspace("palette-line-long");
+    let text = "line\n".repeat(2000);
+    std::fs::write(root.join("long.txt"), text).unwrap();
+    let s = session_in(&root, &["long.txt"]);
+    let mut c = Client::attach(&s, 160, 45);
+    c.keys("<C-g>1200<CR>");
+    let v = c.view.as_ref().unwrap();
+    assert_eq!(v.cursors[0].line, 1199);
+    let rows = u32::try_from(v.lines.len()).unwrap();
+    assert!(
+        v.top_line <= 1199 && 1199 < v.top_line + rows,
+        "the view scrolled to the cursor: top {}",
+        v.top_line
+    );
+}
+
+#[test]
+fn a_press_outside_the_palette_closes_it_and_moves_nothing() {
+    let root = workspace("palette-outside");
+    let s = session_in(&root, &["notes.txt"]);
+    let mut c = Client::attach(&s, 160, 45);
+    c.keys("<Down>");
+    let before = c.view.as_ref().unwrap().cursors[0];
+    c.keys("<C-Space>");
+    c.send(ClientMsg::Mouse {
+        node: "code".into(),
+        action: MouseAction::Press,
+        line: 0,
+        col: 2,
+        lines: 0,
+        item: None,
+    });
+    c.sync();
+    assert!(c.overlays.is_empty());
+    assert_eq!(c.focus(), "code");
+    assert_eq!(c.view.as_ref().unwrap().cursors[0], before);
+    // A press inside (on a row) runs it.
+    c.keys("<C-Space>>save");
+    c.press("palette_list", Some("a:save"));
+    assert!(c.overlays.is_empty());
+}
+
+#[test]
+fn paste_goes_to_the_palette_query_on_one_line() {
+    let root = workspace("palette-paste");
+    let s = session_in(&root, &["notes.txt"]);
+    let mut c = Client::attach(&s, 160, 45);
+    c.keys("<C-Space>");
+    c.send(ClientMsg::Paste {
+        text: "src\nmain".into(),
+    });
+    c.sync();
+    assert_eq!(c.query(), "src main");
+    c.keys("<Esc>");
+    assert_eq!(c.text(), "one\ntwo\n", "nothing reached the document");
 }

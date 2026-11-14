@@ -174,8 +174,8 @@ mod transport;
 
 pub use protocol::{
     BadRows, Caps, ClientKind, ClientMsg, Cursor, CursorKind, Dim, Item, ItemKind, Layout, Line,
-    ListView, MouseAction, Node, NodeKind, PROTOCOL_VERSION, Pos, Reply, Rows, Sel, ServerMsg,
-    Size, Span, SurfaceSize, SurfaceView, Token, WireError, peek_hello, tokens,
+    ListView, MouseAction, Node, NodeKind, Overlay, PROTOCOL_VERSION, Pos, Reply, Rows, Sel,
+    ServerMsg, Size, Span, SurfaceSize, SurfaceView, Token, WireError, peek_hello, tokens,
 };
 pub use transport::{
     ClientEnd, Closed, Endpoint, FrameReader, FrameWriter, MAX_FRAME, QUEUE, ServerEnd, in_process,

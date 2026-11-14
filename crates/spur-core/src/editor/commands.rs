@@ -64,7 +64,9 @@ struct MoveArgs {
 #[derive(Deserialize)]
 struct MoveToArgs {
     line: usize,
-    col: usize,
+    /// Char column; none puts the cursor on the line's first non-blank char.
+    #[serde(default)]
+    col: Option<usize>,
 }
 
 #[derive(Deserialize)]
@@ -706,7 +708,7 @@ pub fn register_editor_commands(core: &mut Core<Editor>) -> Result<(), RegisterE
 
     reg(
         "view.move_to",
-        "Put the cursor at a line and char column, dropping other cursors.",
+        "Put the cursor at a line and char column (default: the first non-blank), dropping other cursors.",
         |m| {
             m.read_only().args_schema(json!({
                 "type": "object",
@@ -714,14 +716,17 @@ pub fn register_editor_commands(core: &mut Core<Editor>) -> Result<(), RegisterE
                     "line": { "type": "integer", "minimum": 0 },
                     "col": { "type": "integer", "minimum": 0 }
                 },
-                "required": ["line", "col"]
+                "required": ["line"]
             }))
         },
         |cx, a| {
             let m: MoveToArgs = parse_args(a)?;
             let snap = cx.state.snapshot();
             let line = m.line.min(snap.line_count().saturating_sub(1));
-            let at = motion::offset_at_col(&snap, line, m.col);
+            let at = match m.col {
+                Some(col) => motion::offset_at_col(&snap, line, col),
+                None => motion::first_nonblank(&snap, line),
+            };
             let depth = cx.depth();
             let id = focus(cx);
             let view = cx
@@ -1500,6 +1505,12 @@ mod tests {
         run(&mut c, "view.move_to", json!({ "line": 1, "col": 3 }));
         let p = c.state.primary_point(v).unwrap();
         assert_eq!((p.line, p.column), (1, 3));
+        // Without a column: the first non-blank char.
+        let mut c2 = core("a\n  bc\n", "insert");
+        let v2 = c2.state.focus;
+        run(&mut c2, "view.move_to", json!({ "line": 1 }));
+        let p = c2.state.primary_point(v2).unwrap();
+        assert_eq!((p.line, p.column), (1, 2));
         // Past the end clamps to the last line and its end.
         run(&mut c, "view.move_to", json!({ "line": 99, "col": 99 }));
         assert_eq!(c.state.primary_point(v).unwrap().line, 3);

@@ -2,15 +2,47 @@
 //! and the context keys that expose them to `when` clauses and templates.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use spur_core::editor::{Editor, ViewId};
 use spur_core::{Context, ContextLookup, CtxValue, Scoped};
-use spur_rpc::{ListView, Node};
+use spur_rpc::{ListView, Node, Overlay};
 
+use super::field::Field;
 use super::files::{Files, Tree};
 use super::pack::{Pack, StateValue};
+use super::palette::PaletteState;
 use super::{EDITOR_REGION, FILES_SOURCE};
 use crate::lang;
+
+/// A `ui` message as last sent.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SentUi {
+    /// The tree.
+    pub root: Node,
+    /// The focused node.
+    pub focus: String,
+    /// The overlays.
+    pub overlays: Vec<Overlay>,
+}
+
+impl SentUi {
+    /// True if `id` is in the tree or an overlay.
+    pub fn has(&self, id: &str) -> bool {
+        crate::session::has_node(&self.root, id)
+            || self
+                .overlays
+                .iter()
+                .any(|o| crate::session::has_node(&o.node, id))
+    }
+
+    /// True if `id` is in an overlay.
+    pub fn in_overlay(&self, id: &str) -> bool {
+        self.overlays
+            .iter()
+            .any(|o| crate::session::has_node(&o.node, id))
+    }
+}
 
 /// A client's UI state.
 #[derive(Clone, Debug)]
@@ -33,8 +65,22 @@ pub struct UiState {
     pub sent_lists: BTreeMap<String, ListView>,
     /// The theme generation last sent.
     pub sent_theme: Option<u64>,
-    /// The tree and focus last sent.
-    pub sent_ui: Option<(Node, String)>,
+    /// The tree, focus and overlays last sent.
+    pub sent_ui: Option<SentUi>,
+    /// The open overlay.
+    pub overlay: Option<String>,
+    /// The region focused before the overlay opened.
+    pub prev_focus: Option<String>,
+    /// The focused input, when one was chosen (else the first in the region).
+    pub input: Option<String>,
+    /// Input texts by node id.
+    pub fields: BTreeMap<String, Field>,
+    /// The input texts last sent.
+    pub sent_fields: BTreeMap<String, Field>,
+    /// The palette.
+    pub palette: PaletteState,
+    /// Documents this window made active, newest first (the current one too).
+    pub recent: Vec<PathBuf>,
 }
 
 impl UiState {
@@ -57,7 +103,27 @@ impl UiState {
             sent_lists: BTreeMap::new(),
             sent_theme: None,
             sent_ui: None,
+            overlay: None,
+            prev_focus: None,
+            input: None,
+            fields: BTreeMap::new(),
+            sent_fields: BTreeMap::new(),
+            palette: PaletteState::default(),
+            recent: Vec::new(),
         }
+    }
+
+    /// Notes the document now active; keeps [`super::palette::MAX_RECENT`] + 1.
+    pub fn visit(&mut self, path: Option<&std::path::Path>) {
+        let Some(p) = path else {
+            return;
+        };
+        if self.recent.first().is_some_and(|r| r == p) {
+            return;
+        }
+        self.recent.retain(|r| r != p);
+        self.recent.insert(0, p.to_owned());
+        self.recent.truncate(super::palette::MAX_RECENT + 1);
     }
 
     /// The notice shown: prompt, else status, else the pack error.
@@ -88,9 +154,28 @@ impl UiState {
             self.values
                 .insert(k.clone(), keep.unwrap_or(default).clone());
         }
+        if self
+            .overlay
+            .as_ref()
+            .is_some_and(|o| !pack.overlays.contains_key(o))
+        {
+            self.overlay = None;
+            if let Some(p) = self.prev_focus.take() {
+                self.focus = p;
+            }
+        }
         if !pack.regions.contains_key(&self.focus) {
             self.focus = EDITOR_REGION.into();
         }
+        if self.input.as_ref().is_some_and(|i| {
+            pack.nodes
+                .get(i)
+                .is_none_or(|n| n.kind != spur_rpc::NodeKind::Input)
+        }) {
+            self.input = None;
+        }
+        self.fields.retain(|id, _| pack.nodes.contains_key(id));
+        self.sent_fields.clear();
         let mut trees = std::mem::take(&mut self.trees);
         for (id, n) in &pack.nodes {
             if n.source.as_deref() == Some(FILES_SOURCE) {
@@ -140,6 +225,17 @@ pub fn refresh(scope: &mut Context, ui: &UiState, x: &ScopeInput<'_>) {
     }
     let _ = scope.set("ui.focus", ui.focus.as_str());
     let _ = scope.set("ui.notice", ui.notice(x.pack_error));
+    let _ = scope.set("ui.overlay", ui.overlay.as_deref().unwrap_or(""));
+    let input = focused_input(x.pack, ui, &Scoped(&[x.global, scope])).unwrap_or_default();
+    let _ = scope.set("ui.input", input.as_str());
+    let _ = scope.set("palette.scope", ui.palette.scope.as_str());
+    let label = if ui.palette.scope.is_empty() {
+        String::new()
+    } else {
+        x.pack
+            .message(&format!("palette.scope.{}", ui.palette.scope), &[])
+    };
+    let _ = scope.set("palette.label", label.as_str());
     let _ = scope.set("client.cols", i64::from(x.cols));
     let _ = scope.set("client.rows", i64::from(x.rows));
     let path =
@@ -183,8 +279,55 @@ pub fn text_of(v: &CtxValue) -> String {
 /// The first list node under `node` (itself included) in tree order, among the
 /// nodes whose `when` holds. `node` is taken as shown.
 pub fn first_list(pack: &Pack, node: &str, look: &impl ContextLookup) -> Option<String> {
+    first_of(pack, node, look, spur_rpc::NodeKind::List)
+}
+
+/// True if `node` and every node above it pass their `when`, and the tree it is in
+/// is shown (the root, or an open overlay).
+pub fn shown(pack: &Pack, node: &str, look: &impl ContextLookup) -> bool {
+    let mut id = node;
+    loop {
+        let Some(spec) = pack.nodes.get(id) else {
+            return false;
+        };
+        if spec.when.as_ref().is_some_and(|w| !w.eval(look)) {
+            return false;
+        }
+        match pack.parent.get(id) {
+            Some(p) => id = p,
+            None => break,
+        }
+    }
+    id == pack.root
+        || pack.overlays.iter().any(|(oid, o)| {
+            o.node == id
+                && matches!(look.get("ui.overlay"), Some(CtxValue::Str(s)) if &**s == oid.as_str())
+        })
+}
+
+/// The input that has focus: the chosen one if it is in the focused region and
+/// shown, else the first shown input of the region.
+pub fn focused_input(pack: &Pack, ui: &UiState, look: &impl ContextLookup) -> Option<String> {
+    let region = pack.regions.get(&ui.focus)?;
+    if let Some(i) = &ui.input
+        && pack.within(i, &region.node)
+        && shown(pack, i, look)
+    {
+        return Some(i.clone());
+    }
+    first_of(pack, &region.node, look, spur_rpc::NodeKind::Input)
+}
+
+/// The first node of `kind` under `node` (itself included) in tree order, among
+/// the nodes whose `when` holds. `node` is taken as shown.
+pub fn first_of(
+    pack: &Pack,
+    node: &str,
+    look: &impl ContextLookup,
+    kind: spur_rpc::NodeKind,
+) -> Option<String> {
     let spec = pack.nodes.get(node)?;
-    if spec.kind == spur_rpc::NodeKind::List {
+    if spec.kind == kind {
         return Some(node.to_owned());
     }
     spec.children.iter().find_map(|c| {
@@ -193,26 +336,11 @@ pub fn first_list(pack: &Pack, node: &str, look: &impl ContextLookup) -> Option<
             .get(c)
             .is_some_and(|s| s.when.as_ref().is_none_or(|w| w.eval(look)));
         if shown {
-            first_list(pack, c, look)
+            first_of(pack, c, look, kind)
         } else {
             None
         }
     })
-}
-
-/// True if `node` and every node above it pass their `when`.
-pub fn shown(pack: &Pack, node: &str, look: &impl ContextLookup) -> bool {
-    let mut n = Some(node);
-    while let Some(id) = n {
-        let Some(spec) = pack.nodes.get(id) else {
-            return false;
-        };
-        if spec.when.as_ref().is_some_and(|w| !w.eval(look)) {
-            return false;
-        }
-        n = pack.parent.get(id).map(String::as_str);
-    }
-    true
 }
 
 #[cfg(test)]

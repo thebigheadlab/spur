@@ -23,9 +23,9 @@ pub use command::{
 };
 pub use context::{Context, ContextLookup, CtxValue, Scoped};
 pub use core::{
-    AfterFn, AuditLog, AuditRecord, CommandDescription, CommandHandle, Core, Cx, DEFAULT_AUDIT,
-    GateFn, Handler, Hook, Invocation, MAX_DEPTH, MiddlewareId, MiddlewareInfo, Phase,
-    RegisterError, RewriteFn, Target,
+    AfterFn, AuditLog, AuditRecord, ClientHost, CommandDescription, CommandHandle, Core, Cx,
+    DEFAULT_AUDIT, GateFn, Handler, Hook, Invocation, MAX_DEPTH, MiddlewareId, MiddlewareInfo,
+    Phase, RegisterError, RewriteFn, Target,
 };
 pub use name::{
     CORE_NAMESPACES, CommandId, EventName, MAX_NAME_LEN, NameError, RESERVED_EVENT_FAMILIES,

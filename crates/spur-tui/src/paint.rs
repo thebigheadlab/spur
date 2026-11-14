@@ -3,7 +3,10 @@
 
 use std::collections::BTreeMap;
 
-use spur_rpc::{CursorKind, ItemKind, ListView, Node, NodeKind, SurfaceSize, SurfaceView, tokens};
+use spur_rpc::{
+    CursorKind, Dim, ItemKind, ListView, Node, NodeKind, Overlay, SurfaceSize, SurfaceView, tokens,
+};
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::clean::{Piece, cell};
 use crate::color::{Palette, Style};
@@ -37,6 +40,21 @@ pub struct Screen {
     pub surfaces: BTreeMap<String, SurfaceState>,
     /// Draw icons with their ASCII fallback.
     pub ascii: bool,
+    /// Trees drawn on top of `root`.
+    pub overlays: Vec<Overlay>,
+    /// Latest text per input node.
+    pub inputs: BTreeMap<String, InputText>,
+}
+
+/// An input's text, cursor and selection (grapheme indices).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct InputText {
+    /// Text.
+    pub text: String,
+    /// Cursor.
+    pub cursor: u32,
+    /// Other end of the selection.
+    pub anchor: Option<u32>,
 }
 
 /// What a press at a cell lands on.
@@ -230,7 +248,8 @@ fn columns(text: &str, tab: u32) -> (Vec<u32>, Vec<(u32, Piece)>) {
     (starts, cells)
 }
 
-/// Draws the screen in a `w` x `h` grid.
+/// Draws the screen in a `w` x `h` grid: the tree, then each overlay over the
+/// dimmed tree.
 pub fn paint(screen: &mut Screen, w: u32, h: u32) -> Frame {
     let mut frame = Frame {
         grid: Grid::new(w, h),
@@ -241,11 +260,105 @@ pub fn paint(screen: &mut Screen, w: u32, h: u32) -> Frame {
     let Some(root) = screen.root.take() else {
         return frame;
     };
-    let placed = layout(&root, Rect { x: 0, y: 0, w, h });
     let focus = screen.focus.clone().unwrap_or_default();
+    paint_tree(
+        &mut frame,
+        screen,
+        &root,
+        Rect { x: 0, y: 0, w, h },
+        &focus,
+        false,
+    );
+    screen.root = Some(root);
+    let overlays = std::mem::take(&mut screen.overlays);
+    for o in &overlays {
+        let target = screen.palette.get(tokens::OVERLAY_DIM).and_then(|s| s.bg);
+        frame.grid.dim(o.dim, target);
+        // Presses on the dimmed tree reach the server, which closes the overlay.
+        let r = overlay_rect(o, screen, w, h);
+        frame.grid.clear(r.x, r.y, r.w, r.h);
+        // Presses on its padding count as inside it, never the shell beneath.
+        frame.hits.push(Hit {
+            rect: r,
+            node: o.node.id.clone(),
+            kind: HitKind::Click,
+        });
+        paint_tree(&mut frame, screen, &o.node, r, &focus, true);
+    }
+    screen.overlays = overlays;
+    frame
+}
+
+/// Where an overlay goes: centred, `top` down, its fit height (lists count their
+/// rows) capped at `max_height`; kept 2 cells from each side of the window.
+fn overlay_rect(o: &Overlay, screen: &Screen, w: u32, h: u32) -> Rect {
+    let width = o.width.min(w.saturating_sub(4)).max(1.min(w));
+    let height = fit_h(&o.node, screen)
+        .min(o.max_height)
+        .min(h.saturating_sub(4))
+        .max(1.min(h));
+    let top = o.top.min(h.saturating_sub(2).saturating_sub(height));
+    Rect {
+        x: (w - width) / 2,
+        y: top,
+        w: width,
+        h: height,
+    }
+}
+
+/// The height a node wants, counting a list's rows.
+fn fit_h(n: &Node, screen: &Screen) -> u32 {
+    if let Dim::Units { n } = n.height {
+        return n;
+    }
+    let (v, _) = n.padding.map_or((0, 0), |[v, h]| (v, h));
+    let pad = v
+        .saturating_add(u32::from(n.border.is_some()))
+        .saturating_mul(2);
+    match n.kind {
+        NodeKind::Text | NodeKind::Icon | NodeKind::Input => 1,
+        NodeKind::List => screen.lists.get(&n.id).map_or(0, |l| l.total),
+        NodeKind::Spacer | NodeKind::Surface => 0,
+        NodeKind::Row => n
+            .children
+            .iter()
+            .map(|c| fit_h(c, screen))
+            .max()
+            .unwrap_or(0)
+            .saturating_add(pad),
+        NodeKind::Column | NodeKind::Card | NodeKind::Unknown => {
+            let gaps = n
+                .gap
+                .saturating_mul(u32::try_from(n.children.len().saturating_sub(1)).unwrap_or(0));
+            n.children
+                .iter()
+                .map(|c| fit_h(c, screen))
+                .fold(0u32, u32::saturating_add)
+                .saturating_add(gaps)
+                .saturating_add(pad)
+        }
+    }
+}
+
+/// Lays out and draws one tree in `area`. Focus inside an overlay makes the whole
+/// overlay focused (its list shows the selection while its input has the cursor).
+fn paint_tree(
+    frame: &mut Frame,
+    screen: &mut Screen,
+    root: &Node,
+    area: Rect,
+    focus: &str,
+    overlay: bool,
+) {
+    let placed = layout(root, area);
     // Nodes inside the focused node, by id.
     let mut focused_ids = std::collections::HashSet::new();
-    collect_focused(&root, &focus, false, &mut focused_ids);
+    let scope = if overlay && placed.iter().any(|p| p.node.id == focus) {
+        root.id.as_str()
+    } else {
+        focus
+    };
+    collect_focused(root, scope, false, &mut focused_ids);
     for p in &placed {
         let n = p.node;
         let r = p.rect;
@@ -268,6 +381,18 @@ pub fn paint(screen: &mut Screen, w: u32, h: u32) -> Frame {
                     frame
                         .grid
                         .text(r.x + (r.w - 1) / 2, r.y + (r.h - 1) / 2, r.x + r.w, t, None);
+                }
+            }
+            NodeKind::Input => {
+                let cursor = paint_input(
+                    &mut frame.grid,
+                    r,
+                    n,
+                    screen.inputs.get(&n.id),
+                    &screen.palette,
+                );
+                if n.id == focus {
+                    frame.cursor = cursor;
                 }
             }
             NodeKind::List => {
@@ -318,9 +443,60 @@ pub fn paint(screen: &mut Screen, w: u32, h: u32) -> Frame {
             });
         }
     }
-    drop(placed);
-    screen.root = Some(root);
-    frame
+}
+
+/// Draws an input: its text scrolled sideways to keep the cursor in view (or the
+/// placeholder while empty), and the selection. Returns the cursor's cell.
+fn paint_input(
+    g: &mut Grid,
+    r: Rect,
+    n: &Node,
+    t: Option<&InputText>,
+    pal: &Palette,
+) -> Option<(u32, u32)> {
+    if r.w == 0 || r.h == 0 {
+        return None;
+    }
+    let t = t.cloned().unwrap_or_default();
+    if t.text.is_empty() {
+        if let Some(p) = &n.text {
+            let s = n.placeholder_style.as_deref().and_then(|s| pal.get(s));
+            g.text(r.x, r.y, r.x + r.w, p, fg_only(s));
+        }
+        return Some((r.x, r.y));
+    }
+    let gs: Vec<&str> = t.text.graphemes(true).collect();
+    let widths: Vec<u32> = gs.iter().map(|s| crate::clean::width(s)).collect();
+    let cursor = (t.cursor as usize).min(gs.len());
+    // First grapheme shown: enough that the cursor's cell fits.
+    let mut first = 0;
+    let room = r.w.saturating_sub(1);
+    while first < cursor && widths[first..cursor].iter().sum::<u32>() > room {
+        first += 1;
+    }
+    let sel = t
+        .anchor
+        .map(|a| (a.min(t.cursor) as usize, a.max(t.cursor) as usize));
+    let sel_style = pal.get(tokens::SELECTION);
+    let mut x = r.x;
+    let mut cx = r.x;
+    for (i, s) in gs.iter().enumerate().skip(first) {
+        if i == cursor {
+            cx = x;
+        }
+        if x >= r.x + r.w {
+            break;
+        }
+        let style = match sel {
+            Some((a, b)) if i >= a && i < b => sel_style,
+            _ => None,
+        };
+        x = g.text(x, r.y, r.x + r.w, s, style);
+    }
+    if cursor >= gs.len() {
+        cx = x;
+    }
+    Some((cx.min(r.x + r.w - 1), r.y))
 }
 
 /// Draws a text node, repeated to fill its width if asked; nothing when it has
@@ -407,7 +583,7 @@ fn paint_list(g: &mut Grid, r: Rect, l: &ListView, pal: &Palette, focused: bool,
         {
             g.paint(r.x, y, r.w, 1, s);
         }
-        if l.selected == Some(index) {
+        if l.selected == Some(index) && item.kind != ItemKind::Section {
             let name = if focused {
                 tokens::LIST_ROW_SELECTED_FOCUSED
             } else {
@@ -417,7 +593,16 @@ fn paint_list(g: &mut Grid, r: Rect, l: &ListView, pal: &Palette, focused: bool,
                 g.paint(r.x, y, r.w, 1, s);
             }
         }
-        let end = r.x + r.w;
+        let mut end = r.x + r.w;
+        // The key hint sits at the right edge; the text stops a cell before it.
+        if let Some(k) = item.key.as_deref().filter(|k| !k.is_empty()) {
+            let kw = crate::clean::width(k);
+            if kw + 2 < r.w {
+                let kx = end - kw - 1;
+                g.text(kx, y, end, k, fg_only(get(tokens::LIST_KEY)));
+                end = kx.saturating_sub(1);
+            }
+        }
         let mut x = r.x + (2 * item.depth).min(r.w);
         let glyph = if ascii {
             item.alt.as_ref().or(item.glyph.as_ref())
@@ -432,10 +617,59 @@ fn paint_list(g: &mut Grid, r: Rect, l: &ListView, pal: &Palette, focused: bool,
             ItemKind::Dir => get(tokens::LIST_DIR),
             ItemKind::More => get(tokens::LIST_MORE),
             ItemKind::Error => get(tokens::LIST_ERROR),
+            ItemKind::Section => get(tokens::LIST_SECTION),
             _ => None,
         };
-        g.text(x, y, end, &item.text, fg_only(style));
+        x = matched(g, x, y, end, &item.text, &item.matches, fg_only(style), pal);
+        if let Some(d) = item.detail.as_deref().filter(|d| !d.is_empty()) {
+            x = g.text(x, y, end, " ", None);
+            matched(
+                g,
+                x,
+                y,
+                end,
+                d,
+                &item.detail_matches,
+                fg_only(get(tokens::LIST_DETAIL)),
+                pal,
+            );
+        }
     }
+}
+
+/// Writes `text` with the graphemes in `ranges` in the match style. Returns the x
+/// after it.
+#[allow(clippy::too_many_arguments)]
+fn matched(
+    g: &mut Grid,
+    x: u32,
+    y: u32,
+    end: u32,
+    text: &str,
+    ranges: &[[u32; 2]],
+    style: Option<Style>,
+    pal: &Palette,
+) -> u32 {
+    let after = g.text(x, y, end, text, style);
+    if ranges.is_empty() {
+        return after;
+    }
+    let m = fg_only(pal.get(tokens::LIST_MATCH));
+    let mut cx = x;
+    for (i, s) in text.graphemes(true).enumerate() {
+        let w = crate::clean::width(s);
+        let i = u32::try_from(i).unwrap_or(u32::MAX);
+        if cx >= end {
+            break;
+        }
+        if let Some(st) = m
+            && ranges.iter().any(|[a, b]| (*a..*b).contains(&i))
+        {
+            g.paint(cx, y, w.min(end - cx), 1, st);
+        }
+        cx += w;
+    }
+    after
 }
 
 /// A style's text colour and attributes, keeping the row's background.
@@ -748,6 +982,152 @@ mod tests {
         let f = paint(&mut screen, 3, 2);
         assert_eq!(f.grid.cell(0, 0).bg, None);
         assert!(f.grid.cell(0, 1).bg.is_some());
+    }
+
+    fn tok(fg: Option<&str>, bg: Option<&str>) -> spur_rpc::Token {
+        spur_rpc::Token {
+            fg: fg.map(Into::into),
+            bg: bg.map(Into::into),
+            ..spur_rpc::Token::default()
+        }
+    }
+
+    #[test]
+    fn an_overlay_dims_the_tree_and_draws_centred_with_its_input_cursor() {
+        let mut tokens = std::collections::BTreeMap::new();
+        tokens.insert("app".to_owned(), tok(Some("#ffffff"), Some("#646464")));
+        tokens.insert(tokens::OVERLAY_DIM.to_owned(), tok(None, Some("#000000")));
+        tokens.insert(
+            tokens::LIST_ROW_SELECTED_FOCUSED.to_owned(),
+            tok(None, Some("#0000ff")),
+        );
+        let root = Node {
+            style: Some("app".into()),
+            children: vec![text("t", "behind")],
+            ..Node::new("root", NodeKind::Column)
+        };
+        let input = Node {
+            text: Some("type".into()),
+            height: spur_rpc::Dim::Fit,
+            ..Node::new("q", NodeKind::Input)
+        };
+        let card = Node {
+            children: vec![input, Node::new("l", NodeKind::List)],
+            ..Node::new("o", NodeKind::Column)
+        };
+        let mut screen = Screen {
+            root: Some(root),
+            palette: Palette::new(&tokens, true),
+            focus: Some("q".into()),
+            overlays: vec![Overlay {
+                node: card,
+                top: 1,
+                width: 10,
+                max_height: 3,
+                dim: 50,
+            }],
+            ..Screen::default()
+        };
+        screen.lists.insert(
+            "l".into(),
+            ListView {
+                total: 5,
+                items: (0..5)
+                    .map(|i| spur_rpc::Item {
+                        id: i.to_string(),
+                        text: format!("row{i}"),
+                        ..spur_rpc::Item::default()
+                    })
+                    .collect(),
+                selected: Some(0),
+                ..ListView::default()
+            },
+        );
+        let f = paint(&mut screen, 20, 8);
+        // The input has the focus, so the overlay's list shows its selection.
+        assert_eq!(
+            f.grid.cell(5, 2).bg,
+            Some(crate::color::Color::Rgb(0, 0, 255))
+        );
+        let lines: Vec<String> = f.grid.lines().iter().map(|l| format!("{l:<20}")).collect();
+        // Centred, 10 wide, at row 1; 3 rows: the input and two list rows.
+        assert_eq!(&lines[1][5..15], "type      ");
+        assert_eq!(&lines[2][5..15], "row0      ");
+        assert_eq!(&lines[3][5..15], "row1      ");
+        assert!(lines[4].trim().is_empty());
+        assert_eq!(
+            f.cursor,
+            Some((5, 1)),
+            "an empty input: the cursor at its start"
+        );
+        // The tree behind is mixed half way toward black.
+        assert_eq!(
+            f.grid.cell(0, 0).bg,
+            Some(crate::color::Color::Rgb(50, 50, 50))
+        );
+        assert_eq!(
+            f.grid.cell(0, 0).fg,
+            Some(crate::color::Color::Rgb(128, 128, 128))
+        );
+        // With text, the cursor follows it and the text scrolls to keep it in view.
+        screen.inputs.insert(
+            "q".into(),
+            InputText {
+                text: "abcdefghijkl".into(),
+                cursor: 12,
+                anchor: None,
+            },
+        );
+        let f = paint(&mut screen, 20, 8);
+        assert_eq!(&format!("{:<20}", f.grid.lines()[1])[5..15], "defghijkl ");
+        assert_eq!(f.cursor, Some((14, 1)));
+    }
+
+    #[test]
+    fn list_rows_draw_details_keys_matches_and_sections() {
+        let mut tokens = std::collections::BTreeMap::new();
+        tokens.insert(tokens::LIST_MATCH.to_owned(), tok(Some("#ff0000"), None));
+        tokens.insert(tokens::LIST_SECTION.to_owned(), tok(Some("#00ff00"), None));
+        let mut screen = Screen {
+            root: Some(Node::new("l", NodeKind::List)),
+            palette: Palette::new(&tokens, true),
+            ..Screen::default()
+        };
+        screen.lists.insert(
+            "l".into(),
+            ListView {
+                selected: Some(0),
+                items: vec![
+                    spur_rpc::Item {
+                        id: "s".into(),
+                        text: "FILES".into(),
+                        kind: ItemKind::Section,
+                        ..spur_rpc::Item::default()
+                    },
+                    spur_rpc::Item {
+                        id: "f".into(),
+                        text: "main.rs".into(),
+                        detail: Some("src".into()),
+                        matches: vec![[0, 2]],
+                        key: Some("ctrl+s".into()),
+                        ..spur_rpc::Item::default()
+                    },
+                ],
+                ..ListView::default()
+            },
+        );
+        let f = paint(&mut screen, 24, 2);
+        let lines = f.grid.lines();
+        assert_eq!(lines[0], "FILES");
+        assert_eq!(lines[1], "main.rs src      ctrl+s");
+        let red = Some(crate::color::Color::Rgb(255, 0, 0));
+        assert_eq!(f.grid.cell(0, 1).fg, red);
+        assert_eq!(f.grid.cell(1, 1).fg, red);
+        assert_ne!(f.grid.cell(2, 1).fg, red);
+        assert_eq!(
+            f.grid.cell(0, 0).fg,
+            Some(crate::color::Color::Rgb(0, 255, 0))
+        );
     }
 
     #[test]

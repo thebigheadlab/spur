@@ -56,6 +56,7 @@ fn content(n: &Node) -> (u32, u32) {
     match n.kind {
         NodeKind::Text => (n.text.as_deref().map_or(0, clean::width), 1),
         NodeKind::Icon => (1, 1),
+        NodeKind::Input => (0, 1),
         NodeKind::Spacer | NodeKind::Surface | NodeKind::List => (0, 0),
         NodeKind::Row | NodeKind::Column | NodeKind::Card | NodeKind::Unknown => {
             let (pv, ph) = padding(n);

@@ -375,10 +375,12 @@ impl Tree {
                     kind: r.kind,
                     open: r.open,
                     current: r.kind == ItemKind::Entry && current == Some(r.id.as_str()),
+                    ..Item::default()
                 }
             })
             .collect();
         ListView {
+            generation: 0,
             offset: self.offset,
             total,
             selected: sel.map(|i| u32::try_from(i).unwrap_or(u32::MAX)),

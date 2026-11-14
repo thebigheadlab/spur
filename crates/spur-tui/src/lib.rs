@@ -390,13 +390,37 @@ impl App {
             ServerMsg::Theme { tokens, .. } => {
                 self.screen.palette = Palette::new(&tokens, self.truecolor);
             }
-            ServerMsg::Ui { root, focus } => {
+            ServerMsg::Ui {
+                root,
+                focus,
+                overlays,
+            } => {
                 let mut ids = std::collections::HashSet::new();
                 collect_ids(&root, &mut ids);
+                for o in &overlays {
+                    collect_ids(&o.node, &mut ids);
+                }
                 self.screen.lists.retain(|k, _| ids.contains(k.as_str()));
                 self.screen.surfaces.retain(|k, _| ids.contains(k.as_str()));
+                self.screen.inputs.retain(|k, _| ids.contains(k.as_str()));
                 self.screen.root = Some(root);
+                self.screen.overlays = overlays;
                 self.screen.focus = focus;
+            }
+            ServerMsg::Input {
+                node,
+                text,
+                cursor,
+                anchor,
+            } => {
+                self.screen.inputs.insert(
+                    node,
+                    paint::InputText {
+                        text,
+                        cursor,
+                        anchor,
+                    },
+                );
             }
             ServerMsg::List { node, list } => {
                 self.screen.lists.insert(node, list);

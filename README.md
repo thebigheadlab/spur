@@ -49,7 +49,7 @@ cargo run --release -p spur-server --example two_clients
 cargo run --release -p spur-server --example latency
 ```
 
-The server and protocol are described in [ADR 0006](docs/adr/0006-editor-server-and-protocol-v0.md); UX packs and the terminal client in [ADR 0007](docs/adr/0007-ux-packs-and-terminal-client.md).
+The server and protocol are described in [ADR 0006](docs/adr/0006-editor-server-and-protocol-v0.md); UX packs and the terminal client in [ADR 0007](docs/adr/0007-ux-packs-and-terminal-client.md); the palette, actions and key hints in [ADR 0008](docs/adr/0008-palette-keys-and-settings.md).
 
 ## Run
 

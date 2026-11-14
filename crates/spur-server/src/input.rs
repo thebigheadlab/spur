@@ -1,6 +1,5 @@
 //! Input from clients: keys, paste, mouse and size.
 
-use std::sync::Arc;
 use std::time::Instant;
 
 use serde_json::json;
@@ -9,8 +8,10 @@ use spur_keymap::{Dispatch, parse_keys};
 use spur_rpc::{MouseAction, NodeKind, ServerMsg, Size, SurfaceSize};
 
 use crate::client::MAX_ROWS;
-use crate::session::{SCROLL_MARGIN, State, has_node};
+use crate::session::{SCROLL_MARGIN, State};
 use crate::ux::EDITOR_REGION;
+use crate::ux::client_ui;
+use crate::ux::commands::is_palette;
 
 /// The command id of an invocation, for notices.
 fn command_name(inv: &Invocation) -> String {
@@ -36,18 +37,9 @@ impl State {
             let Some(c) = self.clients.get_mut(&conn) else {
                 return;
             };
-            // The focused region's mode, or the view's own for the editor.
-            let region_mode = c.ui.as_ref().and_then(|ui| {
-                let r = self.ux.as_ref()?.pack.regions.get(&ui.focus)?;
-                r.mode.as_deref().map(Arc::<str>::from)
-            });
-            let mode = region_mode.unwrap_or_else(|| {
-                self.core
-                    .state
-                    .views
-                    .get(&c.active)
-                    .map_or_else(|| self.core.state.default_mode.clone(), |v| v.mode.clone())
-            });
+            // The focused input's mode, else the region's, else the view's own.
+            let mode =
+                client_ui::key_mode(self.ux.as_ref(), c, &self.core.state, self.core.context());
             let lookup = Scoped(&[self.core.context(), &c.scope]);
             let feed = c.keymap.feed(key, &mode, &lookup, now);
             for d in feed.run {
@@ -95,10 +87,30 @@ impl State {
         }
     }
 
-    /// Inserts `text` as one undo step of its own, never read as keys. Ignored while
-    /// focus is not on the editor, so it never edits a document out of sight.
+    /// Inserts `text` as one undo step of its own, never read as keys. With an
+    /// input focused it goes there (one line, cut at 4 KB); otherwise it is ignored
+    /// while focus is not on the editor, so it never edits a document out of sight.
     pub(crate) fn paste(&mut self, conn: u64, text: &str) {
         self.input_arrived(conn);
+        let input = match (self.ux.as_ref(), self.clients.get(&conn)) {
+            (Some(ux), Some(c)) => c.ui.as_ref().and_then(|ui| {
+                crate::ux::state::focused_input(
+                    &ux.pack,
+                    ui,
+                    &Scoped(&[self.core.context(), &c.scope]),
+                )
+            }),
+            _ => None,
+        };
+        if input.is_some() {
+            let id = CommandId::new("ui.input.insert").unwrap_or_else(|e| unreachable!("{e}"));
+            let inv = Invocation::new(id, Actor::User).args(json!({ "text": text }));
+            if let Some(Err(e)) = self.run_as(conn, inv) {
+                self.input_failed(conn, "ui.input.insert", e.message);
+            }
+            self.input_done(conn);
+            return;
+        }
         let elsewhere = self
             .clients
             .get(&conn)
@@ -138,6 +150,7 @@ impl State {
     }
 
     /// A press or wheel on `node`; `at` is (line, col, lines).
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn mouse(
         &mut self,
         conn: u64,
@@ -150,9 +163,29 @@ impl State {
         // Only what the client was last shown can be pressed.
         let in_tree = self.clients.get(&conn).is_none_or(|c| {
             c.ui.as_ref()
-                .is_none_or(|u| u.sent_ui.as_ref().is_some_and(|(n, _)| has_node(n, node)))
+                .is_none_or(|u| u.sent_ui.as_ref().is_some_and(|s| s.has(node)))
         });
         if !in_tree {
+            return;
+        }
+        // While an overlay is open, a press or wheel outside it dismisses it and
+        // goes no further, so nothing under a dimmed overlay moves.
+        let outside = self.clients.get(&conn).and_then(|c| {
+            let ui = c.ui.as_ref()?;
+            let sent = ui.sent_ui.as_ref()?;
+            (!sent.overlays.is_empty() && !sent.in_overlay(node)).then(|| ui.overlay.clone())
+        });
+        if let Some(open) = outside {
+            if action == MouseAction::Press {
+                self.input_arrived(conn);
+                let dismiss =
+                    open.and_then(|o| self.ux.as_ref()?.pack.overlays.get(&o)?.on_dismiss.clone());
+                if let Some(a) = dismiss {
+                    self.run_action(conn, &a);
+                }
+                self.input_done(conn);
+                self.check_focus(conn);
+            }
             return;
         }
         let surface = node == self.surface_id();
@@ -181,7 +214,12 @@ impl State {
                     if let Some(item) = item
                         && self.list_select(conn, node, item)
                     {
-                        self.list_activate(conn, Some(node.to_owned()));
+                        let id = CommandId::new("ui.list.activate")
+                            .unwrap_or_else(|e| unreachable!("{e}"));
+                        let inv = Invocation::new(id, Actor::User).args(json!({ "list": node }));
+                        if let Some(Err(e)) = self.run_as(conn, inv) {
+                            self.input_failed(conn, "ui.list.activate", e.message);
+                        }
                     }
                 } else {
                     self.click(conn, node);
@@ -193,6 +231,23 @@ impl State {
                 };
                 self.core.state.scroll_by(c.active, lines as isize);
                 c.dirty = true;
+            }
+            MouseAction::Scroll
+                if kind == Some(NodeKind::List)
+                    && self.ux.as_ref().is_some_and(|u| is_palette(u, node)) =>
+            {
+                let (Some(ux), Some(c)) = (self.ux.as_ref(), self.clients.get_mut(&conn)) else {
+                    return;
+                };
+                let hint = c.rows_hint();
+                if let Some(rows) =
+                    client_ui::palette_rows(ux, c, &self.core.state, self.core.context())
+                    && let Some(ui) = c.ui.as_mut()
+                {
+                    let height = ui.list_rows.get(node).copied().unwrap_or(hint);
+                    rows.scroll(&mut ui.palette, lines, height);
+                    c.dirty = true;
+                }
             }
             MouseAction::Scroll if kind == Some(NodeKind::List) => {
                 let (Some(ux), Some(c)) = (self.ux.as_mut(), self.clients.get_mut(&conn)) else {
@@ -219,6 +274,24 @@ impl State {
         let (Some(ux), Some(c)) = (self.ux.as_mut(), self.clients.get_mut(&conn)) else {
             return false;
         };
+        if is_palette(ux, node) {
+            let hint = c.rows_hint();
+            let Some(rows) = client_ui::palette_rows(ux, c, &self.core.state, self.core.context())
+            else {
+                return false;
+            };
+            let Some(ui) = c.ui.as_mut() else {
+                return false;
+            };
+            let height = ui.list_rows.get(node).copied().unwrap_or(hint);
+            return rows.select_id(
+                &mut ui.palette,
+                item,
+                height,
+                ux.matchers.get(&conn),
+                ux.index.root(),
+            );
+        }
         let Some(t) = c.ui.as_mut().and_then(|u| u.trees.get_mut(node)) else {
             return false;
         };

@@ -5,8 +5,10 @@
 //! measured on the session thread, from taking the first message to handing the
 //! batch to the writer. Scenarios: 80x24 and 300x100, one and two clients, with
 //! the bare tree and with the `ux_fresh` pack (the shell: tree, lists, notices).
+//! Then the palette over generated workspaces of 10,000 and 100,000 files.
 //!
-//! `cargo run --release -p spur-server --example latency [-- --keys N]`
+//! `cargo run --release -p spur-server --example latency [-- --keys N] [--only TEXT]`
+//! (`--only` runs the scenarios whose name contains the text).
 
 #[cfg(unix)]
 mod common;
@@ -57,6 +59,10 @@ mod bench {
             .nth(1)
             .and_then(|n| n.parse().ok())
             .unwrap_or(10_000);
+        let only = std::env::args()
+            .skip_while(|a| a != "--only")
+            .nth(1)
+            .unwrap_or_default();
         let mut small = String::new();
         for i in 0..80 {
             let _ = writeln!(small, "line {i}: some text");
@@ -105,6 +111,9 @@ mod bench {
             ),
             ("save 160x45, 1 client", (160, 45), &small, 1, Kind::Save),
         ] {
+            if !name.contains(only.as_str()) {
+                continue;
+            }
             let n = if matches!(kind, Kind::Save | Kind::BareSave) {
                 keys / 10
             } else {
@@ -120,6 +129,153 @@ mod bench {
                 ms(pct(&server, 99)),
             );
         }
+        let _ = writeln!(out);
+        for files in [10_000, 100_000] {
+            if format!("palette {files}").contains(only.as_str()) {
+                palette(&mut out, files);
+            }
+        }
+    }
+
+    /// A workspace of `n` files: 6 folders deep, names of 6 to 20 ASCII characters.
+    fn workspace(dir: &std::path::Path, n: usize) {
+        const PARTS: [&str; 16] = [
+            "src", "main", "lib", "mod", "util", "core", "view", "test", "data", "item", "node",
+            "pack", "list", "key", "sync", "text",
+        ];
+        let mut seed = 0x2545_f491_u64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let name = |r: u64, ext: &str| {
+            let mut s = String::new();
+            let mut r = r;
+            while s.len() < 6 || (s.len() < 14 && !r.is_multiple_of(3)) {
+                let i = usize::try_from(r % 16).unwrap_or(0);
+                if !s.is_empty() {
+                    s.push('_');
+                }
+                s.push_str(PARTS[i]);
+                r /= 16;
+            }
+            s.truncate(20 - ext.len());
+            s.push_str(ext);
+            s
+        };
+        for i in 0..n {
+            let mut p = dir.to_path_buf();
+            let mut r = next();
+            for _ in 0..6 {
+                // 8 folders a level: a wide, deep tree.
+                p.push(format!(
+                    "d{}_{}",
+                    r % 8,
+                    PARTS[usize::try_from(r % 16).unwrap_or(0)]
+                ));
+                r /= 8;
+            }
+            std::fs::create_dir_all(&p).expect("temp dir");
+            let ext = [".rs", ".toml", ".md", ".txt"][i % 4];
+            p.push(format!("{}{i}", name(next(), ext)));
+            std::fs::write(&p, "").expect("temp file");
+        }
+    }
+
+    /// Palette rows: opens, keystrokes, and keystroke to settled rows.
+    fn palette(out: &mut impl std::io::Write, files: usize) {
+        let dir = std::env::temp_dir().join(format!("spur-latency-ws-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        workspace(&dir, files);
+        let file = dir.join("bench.rs");
+        std::fs::write(&file, "fn main() {}\n").expect("temp file");
+        let pack = concat!(env!("CARGO_MANIFEST_DIR"), "/../../extensions/ux_fresh");
+        let session = Session::spawn(SessionConfig {
+            name: "latency".into(),
+            open: vec![file],
+            pack: Some(PackSource::Dir(pack.into())),
+            root: dir.clone(),
+            ..SessionConfig::default()
+        })
+        .expect("session");
+        let size = Size {
+            cols: 160,
+            rows: 45,
+        };
+        let layout = [("code", 40, 120), ("palette_list", 18, 68)];
+        let quiet = Duration::from_millis(40);
+        // A first client walks the index and waits for it to finish.
+        {
+            let mut c = Client::connect(&session, "walk", size);
+            c.layout(&layout);
+            c.keys("<C-p>");
+            let t = Instant::now();
+            let mut last = (0, Instant::now());
+            while t.elapsed() < Duration::from_mins(2) {
+                std::thread::sleep(Duration::from_millis(100));
+                c.sync();
+                let total = c.lists.get("palette_list").map_or(0, |l| l.total);
+                if total != last.0 {
+                    last = (total, Instant::now());
+                } else if total > 0 && last.1.elapsed() > Duration::from_millis(500) {
+                    break;
+                }
+            }
+        }
+        let mut c = Client::connect(&session, "bench", size);
+        c.layout(&layout);
+        // First open for this client: its matcher is made and filled.
+        let (first, _) = c.keys_settle("<C-p>", "palette_list", quiet);
+        let mut opens = Vec::new();
+        for _ in 0..50 {
+            c.keys("<Esc>");
+            opens.push(c.keys_settle("<C-p>", "palette_list", quiet).0);
+        }
+        let mut frame = Vec::new();
+        let mut settle = Vec::new();
+        let mut key_server = Vec::new();
+        for _ in 0..5 {
+            for q in ["src", "hlt", "mainrs", "zzzz"] {
+                for ch in q
+                    .chars()
+                    .map(String::from)
+                    .chain(q.chars().map(|_| "<BS>".into()))
+                {
+                    let before = session.stats().len();
+                    let (f, s) = c.keys_settle(&ch, "palette_list", quiet);
+                    let stats = session.stats();
+                    if let Some(k) = stats.get(before) {
+                        key_server.push(*k);
+                    }
+                    frame.push(f);
+                    if let Some(s) = s {
+                        settle.push(s);
+                    }
+                }
+            }
+        }
+        let _ = writeln!(out, "palette, {files} files (p50 ms)");
+        let row = |out: &mut dyn std::io::Write, name: &str, v: &[Duration]| {
+            let _ = writeln!(
+                out,
+                "  {name:<34} {:>8.3} (p99 {:.3}, n {})",
+                ms(pct(v, 50)),
+                ms(pct(v, 99)),
+                v.len()
+            );
+        };
+        row(out, "first open, round trip", &[first]);
+        row(out, "later opens, round trip", &opens);
+        row(out, "keystroke, server", &key_server);
+        row(out, "keystroke, round trip", &frame);
+        row(out, "keystroke to settled rows", &settle);
+        let _ = writeln!(out);
+        drop(c);
+        session.join();
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     fn scenario(

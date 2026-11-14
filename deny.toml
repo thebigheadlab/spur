@@ -19,6 +19,13 @@ allow = [
   "Unicode-3.0",
 ]
 
+# The palette's fuzzy matcher. MPL-2.0 is file-level copyleft: using the crates
+# unmodified puts no terms on Spur's own files.
+exceptions = [
+  { allow = ["MPL-2.0"], crate = "nucleo" },
+  { allow = ["MPL-2.0"], crate = "nucleo-matcher" },
+]
+
 [licenses.private]
 ignore = true
 
