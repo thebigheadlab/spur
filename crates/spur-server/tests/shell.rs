@@ -872,3 +872,34 @@ fn a_symlink_to_a_folder_is_listed_but_not_opened() {
     assert_eq!(c.node("code_title").text.as_deref(), Some("notes.txt"));
     assert_eq!(c.notice(), None);
 }
+
+#[test]
+fn a_session_that_fails_writes_rescue_copies() {
+    use std::sync::{Arc, Mutex};
+    let root = workspace("rescue");
+    let got: Arc<Mutex<spur_server::Modified>> = Arc::default();
+    let sink = got.clone();
+    let s = Session::spawn(SessionConfig {
+        open: vec![root.join("notes.txt")],
+        pack: Some(PackSource::Dir(pack_dir())),
+        root: root.clone(),
+        rescue: Some(spur_server::RescueSink(Arc::new(move |docs| {
+            sink.lock().unwrap().extend_from_slice(docs);
+        }))),
+        ..Default::default()
+    })
+    .unwrap();
+    let mut c = Client::attach(&s, 160, 30);
+    c.keys("x");
+    let docs = s.modified_documents(WAIT).unwrap();
+    assert_eq!(
+        docs,
+        [(Some(root.join("notes.txt")), "xone\ntwo\n".to_owned())]
+    );
+    s.inject_panic();
+    assert_eq!(s.modified_documents(Duration::from_millis(200)), None);
+    assert_eq!(
+        *got.lock().unwrap(),
+        [(Some(root.join("notes.txt")), "xone\ntwo\n".to_owned())]
+    );
+}

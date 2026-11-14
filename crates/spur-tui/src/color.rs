@@ -219,7 +219,10 @@ mod tests {
 
     #[test]
     fn every_theme_keeps_its_colours_apart_in_256_colours() {
-        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../../extensions/ux_fresh/themes");
+        let dir = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../extensions/ux_fresh/themes"
+        );
         for name in ["graphite", "paper", "sand", "midnight"] {
             let tokens = theme(&format!("{dir}/{name}.toml"));
             assert!(tokens.len() > 10, "{name}: read {} tokens", tokens.len());
@@ -237,7 +240,10 @@ mod tests {
             entries.dedup();
             assert_eq!(entries.len(), m.len(), "{name}: two colours share an entry");
             let p = Palette::new(&tokens, false);
-            assert!(matches!(p.get("app").and_then(|s| s.bg), Some(Color::Index(_))));
+            assert!(matches!(
+                p.get("app").and_then(|s| s.bg),
+                Some(Color::Index(_))
+            ));
         }
     }
 }

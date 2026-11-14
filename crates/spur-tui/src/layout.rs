@@ -56,7 +56,7 @@ fn content(n: &Node) -> (u32, u32) {
         NodeKind::Spacer | NodeKind::Surface | NodeKind::List => (0, 0),
         NodeKind::Row | NodeKind::Column | NodeKind::Card | NodeKind::Unknown => {
             let (pv, ph) = padding(n);
-            let sizes: Vec<(u32, u32)> = n.children.iter().map(|c| fixed_or_content(c)).collect();
+            let sizes: Vec<(u32, u32)> = n.children.iter().map(fixed_or_content).collect();
             let gaps = n.gap * u32::try_from(sizes.len().saturating_sub(1)).unwrap_or(0);
             let (w, h) = if horizontal(n) {
                 (
@@ -83,6 +83,60 @@ fn fixed_or_content(n: &Node) -> (u32, u32) {
     (pick(n.width, cw), pick(n.height, ch))
 }
 
+/// Sizes along the main axis: fixed and fit sizes first, in order, cut to the
+/// budget; fills share what is left by weight, the remainder one cell at a time
+/// from the first fill.
+fn main_sizes(children: &[Node], row: bool, mut budget: u32) -> Vec<u32> {
+    let dim = |c: &Node| if row { c.width } else { c.height };
+    let mut sizes: Vec<Option<u32>> = children
+        .iter()
+        .map(|c| {
+            let want = match dim(c) {
+                Dim::Units { n } => n,
+                Dim::Fit => {
+                    let (w, h) = content(c);
+                    if row { w } else { h }
+                }
+                Dim::Fill { .. } | Dim::Unknown => return None,
+            };
+            let s = want.min(budget);
+            budget -= s;
+            Some(s)
+        })
+        .collect();
+    let weight = |c: &Node| match dim(c) {
+        Dim::Fill { weight } => weight.max(1),
+        _ => 1,
+    };
+    let total: u64 = children
+        .iter()
+        .zip(&sizes)
+        .filter(|(_, s)| s.is_none())
+        .map(|(c, _)| u64::from(weight(c)))
+        .sum();
+    let mut left = budget;
+    for (c, s) in children.iter().zip(sizes.iter_mut()) {
+        if s.is_none() {
+            let share =
+                u32::try_from(u64::from(budget) * u64::from(weight(c)) / total.max(1)).unwrap_or(0);
+            *s = Some(share);
+            left -= share;
+        }
+    }
+    let fills = children
+        .iter()
+        .zip(sizes.iter_mut())
+        .filter(|(c, _)| matches!(dim(c), Dim::Fill { .. } | Dim::Unknown));
+    for (_, s) in fills {
+        if left == 0 {
+            break;
+        }
+        *s = s.map(|v| v + 1);
+        left -= 1;
+    }
+    sizes.into_iter().map(|s| s.unwrap_or(0)).collect()
+}
+
 fn place<'a>(n: &'a Node, r: Rect, out: &mut Vec<Placed<'a>>) {
     out.push(Placed { node: n, rect: r });
     if n.children.is_empty() {
@@ -96,64 +150,16 @@ fn place<'a>(n: &'a Node, r: Rect, out: &mut Vec<Placed<'a>>) {
         h: r.h.saturating_sub(2 * pv),
     };
     let row = horizontal(n);
-    let (main, cross) = if row { (inner.w, inner.h) } else { (inner.h, inner.w) };
+    let (main, cross) = if row {
+        (inner.w, inner.h)
+    } else {
+        (inner.h, inner.w)
+    };
     let count = u32::try_from(n.children.len()).unwrap_or(u32::MAX);
     let gaps = n.gap.saturating_mul(count - 1);
-    let mut budget = main.saturating_sub(gaps);
-    // Fixed and fit sizes first, in order; fills share what is left by weight.
-    let mut sizes: Vec<Option<u32>> = n
-        .children
-        .iter()
-        .map(|c| {
-            let d = if row { c.width } else { c.height };
-            let want = match d {
-                Dim::Units { n } => n,
-                Dim::Fit => {
-                    let (w, h) = content(c);
-                    if row { w } else { h }
-                }
-                Dim::Fill { .. } | Dim::Unknown => return None,
-            };
-            let s = want.min(budget);
-            budget -= s;
-            Some(s)
-        })
-        .collect();
-    let weight = |c: &Node| match if row { c.width } else { c.height } {
-        Dim::Fill { weight } => weight.max(1),
-        _ => 1,
-    };
-    let total: u32 = n
-        .children
-        .iter()
-        .zip(&sizes)
-        .filter(|(_, s)| s.is_none())
-        .map(|(c, _)| weight(c))
-        .sum();
-    if total > 0 {
-        let mut left = budget;
-        for (c, s) in n.children.iter().zip(sizes.iter_mut()) {
-            if s.is_none() {
-                let share = u32::try_from(u64::from(budget) * u64::from(weight(c)) / u64::from(total))
-                    .unwrap_or(0);
-                *s = Some(share);
-                left -= share;
-            }
-        }
-        for s in n.children.iter().zip(sizes.iter_mut()).filter_map(|(c, s)| {
-            let fill = matches!(if row { c.width } else { c.height }, Dim::Fill { .. } | Dim::Unknown);
-            fill.then_some(s)
-        }) {
-            if left == 0 {
-                break;
-            }
-            *s = s.map(|v| v + 1);
-            left -= 1;
-        }
-    }
+    let sizes = main_sizes(&n.children, row, main.saturating_sub(gaps));
     let mut at = if row { inner.x } else { inner.y };
-    for (i, (c, s)) in n.children.iter().zip(sizes).enumerate() {
-        let size = s.unwrap_or(0);
+    for (i, (c, size)) in n.children.iter().zip(sizes).enumerate() {
         let d = if row { c.height } else { c.width };
         let along = match d {
             Dim::Units { n } => n.min(cross),
@@ -164,9 +170,19 @@ fn place<'a>(n: &'a Node, r: Rect, out: &mut Vec<Placed<'a>>) {
             Dim::Fill { .. } | Dim::Unknown => cross,
         };
         let rect = if row {
-            Rect { x: at, y: inner.y, w: size, h: along }
+            Rect {
+                x: at,
+                y: inner.y,
+                w: size,
+                h: along,
+            }
         } else {
-            Rect { x: inner.x, y: at, w: along, h: size }
+            Rect {
+                x: inner.x,
+                y: at,
+                w: along,
+                h: size,
+            }
         };
         place(c, rect, out);
         at += size;
@@ -201,16 +217,66 @@ mod tests {
             Dim::FILL,
             Dim::FILL,
             vec![
-                node("a", NodeKind::Spacer, Dim::Units { n: 10 }, Dim::FILL, vec![]),
-                node("b", NodeKind::Spacer, Dim::Fill { weight: 1 }, Dim::FILL, vec![]),
-                node("c", NodeKind::Spacer, Dim::Fill { weight: 2 }, Dim::Units { n: 3 }, vec![]),
+                node(
+                    "a",
+                    NodeKind::Spacer,
+                    Dim::Units { n: 10 },
+                    Dim::FILL,
+                    vec![],
+                ),
+                node(
+                    "b",
+                    NodeKind::Spacer,
+                    Dim::Fill { weight: 1 },
+                    Dim::FILL,
+                    vec![],
+                ),
+                node(
+                    "c",
+                    NodeKind::Spacer,
+                    Dim::Fill { weight: 2 },
+                    Dim::Units { n: 3 },
+                    vec![],
+                ),
             ],
         );
-        let p = layout(&root, Rect { x: 0, y: 0, w: 41, h: 5 });
-        assert_eq!(rect_of(&p, "a"), Rect { x: 0, y: 0, w: 10, h: 5 });
+        let p = layout(
+            &root,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 41,
+                h: 5,
+            },
+        );
+        assert_eq!(
+            rect_of(&p, "a"),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 10,
+                h: 5
+            }
+        );
         // 31 left: 10 and 20, the remainder to the first fill.
-        assert_eq!(rect_of(&p, "b"), Rect { x: 10, y: 0, w: 11, h: 5 });
-        assert_eq!(rect_of(&p, "c"), Rect { x: 21, y: 0, w: 20, h: 3 });
+        assert_eq!(
+            rect_of(&p, "b"),
+            Rect {
+                x: 10,
+                y: 0,
+                w: 11,
+                h: 5
+            }
+        );
+        assert_eq!(
+            rect_of(&p, "c"),
+            Rect {
+                x: 21,
+                y: 0,
+                w: 20,
+                h: 3
+            }
+        );
     }
 
     #[test]
@@ -222,13 +288,40 @@ mod tests {
             NodeKind::Column,
             Dim::FILL,
             Dim::FILL,
-            vec![t, node("s", NodeKind::Surface, Dim::FILL, Dim::FILL, vec![])],
+            vec![
+                t,
+                node("s", NodeKind::Surface, Dim::FILL, Dim::FILL, vec![]),
+            ],
         );
         col.padding = Some([1, 2]);
         col.gap = 1;
-        let p = layout(&col, Rect { x: 0, y: 0, w: 20, h: 10 });
-        assert_eq!(rect_of(&p, "t"), Rect { x: 2, y: 1, w: 5, h: 1 });
-        assert_eq!(rect_of(&p, "s"), Rect { x: 2, y: 3, w: 16, h: 6 });
+        let p = layout(
+            &col,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 20,
+                h: 10,
+            },
+        );
+        assert_eq!(
+            rect_of(&p, "t"),
+            Rect {
+                x: 2,
+                y: 1,
+                w: 5,
+                h: 1
+            }
+        );
+        assert_eq!(
+            rect_of(&p, "s"),
+            Rect {
+                x: 2,
+                y: 3,
+                w: 16,
+                h: 6
+            }
+        );
     }
 
     #[test]
@@ -239,12 +332,32 @@ mod tests {
             Dim::FILL,
             Dim::FILL,
             vec![
-                node("a", NodeKind::Spacer, Dim::Units { n: 8 }, Dim::FILL, vec![]),
+                node(
+                    "a",
+                    NodeKind::Spacer,
+                    Dim::Units { n: 8 },
+                    Dim::FILL,
+                    vec![],
+                ),
                 node("f", NodeKind::Spacer, Dim::FILL, Dim::FILL, vec![]),
-                node("b", NodeKind::Spacer, Dim::Units { n: 8 }, Dim::FILL, vec![]),
+                node(
+                    "b",
+                    NodeKind::Spacer,
+                    Dim::Units { n: 8 },
+                    Dim::FILL,
+                    vec![],
+                ),
             ],
         );
-        let p = layout(&root, Rect { x: 0, y: 0, w: 12, h: 1 });
+        let p = layout(
+            &root,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 12,
+                h: 1,
+            },
+        );
         assert_eq!(rect_of(&p, "a").w, 8);
         assert_eq!(rect_of(&p, "f").w, 0);
         assert_eq!(rect_of(&p, "b").w, 4);

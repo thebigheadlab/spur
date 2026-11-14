@@ -127,6 +127,7 @@ impl Grid {
     }
 
     /// The grid as plain text, one line per row (tests and snapshots).
+    #[cfg(test)]
     pub fn lines(&self) -> Vec<String> {
         (0..self.h)
             .map(|y| {
@@ -183,7 +184,8 @@ pub fn diff(prev: Option<&Grid>, next: &Grid, cursor: Option<(u32, u32)>) -> Str
             let c = next.cell(x, y);
             let changed = |x: u32| full || prev.is_some_and(|p| p.cell(x, y) != next.cell(x, y));
             // A changed second half rewrites its wide char.
-            let lead_changed = changed(x) || (x + 1 < next.w && next.cell(x + 1, y).text.is_empty() && changed(x + 1));
+            let lead_changed = changed(x)
+                || (x + 1 < next.w && next.cell(x + 1, y).text.is_empty() && changed(x + 1));
             if c.text.is_empty() || !lead_changed {
                 x += 1;
                 continue;
@@ -241,7 +243,7 @@ mod tests {
         b.text(0, 3, 80, "x", None);
         let d = diff(Some(&a), &b, Some((1, 3)));
         assert!(!d.contains("hello"));
-        assert!(d.contains("\x1b[4;1Hx"));
+        assert!(d.contains("\x1b[4;1H\x1b[0mx"), "{d:?}");
         assert!(d.len() < 60, "{d:?}");
         assert!(d.starts_with("\x1b[?2026h") && d.ends_with("\x1b[?2026l"));
         assert!(d.contains("\x1b[4;2H\x1b[?25h"));

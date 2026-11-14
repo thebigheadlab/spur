@@ -68,13 +68,20 @@ mod tests {
     #[test]
     fn controls_and_escapes_become_replacement_chars() {
         let r = char::REPLACEMENT_CHARACTER.to_string();
-        assert_eq!(texts("a\x1bb"), ["a", &r, "b"]);
-        assert_eq!(texts("\x07\x7f\u{9b}"), [&r, &r, &r]);
+        assert_eq!(texts("a\x1bb"), ["a", r.as_str(), "b"]);
+        assert_eq!(texts("\x07\x7f\u{9b}"), [r.as_str(); 3]);
         // An OSC 52 clipboard write cannot get through.
         let osc = "\x1b]52;c;aGk=\x07";
-        assert!(texts(osc).iter().all(|t| !t.contains('\x1b') && !t.contains('\x07')));
+        assert!(
+            texts(osc)
+                .iter()
+                .all(|t| !t.contains('\x1b') && !t.contains('\x07'))
+        );
         // Bidi controls.
-        assert_eq!(texts("a\u{202E}b\u{2066}"), ["a", &r, "b", &r]);
+        assert_eq!(
+            texts("a\u{202E}b\u{2066}"),
+            ["a", r.as_str(), "b", r.as_str()]
+        );
     }
 
     #[test]

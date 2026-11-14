@@ -699,6 +699,7 @@ checksum = "149309498a5f7334b12ddae0cad8aba81ce785fe91755068867e017cf98fee46"
 name = "spur"
 version = "0.0.0"
 dependencies = [
+ "signal-hook",
  "spur-core",
  "spur-ext",
  "spur-gui",
@@ -783,6 +784,8 @@ name = "spur-tui"
 version = "0.0.0"
 dependencies = [
  "crossterm",
+ "serde_json",
+ "spur-keymap",
  "spur-rpc",
  "unicode-width",
 ]

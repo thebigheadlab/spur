@@ -52,6 +52,25 @@ impl fmt::Debug for LogSink {
     }
 }
 
+/// A modified document: path (`None` for untitled) and text.
+pub type ModifiedDoc = (Option<PathBuf>, String);
+/// Modified documents.
+pub type Modified = Vec<ModifiedDoc>;
+
+/// Writes rescue copies of modified documents; called by the session thread if it
+/// fails beyond recovery.
+#[derive(Clone)]
+pub struct RescueSink(pub Arc<RescueFn>);
+
+/// The function a [`RescueSink`] wraps.
+pub type RescueFn = dyn Fn(&[ModifiedDoc]) + Send + Sync;
+
+impl fmt::Debug for RescueSink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("RescueSink")
+    }
+}
+
 /// How to start a session.
 #[derive(Clone, Debug, Default)]
 pub struct SessionConfig {
@@ -69,6 +88,8 @@ pub struct SessionConfig {
     pub root: PathBuf,
     /// Where the session logs.
     pub log: Option<LogSink>,
+    /// Saves modified documents if the session thread fails.
+    pub rescue: Option<RescueSink>,
     /// Runs on the core before the session starts (tests register commands here).
     #[doc(hidden)]
     pub setup: Option<fn(&mut Core<Editor>)>,
@@ -145,6 +166,9 @@ enum In {
         conn: u64,
     },
     Inspect(Probe),
+    Modified(SyncSender<Modified>),
+    /// Panics outside the per-message guard (tests of the rescue path).
+    Panic,
     Shutdown,
 }
 
@@ -332,6 +356,20 @@ impl Session {
         rx.recv().ok()
     }
 
+    /// The modified documents, as the session thread sees them; `None` if it does
+    /// not answer within `timeout` (it has ended or is stuck).
+    pub fn modified_documents(&self, timeout: Duration) -> Option<Modified> {
+        let (tx, rx) = mpsc::sync_channel(1);
+        self.tx.send(In::Modified(tx)).ok()?;
+        rx.recv_timeout(timeout).ok()
+    }
+
+    /// Makes the session thread panic outside its per-message guard (tests).
+    #[doc(hidden)]
+    pub fn inject_panic(&self) {
+        let _ = self.tx.send(In::Panic);
+    }
+
     /// Shuts the session down and waits for its thread to end. Clients' connections
     /// close without a `bye`. Dropping the session does the same.
     pub fn join(mut self) {
@@ -415,6 +453,7 @@ pub(crate) struct State {
     /// `buffer.saved` events, to read a saved file's folder again.
     saved: Option<Subscription>,
     log: Option<LogSink>,
+    rescue: Option<RescueSink>,
 }
 
 impl State {
@@ -474,6 +513,7 @@ impl State {
             ux,
             saved,
             log: cfg.log,
+            rescue: cfg.rescue,
         })
     }
 
@@ -539,7 +579,44 @@ impl State {
         }
     }
 
+    /// Runs the loop; a panic that escapes the per-message guards writes rescue
+    /// copies, is logged, and ends the session.
     fn run(mut self, rx: &Receiver<In>) {
+        let res = catch_unwind(AssertUnwindSafe(|| self.serve(rx)));
+        if res.is_err() {
+            self.core.state.focus = self.anchor;
+            self.log("the session failed; writing rescue copies of modified documents");
+            let docs = self.modified();
+            if let Some(r) = &self.rescue
+                && !docs.is_empty()
+            {
+                (r.0)(&docs);
+            }
+        }
+    }
+
+    /// Modified documents, by id.
+    fn modified(&self) -> Modified {
+        let mut docs: Vec<_> = self
+            .core
+            .state
+            .docs
+            .iter()
+            .filter(|(_, d)| d.modified())
+            .collect();
+        docs.sort_by_key(|(id, _)| **id);
+        docs.into_iter()
+            .map(|(_, d)| {
+                let snap = d.buffer.snapshot();
+                (
+                    d.path.clone(),
+                    snap.slice(0..snap.len()).unwrap_or_default(),
+                )
+            })
+            .collect()
+    }
+
+    fn serve(&mut self, rx: &Receiver<In>) {
         loop {
             let first = match self.next_deadline() {
                 Some(at) => match rx.recv_timeout(at.saturating_duration_since(Instant::now())) {
@@ -558,6 +635,7 @@ impl State {
             while let Some(msg) = next {
                 match msg {
                     In::Shutdown => return,
+                    In::Panic => panic!("injected session panic"),
                     msg => self.handle_guarded(msg),
                 }
                 handled += 1;
@@ -646,7 +724,10 @@ impl State {
                 self.leave(conn);
             }
             In::Inspect(f) => f(&mut self.core),
-            In::Shutdown => {}
+            In::Modified(tx) => {
+                let _ = tx.try_send(self.modified());
+            }
+            In::Panic | In::Shutdown => {}
         }
     }
 
