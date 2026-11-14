@@ -731,6 +731,68 @@ fn line_row(x: &Input<'_>, q: &str) -> Option<Row> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ux::index::Index;
+
+    /// Waits for the walk and the match to settle; the matched paths in order.
+    fn top(m: &mut Matcher, idx: &Index, q: &str) -> Vec<String> {
+        m.set_query(q);
+        let t = std::time::Instant::now();
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            let running = m.nucleo.tick(10).running;
+            if idx.status().done
+                && !running
+                && m.nucleo.snapshot().item_count() as usize == idx.status().count
+            {
+                break;
+            }
+            assert!(t.elapsed().as_secs() < 10, "matching did not finish");
+        }
+        (0..m.count().min(5))
+            .filter_map(|i| m.path(i))
+            .map(ToString::to_string)
+            .collect()
+    }
+
+    #[test]
+    fn file_matches_rank_word_starts_first_then_shorter_paths() {
+        let dir = std::env::temp_dir().join(format!("spur-palette-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for f in [
+            "src/main.rs",
+            "src/highlight.rs",
+            "src/ui/main_view.rs",
+            "main/readme.md",
+            "docs/highlights/intro.md",
+            "crates/spur-server/src/highlight.rs",
+            "tests/hlt_cases.rs",
+        ] {
+            let p = dir.join(f);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, "").unwrap();
+        }
+        let mut idx = Index::new(dir.clone());
+        idx.walk(None);
+        let notify = Notify(Arc::new(|_| {}));
+        let mut m = Matcher::new(1, &notify, &idx);
+        assert_eq!(
+            top(&mut m, &idx, "mainrs"),
+            ["src/main.rs", "src/ui/main_view.rs"]
+        );
+        assert_eq!(
+            top(&mut m, &idx, "highlight"),
+            // A hit at the start of a folder name scores like one at the start of
+            // the file name; the shorter path wins the tie.
+            [
+                "src/highlight.rs",
+                "docs/highlights/intro.md",
+                "crates/spur-server/src/highlight.rs",
+            ]
+        );
+        assert_eq!(top(&mut m, &idx, "hlt")[0], "tests/hlt_cases.rs");
+        assert!(top(&mut m, &idx, "zzzz").is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn ranges_join_runs() {

@@ -957,6 +957,142 @@ mod tests {
         assert!(f.grid.cell(0, 1).bg.is_some());
     }
 
+    fn tok(fg: Option<&str>, bg: Option<&str>) -> spur_rpc::Token {
+        spur_rpc::Token {
+            fg: fg.map(Into::into),
+            bg: bg.map(Into::into),
+            ..spur_rpc::Token::default()
+        }
+    }
+
+    #[test]
+    fn an_overlay_dims_the_tree_and_draws_centred_with_its_input_cursor() {
+        let mut tokens = std::collections::BTreeMap::new();
+        tokens.insert("app".to_owned(), tok(Some("#ffffff"), Some("#646464")));
+        tokens.insert(tokens::OVERLAY_DIM.to_owned(), tok(None, Some("#000000")));
+        let root = Node {
+            style: Some("app".into()),
+            children: vec![text("t", "behind")],
+            ..Node::new("root", NodeKind::Column)
+        };
+        let input = Node {
+            text: Some("type".into()),
+            height: spur_rpc::Dim::Fit,
+            ..Node::new("q", NodeKind::Input)
+        };
+        let card = Node {
+            children: vec![input, Node::new("l", NodeKind::List)],
+            ..Node::new("o", NodeKind::Column)
+        };
+        let mut screen = Screen {
+            root: Some(root),
+            palette: Palette::new(&tokens, true),
+            focus: Some("q".into()),
+            overlays: vec![Overlay {
+                node: card,
+                top: 1,
+                width: 10,
+                max_height: 3,
+                dim: 50,
+            }],
+            ..Screen::default()
+        };
+        screen.lists.insert(
+            "l".into(),
+            ListView {
+                total: 5,
+                items: (0..5)
+                    .map(|i| spur_rpc::Item {
+                        id: i.to_string(),
+                        text: format!("row{i}"),
+                        ..spur_rpc::Item::default()
+                    })
+                    .collect(),
+                ..ListView::default()
+            },
+        );
+        let f = paint(&mut screen, 20, 8);
+        let lines: Vec<String> = f.grid.lines().iter().map(|l| format!("{l:<20}")).collect();
+        // Centred, 10 wide, at row 1; 3 rows: the input and two list rows.
+        assert_eq!(&lines[1][5..15], "type      ");
+        assert_eq!(&lines[2][5..15], "row0      ");
+        assert_eq!(&lines[3][5..15], "row1      ");
+        assert!(lines[4].trim().is_empty());
+        assert_eq!(
+            f.cursor,
+            Some((5, 1)),
+            "an empty input: the cursor at its start"
+        );
+        // The tree behind is mixed half way toward black.
+        assert_eq!(
+            f.grid.cell(0, 0).bg,
+            Some(crate::color::Color::Rgb(50, 50, 50))
+        );
+        assert_eq!(
+            f.grid.cell(0, 0).fg,
+            Some(crate::color::Color::Rgb(128, 128, 128))
+        );
+        // With text, the cursor follows it and the text scrolls to keep it in view.
+        screen.inputs.insert(
+            "q".into(),
+            InputText {
+                text: "abcdefghijkl".into(),
+                cursor: 12,
+                anchor: None,
+            },
+        );
+        let f = paint(&mut screen, 20, 8);
+        assert_eq!(&format!("{:<20}", f.grid.lines()[1])[5..15], "defghijkl ");
+        assert_eq!(f.cursor, Some((14, 1)));
+    }
+
+    #[test]
+    fn list_rows_draw_details_keys_matches_and_sections() {
+        let mut tokens = std::collections::BTreeMap::new();
+        tokens.insert(tokens::LIST_MATCH.to_owned(), tok(Some("#ff0000"), None));
+        tokens.insert(tokens::LIST_SECTION.to_owned(), tok(Some("#00ff00"), None));
+        let mut screen = Screen {
+            root: Some(Node::new("l", NodeKind::List)),
+            palette: Palette::new(&tokens, true),
+            ..Screen::default()
+        };
+        screen.lists.insert(
+            "l".into(),
+            ListView {
+                selected: Some(0),
+                items: vec![
+                    spur_rpc::Item {
+                        id: "s".into(),
+                        text: "FILES".into(),
+                        kind: ItemKind::Section,
+                        ..spur_rpc::Item::default()
+                    },
+                    spur_rpc::Item {
+                        id: "f".into(),
+                        text: "main.rs".into(),
+                        detail: Some("src".into()),
+                        matches: vec![[0, 2]],
+                        key: Some("ctrl+s".into()),
+                        ..spur_rpc::Item::default()
+                    },
+                ],
+                ..ListView::default()
+            },
+        );
+        let f = paint(&mut screen, 24, 2);
+        let lines = f.grid.lines();
+        assert_eq!(lines[0], "FILES");
+        assert_eq!(lines[1], "main.rs src      ctrl+s");
+        let red = Some(crate::color::Color::Rgb(255, 0, 0));
+        assert_eq!(f.grid.cell(0, 1).fg, red);
+        assert_eq!(f.grid.cell(1, 1).fg, red);
+        assert_ne!(f.grid.cell(2, 1).fg, red);
+        assert_eq!(
+            f.grid.cell(0, 0).fg,
+            Some(crate::color::Color::Rgb(0, 255, 0))
+        );
+    }
+
     #[test]
     fn text_with_no_height_draws_nothing() {
         let root = Node {
