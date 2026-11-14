@@ -51,6 +51,11 @@ keys = "<C-z>"
 command = "editor.undo"
 
 [[bind]]
+mode = "insert normal"
+keys = "<C-y>"
+command = "editor.redo"
+
+[[bind]]
 mode = "insert"
 keys = "<Esc>"
 command = "editor.set_mode"
@@ -335,15 +340,20 @@ fn two_clients_see_each_other() {
     b.sync();
     assert_eq!(b.cursor(CursorKind::Primary), Some((3, 5, None)));
 
-    // Undo from A takes the newest step (A's newline) and leaves B's cursor on its text.
+    // Undo from A takes A's newline and leaves B's cursor on its text.
     a.keys("<C-z>");
     b.sync();
     assert_eq!(b.text(), "hello\n\nworld\n\n");
     assert_eq!(b.cursor(CursorKind::Primary), Some((2, 5, None)));
-    // Steps never merged across clients: the next undo takes only B's "ld".
+    // Undo is per window: A's next undo takes A's own "llo", not B's newer "ld".
     a.keys("<C-z>");
-    assert_eq!(a.text(), "hello\n\nwor\n\n");
-    assert_eq!(a.cursor(CursorKind::Primary), Some((0, 5, None)));
+    assert_eq!(a.text(), "he\n\nworld\n\n");
+    assert_eq!(a.cursor(CursorKind::Primary), Some((0, 2, None)));
+    // B's undo takes B's "ld"; A's redo brings back "llo".
+    b.keys("<C-z>");
+    a.keys("<C-y>");
+    b.sync();
+    assert_eq!(b.text(), "hello\n\nwor\n\n");
 }
 
 #[test]

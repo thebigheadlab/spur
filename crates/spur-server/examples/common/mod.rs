@@ -8,7 +8,7 @@ use std::time::Duration;
 use spur_rpc::{Caps, ClientEnd, ClientKind, ClientMsg, ServerMsg, Size, SurfaceView};
 use spur_server::Session;
 
-/// Insert-mode typing, arrows, Enter, Backspace and undo.
+/// Insert-mode typing, arrows, Home, Enter, Backspace, undo and redo.
 pub const KEYS: &str = r#"
 [mode.insert]
 fallback = "editor.insert_text"
@@ -35,6 +35,11 @@ command = "editor.move_up"
 
 [[bind]]
 mode = "insert"
+keys = "<Home>"
+command = "editor.move_line_start"
+
+[[bind]]
+mode = "insert"
 keys = "<CR>"
 command = "editor.insert_newline"
 
@@ -47,6 +52,11 @@ command = "editor.delete_backward"
 mode = "insert"
 keys = "<C-z>"
 command = "editor.undo"
+
+[[bind]]
+mode = "insert"
+keys = "<C-y>"
+command = "editor.redo"
 "#;
 
 const WAIT: Duration = Duration::from_secs(10);

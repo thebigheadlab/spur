@@ -8,9 +8,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use spur_text::{Buffer, Point, SelRange, Selection, Snapshot, Version};
+use spur_text::{Buffer, Point, SelRange, Selection, Snapshot, UndoLane, UndoScope, Version};
 
-use crate::{ClientId, CtxValue};
+use crate::{Actor, ClientId, CtxValue};
 
 pub use commands::register_editor_commands;
 
@@ -75,9 +75,7 @@ pub struct View {
     pub goals: Vec<Option<usize>>,
     /// Current mode name.
     pub mode: Arc<str>,
-    /// Undo turn for non-agent edits made in this view. Each view numbers its turns
-    /// from `id << 32`, so two views never share a turn and their edits never join
-    /// one undo step; [`turn_view`] recovers the view from a turn.
+    /// Undo turn for non-agent edits made in this view.
     pub turn: u64,
     /// First visible line.
     pub top_line: usize,
@@ -86,9 +84,12 @@ pub struct View {
     pub owner: Option<ClientId>,
 }
 
-/// The view whose turn numbering `turn` comes from (see [`View::turn`]).
-pub fn turn_view(turn: u64) -> ViewId {
-    ViewId(turn >> 32)
+/// Whose undo history an edit by `actor` in `view` joins. A person's edits have one
+/// history per window (view), so undo in one window never takes another's edits.
+/// Agents, extensions and tools have one per author, whichever view they edit in.
+pub fn undo_scope(actor: &Actor, view: ViewId) -> UndoScope {
+    let lane = matches!(actor, Actor::User).then_some(UndoLane(view.0));
+    UndoScope::new(actor.author(), lane)
 }
 
 /// A mode, as data. Presets add their own.
@@ -198,7 +199,7 @@ impl Editor {
                 selection: Selection::cursor(0),
                 goals: vec![None],
                 mode: self.default_mode.clone(),
-                turn: id.0 << 32,
+                turn: 0,
                 top_line: 0,
                 owner,
             },
@@ -206,9 +207,22 @@ impl Editor {
         id
     }
 
-    /// Removes a view. Refuses (returns `false`) for the focused view or an unknown id.
+    /// Removes a view. Refuses (returns `false`) for the focused view or an unknown id
+    /// (a server rests focus on its own anchor view, so client views can go).
+    /// The window's redo steps go with it; its edits stay in the document's history,
+    /// where no other window undoes them.
     pub fn remove_view(&mut self, view: ViewId) -> bool {
-        view != self.focus && self.views.remove(&view).is_some()
+        if view == self.focus {
+            return false;
+        }
+        let Some(removed) = self.views.remove(&view) else {
+            return false;
+        };
+        if let Some(doc) = self.docs.get_mut(&removed.doc) {
+            // Only a person's edits have lanes (one per view).
+            doc.buffer.forget_redo(&undo_scope(&Actor::User, view));
+        }
+        true
     }
 
     /// Context keys that describe `view`: its mode and its document's state. The core

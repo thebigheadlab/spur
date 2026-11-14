@@ -1,7 +1,9 @@
 //! Property tests: change-set algebra, rebasing, undo and anchors against simple models.
 
 use proptest::prelude::*;
-use spur_text::{AuthorId, Bias, Buffer, Change, ChangeSet, Snapshot, Transaction, Version};
+use spur_text::{
+    AuthorId, Bias, Buffer, Change, ChangeSet, Snapshot, Transaction, UndoLane, UndoScope, Version,
+};
 
 fn apply_str(text: &str, cs: &ChangeSet) -> String {
     let mut out = String::new();
@@ -117,12 +119,12 @@ proptest! {
             states.push(full(&buf.snapshot()));
         }
         for expected in states.iter().rev().skip(1) {
-            buf.undo(&AuthorId::User).unwrap().unwrap();
+            buf.undo(&AuthorId::User.into()).unwrap().unwrap();
             prop_assert_eq!(&full(&buf.snapshot()), expected);
         }
-        prop_assert!(buf.undo(&AuthorId::User).unwrap().is_none());
+        prop_assert!(buf.undo(&AuthorId::User.into()).unwrap().is_none());
         for expected in states.iter().skip(1) {
-            buf.redo(&AuthorId::User).unwrap().unwrap();
+            buf.redo(&AuthorId::User.into()).unwrap().unwrap();
             prop_assert_eq!(&full(&buf.snapshot()), expected);
         }
     }
@@ -140,7 +142,7 @@ proptest! {
         let upper = |t: String| t.chars().filter(char::is_ascii_uppercase).collect::<String>();
         let agent_text = upper(full(&buf.snapshot()));
         loop {
-            match buf.undo(&AuthorId::User) {
+            match buf.undo(&AuthorId::User.into()) {
                 Ok(Some(_)) => prop_assert_eq!(upper(full(&buf.snapshot())), agent_text.clone()),
                 Ok(None) => {
                     prop_assert_eq!(full(&buf.snapshot()), agent_text.clone());
@@ -184,20 +186,20 @@ proptest! {
                     buf.apply(Transaction::new(author, buf.version(), ChangeSet::insert(buf.len(), at, &s).unwrap())).unwrap();
                 }
                 kind => {
-                    let first = if kind == 1 { buf.undo(&author) } else { buf.redo(&author) };
+                    let first = if kind == 1 { buf.undo(&author.clone().into()) } else { buf.redo(&author.clone().into()) };
                     if let Ok(Some(_)) = first {
                             let mid = full(&buf.snapshot());
                             prop_assert_eq!(only(&mid, other_upper), only(&before, other_upper));
                             // Undo/redo (or redo/undo) twice: each step must succeed.
                             for _ in 0..2 {
-                                let back = if kind == 1 { buf.redo(&author) } else { buf.undo(&author) };
+                                let back = if kind == 1 { buf.redo(&author.clone().into()) } else { buf.undo(&author.clone().into()) };
                                 prop_assert!(matches!(back, Ok(Some(_))), "round trip failed: {:?}", back);
                                 prop_assert_eq!(full(&buf.snapshot()), before.clone());
-                                let again = if kind == 1 { buf.undo(&author) } else { buf.redo(&author) };
+                                let again = if kind == 1 { buf.undo(&author.clone().into()) } else { buf.redo(&author.clone().into()) };
                                 prop_assert!(matches!(again, Ok(Some(_))), "second step failed: {:?}", again);
                                 prop_assert_eq!(full(&buf.snapshot()), mid.clone());
                             }
-                            let back = if kind == 1 { buf.redo(&author) } else { buf.undo(&author) };
+                            let back = if kind == 1 { buf.redo(&author.clone().into()) } else { buf.undo(&author.clone().into()) };
                             prop_assert!(matches!(back, Ok(Some(_))), "final step failed: {:?}", back);
                             prop_assert_eq!(full(&buf.snapshot()), before);
                     } else {
@@ -206,5 +208,96 @@ proptest! {
                 }
             }
         }
+    }
+
+    /// Random edits, undos and redos from three scopes: two lanes of the user and an
+    /// agent, each typing its own letters. An undo or redo never changes another
+    /// scope's letters, a refused one changes nothing, and a scope with an undo to redo
+    /// can always redo it (or gets a conflict), whatever the others undid meanwhile.
+    #[test]
+    fn lanes_undo_and_redo_independently(ops in prop::collection::vec((0u8..9, 0usize..64, "[a-c]{1,3}"), 1..50)) {
+        let scopes = [
+            UndoScope::new(AuthorId::User, Some(UndoLane(1))),
+            UndoScope::new(AuthorId::User, Some(UndoLane(2))),
+            UndoScope::from(AuthorId::Agent("x".into())),
+        ];
+        // Scope k types "abc" shifted by 3k: abc, def, ghi.
+        let letters = |s: &str, k: usize| -> String {
+            s.chars().map(|c| ["abc", "def", "ghi"][k].chars().nth(c as usize - 'a' as usize).unwrap()).collect()
+        };
+        let owner = |c: char| (c as usize - 'a' as usize) / 3;
+        let others = |t: &str, k: usize| t.chars().filter(|&c| owner(c) != k).collect::<String>();
+        let mut pending = [0usize; 3];
+        let mut buf = Buffer::new("");
+        for (op, at, s) in &ops {
+            let (k, kind) = (usize::from(op % 3), op / 3);
+            let scope = &scopes[k];
+            let before = full(&buf.snapshot());
+            if kind == 0 {
+                let at = at % (buf.len() + 1);
+                let mut t = Transaction::new(scope.author.clone(), buf.version(), ChangeSet::insert(buf.len(), at, &letters(s, k)).unwrap());
+                if let Some(l) = scope.lane {
+                    t = t.with_lane(l);
+                }
+                buf.apply(t).unwrap();
+                pending[k] = 0;
+                continue;
+            }
+            let r = if kind == 1 { buf.undo(scope) } else { buf.redo(scope) };
+            match r {
+                Ok(Some(_)) => {
+                    prop_assert_eq!(others(&full(&buf.snapshot()), k), others(&before, k));
+                    if kind == 1 { pending[k] += 1 } else { pending[k] -= 1 }
+                }
+                Ok(None) => {
+                    prop_assert!(kind == 1 || pending[k] == 0, "redo lost for scope {}", k);
+                    prop_assert_eq!(full(&buf.snapshot()), before);
+                }
+                Err(_) => prop_assert_eq!(full(&buf.snapshot()), before),
+            }
+        }
+    }
+
+    /// One window edits (inserts and deletes), undoes some steps, another window
+    /// inserts capitals anywhere, and the first redoes them. Unless a redo is refused,
+    /// the first window's text comes back exactly, with the capitals in between.
+    #[test]
+    fn redone_steps_land_in_place(
+        edits in prop::collection::vec((any::<bool>(), 0usize..64, 0usize..4, "[a-c]{1,3}"), 1..8),
+        undos in 1usize..8,
+        others in prop::collection::vec((0usize..64, "[X-Z]{1,2}"), 0..4),
+    ) {
+        let a = UndoScope::new(AuthorId::User, Some(UndoLane(1)));
+        let mut buf = Buffer::new("");
+        for (delete, at, n, s) in &edits {
+            let len = buf.len();
+            let cs = if *delete && len > 0 {
+                let at = at % len;
+                ChangeSet::delete(len, at..(at + 1 + n % 3).min(len)).unwrap()
+            } else {
+                ChangeSet::insert(len, at % (len + 1), s).unwrap()
+            };
+            buf.apply(Transaction::new(AuthorId::User, buf.version(), cs).with_lane(UndoLane(1))).unwrap();
+        }
+        let before = full(&buf.snapshot());
+        let mut undone = 0;
+        while undone < undos && buf.undo(&a).unwrap().is_some() {
+            undone += 1;
+        }
+        for (at, s) in &others {
+            let len = buf.len();
+            let t = Transaction::new(AuthorId::User, buf.version(), ChangeSet::insert(len, at % (len + 1), s).unwrap())
+                .with_lane(UndoLane(2));
+            buf.apply(t).unwrap();
+        }
+        for _ in 0..undone {
+            match buf.redo(&a) {
+                Ok(Some(_)) => {}
+                Ok(None) => prop_assert!(false, "redo lost"),
+                Err(_) => return Ok(()),
+            }
+        }
+        let mine: String = full(&buf.snapshot()).chars().filter(char::is_ascii_lowercase).collect();
+        prop_assert_eq!(mine, before);
     }
 }

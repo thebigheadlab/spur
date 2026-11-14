@@ -1,4 +1,4 @@
-//! Text engine: rope storage, change sets with rebasing, anchors, per-author undo.
+//! Text engine: rope storage, change sets with rebasing, anchors, undo per author and window.
 //!
 //! One [`Buffer`] per open file is owned by the core state thread, which orders every edit.
 //! Edits arrive as [`Transaction`]s against a [`Version`]; stale ones are rebased over
@@ -22,7 +22,7 @@ pub use buffer::{
 pub use change::{Bias, Change, ChangeError, ChangeSet, HunkConflict};
 pub use selection::{SelRange, Selection};
 pub use snapshot::{Point, Snapshot};
-pub use types::{AuthorId, GroupKey, Version};
+pub use types::{AuthorId, GroupKey, UndoLane, UndoScope, Version};
 
 /// Name of this crate, used in diagnostics.
 pub const NAME: &str = env!("CARGO_PKG_NAME");

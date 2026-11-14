@@ -1,7 +1,7 @@
 # 3. Text model and buffer API
 
 - Status: proposed
-- Date: 2026-11-07
+- Date: 2026-11-07 (undo lanes added 2026-11-12 by ADR 0006)
 - Spec: #52 (text engine), #4; architecture #3. Related tasks: #17, #18, #20, #22. (Issue numbers refer to the project's spec issues, which are being restored.)
 
 ## Context
@@ -11,7 +11,7 @@ Spur runs one core state thread that orders every edit (#3). Frontends are thin 
 The text engine must support:
 
 - async edits from agents and extensions that were computed against an older version;
-- per-author undo ("undo mine" never touches someone else's text);
+- per-author undo ("undo mine" never touches another author's text). All humans share the author `User`, so per-window lanes (ADR 0006) are what keep humans apart;
 - anchors that survive edits (diagnostics, agent proposals, bookmarks);
 - cheap snapshots for background work (highlighting, search, agents);
 - byte-exact round trip of line endings.
@@ -49,7 +49,7 @@ The public read API is range based: `len`, `slice(range)`, `chunks(range)`, coor
 Decided by the owner on 2026-11-07.
 
 - A `ChangeSet` is a sorted list of non-overlapping `Change { range, text }` hunks in byte offsets of one base text. Touching hunks are merged, so the form is canonical.
-- A `Transaction` is `{ author, base, changes, selection_before, selection_after, group }`.
+- A `Transaction` is `{ author, base, changes, selection_before, selection_after, lane, group }`.
 - If `base` is the current version, the changes apply as is.
 - If `base` is older, the sequencer transforms the changes through every committed change set since `base`, in order:
   - A hunk that overlaps a committed hunk (positive-length intersection, or an insertion strictly inside the other's replaced range) is a conflict. The whole transaction is rejected with `EditError::Stale` and the list of conflicts. Nothing is applied partially.
@@ -72,11 +72,13 @@ Mapping rule, shared by anchors, selections and rebase: a position before a hunk
 ### Q6 Undo model
 
 - History is an undo tree: a flat `Vec<Revision>` with parent and last-child links (Helix). Each revision stores its author, group, change set, inverse, selections before and after, the version that committed it, and a wall-clock timestamp (for "earlier by duration" and "undo to last save").
-- `undo(author)`:
-  - If the head revision is the author's, move the head to its parent by applying the inverse. Redo follows the tree.
-  - Otherwise find the author's latest revision on the path from the root to the head that is still in effect. Undo revisions are skipped. A redo revision (one that reverts an undo) is a target itself, so undo, redo, undo works even after other authors edited in between. Rebase its inverse through every later revision. On overlap with another author's later edit, refuse with `UndoError::Conflict` and the conflicting ranges; never undo partially. On success, commit the rebased inverse as a new revision that records which revision it reverts.
-- `redo(author)` replays the author's own undo stack: a tree move if the author's undo was a tree move and the head has not moved since, otherwise it reverts the revert.
-- Groups: consecutive transactions with the same author and the same `GroupKey` (actor plus turn id, for example one insert-mode session or one agent turn) merge into one revision, so one undo step undoes the whole group. A transaction from another author in between ends the group.
+- The *head* is the revision whose path from the root gives the current text. A *tree move* undoes by moving the head to its parent (no new revision); a *revert* commits the rebased inverse as a new revision on top.
+- An undo history belongs to an `UndoScope`: an author, plus an optional undo lane (`UndoLane`, a window; added by ADR 0006, which makes each window of a person its own lane). A transaction names its author and lane.
+- `undo(scope)`:
+  - If the head revision is the scope's and no other scope has a redo that needs the head on the path, move the head to its parent by applying the inverse. Redo follows the tree.
+  - Otherwise find the scope's latest revision on the path from the root to the head that is still in effect. Undo revisions are skipped. A redo revision (one that reverts an undo) is a target itself, so undo, redo, undo works even after others edited in between. Rebase its inverse through every later revision. On overlap with a later edit by another author or lane, refuse with `UndoError::Conflict` and the conflicting ranges; never undo partially. On success, commit the rebased inverse as a new revision that records which revision it reverts.
+- `redo(scope)` replays the scope's own undo stack: a tree move if the undo was a tree move and the head has not moved since, otherwise it re-applies the edit (rebased) or reverts the revert. When a re-applied edit had further undone edits on top of it, those redo entries are rewritten to follow the new revision, so several redos in a row still work after someone else edited.
+- Groups: consecutive transactions with the same author, lane and `GroupKey` (actor plus turn id, for example one insert-mode session or one agent turn) merge into one revision, so one undo step undoes the whole group. A transaction from another author or lane in between ends the group.
 - Finding the target walks the head path, and a revert rebases over every later revision: O(revisions) work. That is fine for M0. The history cap from #18 (default 10 000 revisions or 50 MB) also bounds this walk.
 - Every undo and redo is itself a committed transaction with a new `Version`, so anchors, the change log and rebasing see one uniform stream of edits.
 
@@ -106,7 +108,10 @@ impl ChangeSet {
 
 pub struct Selection { pub ranges: Vec<SelRange>, pub primary: usize }
 pub struct Transaction { pub author, pub base: Version, pub changes: ChangeSet,
-    pub selection_before: Option<Selection>, pub selection_after: Option<Selection>, pub group: Option<GroupKey> }
+    pub selection_before: Option<Selection>, pub selection_after: Option<Selection>,
+    pub lane: Option<UndoLane>, pub group: Option<GroupKey> }
+pub struct UndoLane(pub u64);
+pub struct UndoScope { pub author: AuthorId, pub lane: Option<UndoLane> }  // From<AuthorId>: lane None
 
 pub struct Snapshot { /* O(1) clone, Send + Sync */ }
 impl Snapshot {
@@ -124,8 +129,9 @@ impl Buffer {
     pub fn snapshot(&self) -> Snapshot; pub fn version(&self) -> Version;
     pub fn apply(&mut self, txn: Transaction) -> Result<Applied, EditError>;
     // EditError: Stale | TooOld | FutureVersion | LengthMismatch | NotCharBoundary
-    pub fn undo(&mut self, author: &AuthorId) -> Result<Option<Applied>, UndoError>;
-    pub fn redo(&mut self, author: &AuthorId) -> Result<Option<Applied>, UndoError>;
+    pub fn undo(&mut self, scope: &UndoScope) -> Result<Option<Applied>, UndoError>;
+    pub fn redo(&mut self, scope: &UndoScope) -> Result<Option<Applied>, UndoError>;
+    pub fn forget_redo(&mut self, scope: &UndoScope);
     pub fn anchor(&self, offset, bias) -> Anchor; pub fn resolve(&self, anchor) -> Result<usize, AnchorError>;
     pub fn with_log_limits(text: &str, capacity: usize, byte_limit: usize) -> Self;
     pub fn last_edit_time(&self) -> Option<SystemTime>;
@@ -133,7 +139,7 @@ impl Buffer {
 }
 ```
 
-Conflicts (`Conflict`) report the incoming hunk in the coordinates it was submitted in, for both `apply` and `undo`.
+Conflicts (`Conflict`) report the incoming hunk in the coordinates it was submitted in; for `undo` and `redo`, in the coordinates of the revision being undone or redone.
 
 A rebased transaction keeps its before-selection, mapped through the edits since its base, so undoing it restores the cursor. Its after-selection is dropped, because it refers to text the author never saw.
 
@@ -165,7 +171,7 @@ Not done yet, tracked for #17, #18 and ADR 0004:
 - memory after 10k whole-file rewrites: the change log is bounded, but the undo tree is not capped yet (#18: default 10 000 revisions or 50 MB);
 - the longest-line metric, and benches at 1 MB, 1 GB and on a single giant line (#17).
 
-Property tests: rebasing equals sequential application when there is no conflict; "undo mine" never changes another author's text; undo then redo round-trips, for one author and for two authors with interleaved edits; tracked and lazy anchors agree.
+Property tests: rebasing equals sequential application when there is no conflict; "undo mine" never changes another author's text; undo then redo round-trips, for one author and for two authors with interleaved edits; undo and redo in one lane never change another lane's text and a pending redo is never lost; redone steps land exactly where they were after another lane's edits; `rebase_first` builds the same text as `rebase` with the roles swapped; tracked and lazy anchors agree.
 
 ## Consequences
 

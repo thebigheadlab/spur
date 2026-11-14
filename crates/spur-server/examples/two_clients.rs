@@ -61,7 +61,7 @@ mod demo {
         b.keys("<Down><Down><Down>");
         show.frame(&mut a, &mut b, "A goes to line 2, B to line 4");
 
-        let (ta, tb) = ("Hello from A.", "B was here.");
+        let (ta, tb) = ("Hello from A.", "B was here too.");
         let mut ia = ta.chars();
         let mut ib = tb.chars();
         loop {
@@ -77,16 +77,22 @@ mod demo {
             }
             show.frame(&mut a, &mut b, "both type at once");
         }
-        b.keys("<Up><Up>");
-        show.frame(&mut a, &mut b, "B moves up to A's line");
+        a.keys("<CR>Typed alone.");
+        show.frame(&mut a, &mut b, "A types a line alone: one undo step");
+        b.keys("<Up><Up><Up><Home>");
+        show.frame(&mut a, &mut b, "B moves to the start of A's first line");
         b.keys("Hi A! ");
-        show.frame(&mut a, &mut b, "B types on A's line; A's cursor shifts");
+        show.frame(&mut a, &mut b, "B types there, after A");
         a.keys("<C-z>");
         show.frame(
             &mut a,
             &mut b,
-            "A undoes: B's newest edit goes (undo is per person)",
+            "A undoes: A's own last step goes, B's newer edit stays",
         );
+        b.keys("<C-z>");
+        show.frame(&mut a, &mut b, "B undoes: only B's edit goes");
+        a.keys("<C-y>");
+        show.frame(&mut a, &mut b, "A redoes: its line comes back");
         show.pause(Duration::from_secs(2));
         drop((a, b));
         session.join();
