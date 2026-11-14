@@ -277,6 +277,12 @@ pub fn paint(screen: &mut Screen, w: u32, h: u32) -> Frame {
         // Presses on the dimmed tree reach the server, which closes the overlay.
         let r = overlay_rect(o, screen, w, h);
         frame.grid.clear(r.x, r.y, r.w, r.h);
+        // Presses on its padding count as inside it, never the shell beneath.
+        frame.hits.push(Hit {
+            rect: r,
+            node: o.node.id.clone(),
+            kind: HitKind::Click,
+        });
         paint_tree(&mut frame, screen, &o.node, r, &focus, true);
     }
     screen.overlays = overlays;

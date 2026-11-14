@@ -34,11 +34,18 @@ pub struct ActionKey {
 impl Action {
     /// The bindings its keys make, one per mode and key. The binding's `when` is the
     /// action's and the key's together.
-    pub fn bindings(&self) -> Vec<Binding> {
+    ///
+    /// # Errors
+    ///
+    /// The two conditions do not combine into one (too deeply nested).
+    pub fn bindings(&self) -> Result<Vec<Binding>, String> {
         let mut out = Vec::new();
         for k in &self.keys {
             let when = match (&self.when, &k.when) {
-                (Some(a), Some(b)) => When::parse(&format!("({a}) && ({b})")).ok(),
+                (Some(a), Some(b)) => Some(
+                    When::parse(&format!("({a}) && ({b})"))
+                        .map_err(|e| format!("its when and its key's when: {e}"))?,
+                ),
                 (Some(a), None) => Some(a.clone()),
                 (None, b) => b.clone(),
             };
@@ -52,12 +59,33 @@ impl Action {
                 });
             }
         }
-        out
+        Ok(out)
     }
 
-    /// The hint for this action in `mode`: its first key that runs in that mode
-    /// now and is not masked by another layer (the pack's own special cases for
-    /// the key count as the action).
+    /// Its first key that runs this action in `mode` now and is not masked by
+    /// another layer (the pack's own special cases for the key count as the
+    /// action), with the steps a press of it runs.
+    fn live_key(
+        &self,
+        keymap: &Keymap,
+        layer: &str,
+        mode: &str,
+        look: &impl ContextLookup,
+    ) -> Option<(&ActionKey, Arc<[Step]>)> {
+        self.keys.iter().find_map(|k| {
+            let (l, a) = keymap.resolve_key(mode, &k.keys, look)?;
+            match a {
+                KeyAction::Run(s)
+                    if Arc::ptr_eq(s, &self.steps) || **s == *self.steps || l == layer =>
+                {
+                    Some((k, s.clone()))
+                }
+                KeyAction::Run(_) | KeyAction::Unbind => None,
+            }
+        })
+    }
+
+    /// The hint for this action in `mode`: its live key, printed.
     pub fn hint(
         &self,
         keymap: &Keymap,
@@ -66,26 +94,21 @@ impl Action {
         look: &impl ContextLookup,
         display: &KeyDisplay,
     ) -> Option<String> {
-        self.keys.iter().find_map(|k| {
-            let d = keymap.describe_key(mode, &k.keys, look);
-            let c = d.chosen?;
-            let ok = matches!(&c.action, KeyAction::Run(s) if **s == *self.steps)
-                || (&*c.layer == layer && matches!(c.action, KeyAction::Run(_)));
-            ok.then(|| display.format(&k.keys))
-        })
+        self.live_key(keymap, layer, mode, look)
+            .map(|(k, _)| display.format(&k.keys))
     }
 
-    /// The steps a press of its first key runs now in `mode` (what a key press
-    /// would do), or its own steps if that key runs nothing.
-    pub fn press(&self, keymap: &Keymap, mode: &str, look: &impl ContextLookup) -> Arc<[Step]> {
-        self.keys
-            .first()
-            .and_then(|k| keymap.describe_key(mode, &k.keys, look).chosen)
-            .and_then(|c| match c.action {
-                KeyAction::Run(s) => Some(s),
-                KeyAction::Unbind => None,
-            })
-            .unwrap_or_else(|| self.steps.clone())
+    /// The steps a press of its hinted key runs now in `mode` (what the hint
+    /// promises), or its own steps if no key is live.
+    pub fn press(
+        &self,
+        keymap: &Keymap,
+        layer: &str,
+        mode: &str,
+        look: &impl ContextLookup,
+    ) -> Arc<[Step]> {
+        self.live_key(keymap, layer, mode, look)
+            .map_or_else(|| self.steps.clone(), |(_, s)| s)
     }
 }
 

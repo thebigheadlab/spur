@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use nucleo::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo::{Config, Nucleo, Utf32Str};
 use spur_rpc::{Item, ItemKind, ListView};
+use unicode_segmentation::UnicodeSegmentation as _;
 
 use super::index::{Index, Path32, Status};
 use super::pack::Pack;
@@ -20,6 +21,9 @@ pub const SECTION_ROWS: usize = 50;
 pub const RECENT_IN_ALL: usize = 10;
 /// Recent documents kept per client.
 pub const MAX_RECENT: usize = 50;
+
+/// Best file matches searched for a selected file that moved.
+const FIND_FILES: u32 = 10_000;
 
 /// Called with a client's id when its matcher has news.
 #[derive(Clone)]
@@ -138,6 +142,9 @@ pub struct PaletteState {
     pub follow: bool,
     /// First row shown.
     pub offset: u32,
+    /// What the selected row ran when last drawn or chosen, for the generation
+    /// it was drawn in: Enter runs this, so a tick in between cannot change it.
+    pub shown: Option<(u64, Option<Run>)>,
     /// Rises with each query or scope change.
     pub generation: u64,
 }
@@ -374,7 +381,7 @@ impl Rows {
     }
 
     /// Fixes the selection after the rows changed: the stored id if it is still
-    /// where it was (or among the built rows), else the first selectable row.
+    /// where it was (or elsewhere in the rows), else the first selectable row.
     pub fn settle(&self, st: &mut PaletteState, m: Option<&Matcher>, root: &Path) {
         if !st.follow
             && let Some(id) = &st.selected
@@ -382,7 +389,7 @@ impl Rows {
             if self.at(st.index, m, root).is_some_and(|(r, _, _)| &r == id) {
                 return;
             }
-            if let Some(i) = self.find_built(id) {
+            if let Some(i) = self.find(id, m) {
                 st.index = i;
                 return;
             }
@@ -397,7 +404,7 @@ impl Rows {
         }
     }
 
-    fn find_built(&self, id: &str) -> Option<u32> {
+    fn find(&self, id: &str, m: Option<&Matcher>) -> Option<u32> {
         let mut base = 0u32;
         for s in &self.segs {
             match s {
@@ -407,7 +414,17 @@ impl Rows {
                     }
                     base += u32::try_from(r.len()).ok()?;
                 }
-                Seg::Files(n) => base += n,
+                Seg::Files(n) => {
+                    // A file that moved is looked for among the best matches.
+                    if let (Some(m), Some(path)) = (m, id.strip_prefix("f:")) {
+                        let found = (0..(*n).min(FIND_FILES))
+                            .find(|&k| m.path(k).is_some_and(|p| &**p == path));
+                        if let Some(k) = found {
+                            return Some(base + k);
+                        }
+                    }
+                    base += n;
+                }
             }
         }
         None
@@ -430,9 +447,7 @@ impl Rows {
             .selectable(from, by > 0, m, root)
             .or_else(|| self.selectable(from, by < 0, m, root));
         if let Some(i) = found {
-            st.index = i;
-            st.selected = self.at(i, m, root).map(|(id, _, _)| id);
-            st.follow = false;
+            self.choose(st, i, m, root);
             keep_visible(st, height);
         }
     }
@@ -448,17 +463,41 @@ impl Rows {
     ) -> bool {
         let end = st.offset.saturating_add(height.max(1)).min(self.total());
         for i in st.offset..end {
-            if let Some((rid, kind, _)) = self.at(i, m, root)
-                && rid == id
-                && kind != ItemKind::Section
+            if self
+                .at(i, m, root)
+                .is_some_and(|(rid, kind, _)| rid == id && kind != ItemKind::Section)
             {
-                st.index = i;
-                st.selected = Some(rid);
-                st.follow = false;
+                self.choose(st, i, m, root);
                 return true;
             }
         }
         false
+    }
+
+    /// The person picked row `i`: it stays selected and is what Enter runs.
+    fn choose(&self, st: &mut PaletteState, i: u32, m: Option<&Matcher>, root: &Path) {
+        let row = self.at(i, m, root);
+        st.index = i;
+        st.selected = row.as_ref().map(|(id, _, _)| id.clone());
+        st.shown = Some((st.generation, row.and_then(|(_, _, r)| r)));
+        st.follow = false;
+    }
+
+    /// Records what the selected row runs as drawn (after [`Rows::settle`]).
+    pub fn mark_shown(&self, st: &mut PaletteState, m: Option<&Matcher>, root: &Path) {
+        st.shown = Some((st.generation, self.run(st, m, root)));
+    }
+
+    /// What Enter runs: the row as last drawn or chosen in this generation, else
+    /// the selection settled now (the query changed since the last frame).
+    pub fn to_run(&self, st: &mut PaletteState, m: Option<&Matcher>, root: &Path) -> Option<Run> {
+        if let Some((g, run)) = &st.shown
+            && *g == st.generation
+        {
+            return run.clone();
+        }
+        self.settle(st, m, root);
+        self.run(st, m, root)
     }
 
     /// Scrolls the window by `lines`, leaving the selection.
@@ -555,7 +594,7 @@ fn file_item(path: &str, m: &mut Matcher) -> Item {
     let folder_chars = if folder.is_empty() {
         0
     } else {
-        u32::try_from(folder.chars().count() + 1).unwrap_or(u32::MAX)
+        u32::try_from(folder.graphemes(true).count() + 1).unwrap_or(u32::MAX)
     };
     let name_idx: Vec<u32> = indices
         .iter()
@@ -641,7 +680,7 @@ fn recent_rows(x: &Input<'_>, q: &str, max: usize) -> Vec<Row> {
             let folder_chars = if folder.is_empty() {
                 0
             } else {
-                u32::try_from(folder.chars().count() + 1).unwrap_or(u32::MAX)
+                u32::try_from(folder.graphemes(true).count() + 1).unwrap_or(u32::MAX)
             };
             let name_idx: Vec<u32> = idx
                 .iter()

@@ -352,7 +352,12 @@ pub struct Cx<'a, S> {
 
 impl<'a, S> Cx<'a, S> {
     /// Takes the calling client's host, if the call has one and no handler holds it.
+    /// An extension's handler gets none: client UI goes through the `ui.*`
+    /// commands, with their audit and middleware.
     pub fn take_host(&mut self) -> Option<&'a mut dyn ClientHost<S>> {
+        if self.owner.is_some() {
+            return None;
+        }
         self.host.take()
     }
 

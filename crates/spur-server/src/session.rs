@@ -549,6 +549,12 @@ impl State {
                     let _ = tx.send(In::MatchReady { conn });
                 }
             })));
+            // The palette's index is walked from the start, so a first open
+            // already has the files.
+            if ux.pack.palette.is_some() {
+                let notify = ux.notify.clone();
+                ux.index.walk(notify);
+            }
         }
         let saved = if ux.is_some() {
             core.bus_mut()
@@ -710,7 +716,7 @@ impl State {
                         && let Some(rel) = ux.files.rel(Path::new(path))
                     {
                         ux.files.reread(parent_of(&rel));
-                        ux.index.add(&rel);
+                        ux.index.saved(&rel);
                     }
                 }
                 // Some saves were missed: read every folder again.
@@ -896,6 +902,10 @@ impl State {
             return;
         };
         if let Some(m) = ux.matchers.get_mut(&conn) {
+            // A re-walk swapped in: fill again from the new paths.
+            if m.index_generation != ux.index.status().generation {
+                m.refill(conn, &ux.index);
+            }
             m.ready();
         }
         if client_ui::palette_open(ux, c) {
@@ -1178,6 +1188,7 @@ impl State {
             spur_core::Target::Handle(_) => false,
         };
         let old_doc = self.core.state.views.get(&view).map(|v| v.doc);
+        let before = ui_only.then(|| self.view_mark(view)).flatten();
         self.core.state.focus = view;
         let mut effects = Vec::new();
         let res = {
@@ -1220,8 +1231,13 @@ impl State {
         if !self.core.state.views.contains_key(&active) {
             active = self.core.state.add_view_for(self.home, Some(id));
         }
-        // A UI-only call that left the view alone redraws only this client.
-        if !(ui_only && active == view) {
+        // A UI-only call that left the view alone redraws only this client. One
+        // that moved its cursor (the palette's go to line) ends the undo step too.
+        let moved = ui_only && active == view && before != self.view_mark(view);
+        if moved && let Some(v) = self.core.state.views.get_mut(&view) {
+            v.turn += 1;
+        }
+        if !(ui_only && active == view) || moved {
             self.core.state.scroll_view(active, rows, SCROLL_MARGIN);
             if let Some(c) = self.clients.get_mut(&conn) {
                 c.active = active;
@@ -1247,6 +1263,14 @@ impl State {
         Some(r)
     }
 
+    /// What a UI-only call may not change unseen: the view's document, its
+    /// version and the selection.
+    fn view_mark(&self, view: ViewId) -> Option<(DocId, spur_text::Version, spur_text::Selection)> {
+        let v = self.core.state.views.get(&view)?;
+        let d = self.core.state.docs.get(&v.doc)?;
+        Some((v.doc, d.buffer.version(), v.selection.clone()))
+    }
+
     /// Runs a pack action's steps as a key press would, in the client's focused
     /// region; a failed step shows as the status notice and stops the rest.
     pub(crate) fn run_action(&mut self, conn: u64, id: &str) {
@@ -1260,7 +1284,12 @@ impl State {
             };
             let ed = &self.core.state;
             let mode = client_ui::key_mode(Some(ux), c, ed, self.core.context());
-            a.press(&c.keymap, &mode, &Scoped(&[self.core.context(), &c.scope]))
+            a.press(
+                &c.keymap,
+                &ux.pack.keys.name,
+                &mode,
+                &Scoped(&[self.core.context(), &c.scope]),
+            )
         };
         for step in steps.iter() {
             let name = step.command.to_string();
@@ -1592,6 +1621,7 @@ fn render_ux(c: &mut Client, ux: &mut Ux, ed: &Editor, ctx: &Context, others: &[
                 continue;
             };
             r.settle(&mut ui.palette, ux.matchers.get(&conn), ux.index.root());
+            r.mark_shown(&mut ui.palette, ux.matchers.get(&conn), ux.index.root());
             r.window(&mut ui.palette, height, ux.matchers.get_mut(&conn))
         } else {
             let Some(t) = ui.trees.get_mut(id) else {

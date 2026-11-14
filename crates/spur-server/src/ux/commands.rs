@@ -144,9 +144,9 @@ impl ClientHost<Editor> for UiHost<'_> {
         id: &CommandId,
         args: &Value,
     ) -> Result<Value, CommandError> {
-        if self.client.ui.is_none() {
+        let Some(focus_before) = self.client.ui.as_ref().map(|u| u.focus.clone()) else {
             return Err(CommandError::failed("this client has no UI state"));
-        }
+        };
         match id.as_str() {
             "ui.set" | "ui.toggle" | "ui.cycle" => {
                 let (key, value) = self.ui_set(id.as_str(), args)?;
@@ -264,6 +264,17 @@ impl ClientHost<Editor> for UiHost<'_> {
                 }
             }
             other => return Err(CommandError::unknown(other)),
+        }
+        // Focus moved by another command (the palette opening or closing).
+        if id.as_str() != "ui.focus"
+            && let Some(ui) = self.client.ui.as_ref()
+            && ui.focus != focus_before
+        {
+            emit(
+                cx,
+                events::UI_FOCUSED,
+                json!({ "client": self.client.id.0, "region": ui.focus }),
+            );
         }
         self.client.dirty = true;
         self.effects.push(Effect::CheckFocus);
@@ -437,8 +448,7 @@ impl UiHost<'_> {
         };
         let Some(ui) = c.ui.as_mut() else { return };
         let m = ux.matchers.get(&c.id.0);
-        rows.settle(&mut ui.palette, m, ux.index.root());
-        let Some(run) = rows.run(&ui.palette, m, ux.index.root()) else {
+        let Some(run) = rows.to_run(&mut ui.palette, m, ux.index.root()) else {
             return;
         };
         close_palette(ux, c, cx.context);

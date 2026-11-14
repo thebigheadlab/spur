@@ -34,6 +34,8 @@ struct Shared {
     /// Rises with each walk; a matcher filled from an older one is restarted.
     generation: u64,
     paths: Vec<Path32>,
+    /// The same paths, to look one up.
+    known: std::collections::HashSet<Path32>,
     done: bool,
     capped: bool,
     /// Matchers fed by the walk, by client.
@@ -106,31 +108,57 @@ impl Index {
         self.started.is_none_or(|t| t.elapsed() > STALE)
     }
 
-    /// Starts a new walk: the old one stops, every registered matcher is dropped
-    /// (its owner restarts it and registers again) and the generation rises. When it
-    /// ends, `done` is called for each client whose matcher it fed.
+    /// Starts a new walk; the old one stops. The first walk (or one after an
+    /// empty result) streams: every registered matcher is dropped (its owner
+    /// refills it and registers again), the generation rises and paths reach the
+    /// matchers as they are found. A later walk runs aside while the old paths keep
+    /// serving, and swaps in when it ends: then the generation rises and the
+    /// matchers are dropped. When it ends, `done` is called for each client whose
+    /// matcher it fed (or dropped), so the owner can refill.
     pub fn walk(&mut self, done: Option<Notify>) -> u64 {
         self.stop.store(true, Ordering::Relaxed);
         let stop = Arc::new(AtomicBool::new(false));
         self.stop = stop.clone();
         self.started = Some(Instant::now());
-        let generation = {
+        let (generation, stream) = {
             let mut s = lock(&self.shared);
-            s.generation += 1;
-            s.paths.clear();
-            s.done = false;
-            s.capped = false;
-            s.sinks.clear();
-            s.generation
+            if s.paths.is_empty() {
+                s.generation += 1;
+                s.done = false;
+                s.capped = false;
+                s.sinks.clear();
+                (s.generation, true)
+            } else {
+                (s.generation, false)
+            }
         };
         let shared = self.shared.clone();
         let root = self.root.clone();
         let spawned = std::thread::Builder::new()
             .name("spur-index".into())
             .spawn(move || {
-                walk(&root, &shared, &stop, generation);
+                let clients = if stream {
+                    walk(&root, &shared, &stop, generation);
+                    lock(&shared).sinks.iter().map(|(c, _)| *c).collect()
+                } else {
+                    let Some((paths, capped)) = collect(&root, &stop) else {
+                        return;
+                    };
+                    let mut s = lock(&shared);
+                    if stop.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    s.generation += 1;
+                    s.known = paths.iter().cloned().collect();
+                    s.paths = paths;
+                    s.done = true;
+                    s.capped = capped;
+                    std::mem::take(&mut s.sinks)
+                        .into_iter()
+                        .map(|(c, _)| c)
+                        .collect::<Vec<u64>>()
+                };
                 if let Some(n) = done {
-                    let clients: Vec<u64> = lock(&shared).sinks.iter().map(|(c, _)| *c).collect();
                     for c in clients {
                         (n.0)(c);
                     }
@@ -168,16 +196,11 @@ impl Index {
         lock(&self.shared).sinks.retain(|(c, _)| *c != client);
     }
 
-    /// Adds one file (a save created it) if the walk is done and it is not listed.
-    pub fn add(&self, rel: &str) {
-        let mut s = lock(&self.shared);
-        if !s.done || s.capped || s.paths.iter().any(|p| &**p == rel) {
-            return;
-        }
-        let p: Path32 = rel.into();
-        s.paths.push(p.clone());
-        for (_, i) in &s.sinks {
-            i.push(p.clone(), fill);
+    /// A file was saved: if the index does not list it, the next palette open
+    /// walks again (the walk decides whether ignore rules hide it).
+    pub fn saved(&mut self, rel: &str) {
+        if !lock(&self.shared).known.contains(rel) {
+            self.started = None;
         }
     }
 }
@@ -188,8 +211,24 @@ impl Drop for Index {
     }
 }
 
-fn walk(root: &Path, shared: &Mutex<Shared>, stop: &AtomicBool, generation: u64) {
-    let walker = ignore::WalkBuilder::new(root)
+/// Lists the files under `root` into one vector; `None` if stopped.
+fn collect(root: &Path, stop: &AtomicBool) -> Option<(Vec<Path32>, bool)> {
+    let mut paths = Vec::new();
+    for rel in files(root) {
+        if stop.load(Ordering::Relaxed) {
+            return None;
+        }
+        paths.push(rel);
+        if paths.len() >= MAX_FILES {
+            return Some((paths, true));
+        }
+    }
+    Some((paths, false))
+}
+
+/// The files under `root`, relative and `/`-separated.
+fn files(root: &Path) -> impl Iterator<Item = Path32> + '_ {
+    ignore::WalkBuilder::new(root)
         .hidden(true)
         .follow_links(false)
         .git_ignore(true)
@@ -197,32 +236,28 @@ fn walk(root: &Path, shared: &Mutex<Shared>, stop: &AtomicBool, generation: u64)
         .git_global(true)
         .ignore(true)
         .require_git(false)
-        .build();
+        .build()
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_some_and(|t| t.is_file()))
+        .filter_map(move |e| {
+            let rel = e.path().strip_prefix(root).ok()?.to_str()?;
+            Some(Path32::from(if std::path::MAIN_SEPARATOR == '/' {
+                rel.to_owned()
+            } else {
+                rel.replace(std::path::MAIN_SEPARATOR, "/")
+            }))
+        })
+}
+
+fn walk(root: &Path, shared: &Mutex<Shared>, stop: &AtomicBool, generation: u64) {
     let mut batch = Vec::with_capacity(BATCH);
     let mut total = 0;
     let mut capped = false;
-    for entry in walker {
+    for rel in files(root) {
         if stop.load(Ordering::Relaxed) {
             return;
         }
-        let Ok(e) = entry else {
-            continue;
-        };
-        if !e.file_type().is_some_and(|t| t.is_file()) {
-            continue;
-        }
-        let Ok(rel) = e.path().strip_prefix(root) else {
-            continue;
-        };
-        let Some(rel) = rel.to_str() else {
-            continue;
-        };
-        let rel = if std::path::MAIN_SEPARATOR == '/' {
-            rel.to_owned()
-        } else {
-            rel.replace(std::path::MAIN_SEPARATOR, "/")
-        };
-        batch.push(Path32::from(rel));
+        batch.push(rel);
         total += 1;
         if total >= MAX_FILES {
             capped = true;
@@ -252,6 +287,7 @@ fn flush(shared: &Mutex<Shared>, batch: &mut Vec<Path32>, generation: u64) -> bo
             i.push(p.clone(), fill);
         }
     }
+    s.known.extend(batch.iter().cloned());
     s.paths.append(batch);
     true
 }
@@ -286,9 +322,20 @@ mod tests {
             .collect();
         paths.sort();
         assert_eq!(paths, ["README.md", "src/main.rs"]);
-        idx.add("src/new.rs");
-        idx.add("src/new.rs");
+        // A later walk keeps serving the old paths, then swaps.
+        std::fs::write(dir.join("src/new.rs"), "").unwrap();
+        idx.saved("src/main.rs");
+        assert!(!idx.stale(), "a listed file changes nothing");
+        idx.saved("src/new.rs");
+        assert!(idx.stale());
+        let g = idx.status().generation;
+        idx.walk(None);
+        let t = Instant::now();
+        while idx.status().generation == g && t.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
         assert_eq!(idx.status().count, 3);
+        assert!(idx.status().done);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

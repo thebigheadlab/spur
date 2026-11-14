@@ -184,7 +184,7 @@ pub(crate) fn open_palette(
             field.insert(q);
         }
         c.keymap.reset();
-        // The index is walked when a palette first opens, and again when stale.
+        // A stale index is walked again (aside; it swaps in when done).
         let status = ux.index.status();
         if ux.index.stale() && (status.done || status.generation == 0) {
             let notify = ux.notify.clone();

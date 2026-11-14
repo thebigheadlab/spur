@@ -40,7 +40,8 @@ pub struct Ux {
     pub pack_error: Option<String>,
     /// Rises with each pack loaded, so clients get the theme again.
     pub generation: u64,
-    /// The workspace file index (walked when a palette first opens).
+    /// The workspace file index (walked when the session starts, again on a
+    /// palette open once stale).
     pub index: Index,
     /// File matchers by client, made when a client first opens the palette.
     pub matchers: BTreeMap<u64, Matcher>,

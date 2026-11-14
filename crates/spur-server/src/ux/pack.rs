@@ -1,7 +1,7 @@
 //! Loading and checking a UX pack: a folder of TOML files that holds a look (layout,
 //! components, themes, key bindings, labels). Nothing here knows any one pack.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -392,6 +392,8 @@ pub struct Pack {
     pub(crate) nodes: BTreeMap<String, NodeSpec>,
     /// Parent of each node.
     pub(crate) parent: BTreeMap<String, String>,
+    /// The region and the overlay holding each node, found once at load.
+    holders: HashMap<String, (Option<String>, Option<String>)>,
     /// The key layer (`ux:<id>`).
     pub(crate) keys: Layer,
     /// Themes by name.
@@ -476,10 +478,36 @@ impl Pack {
 
     /// The region whose node contains `node`, if any.
     pub(crate) fn region_of(&self, node: &str) -> Option<&str> {
-        self.regions
-            .iter()
-            .find(|(_, r)| self.within(node, &r.node))
-            .map(|(k, _)| k.as_str())
+        match self.holders.get(node) {
+            Some((r, _)) => r.as_deref(),
+            None => self
+                .regions
+                .iter()
+                .find(|(_, r)| self.within(node, &r.node))
+                .map(|(k, _)| k.as_str()),
+        }
+    }
+
+    /// Finds each node's region and overlay (after the nodes are known).
+    fn find_holders(&mut self) {
+        let holders = self
+            .nodes
+            .keys()
+            .map(|n| {
+                let region = self
+                    .regions
+                    .iter()
+                    .find(|(_, r)| self.within(n, &r.node))
+                    .map(|(k, _)| k.clone());
+                let overlay = self
+                    .overlays
+                    .iter()
+                    .find(|(_, o)| self.within(n, &o.node))
+                    .map(|(k, _)| k.clone());
+                (n.clone(), (region, overlay))
+            })
+            .collect();
+        self.holders = holders;
     }
 
     /// The action named `id`.
@@ -489,10 +517,14 @@ impl Pack {
 
     /// The overlay whose tree holds `node`.
     pub(crate) fn overlay_of(&self, node: &str) -> Option<&str> {
-        self.overlays
-            .iter()
-            .find(|(_, o)| self.within(node, &o.node))
-            .map(|(k, _)| k.as_str())
+        match self.holders.get(node) {
+            Some((_, o)) => o.as_deref(),
+            None => self
+                .overlays
+                .iter()
+                .find(|(_, o)| self.within(node, &o.node))
+                .map(|(k, _)| k.as_str()),
+        }
     }
 
     /// A message with its placeholders filled.
@@ -853,6 +885,7 @@ impl<'k> Loader<'k> {
             ascii_icons: false,
             nodes: BTreeMap::new(),
             parent: BTreeMap::new(),
+            holders: HashMap::new(),
             keys: Layer::new("ux", Source::Core),
             themes: BTreeMap::new(),
             surface: String::new(),
@@ -887,10 +920,10 @@ impl<'k> Loader<'k> {
         self.check_themes(&pack);
         let known_keys = self.check_nodes(&mut pack, raw, &pack_lines);
         self.check_actions(&pack, &known_keys);
-        if let Some(text) = keys {
-            self.keys_file(text, &mut pack, &known_keys);
-        }
+        // Without keys.toml the actions still bind their keys.
+        self.keys_file(keys.map_or("", String::as_str), &mut pack, &known_keys);
         if self.errors.is_empty() {
+            pack.find_holders();
             Ok(pack)
         } else {
             Err(self.errors)
@@ -1248,11 +1281,12 @@ impl<'k> Loader<'k> {
                         continue;
                     };
                     for (prefix, scope) in p.prefixes {
-                        if prefix.is_empty() || prefix.chars().any(char::is_whitespace) {
+                        // One typed character: it fires as it is typed.
+                        if prefix.chars().count() != 1 || prefix.chars().any(char::is_whitespace) {
                             self.push(src.err(
                                 Some(v.span()),
                                 "palette.prefixes",
-                                format!("{prefix:?}: a prefix is text without spaces"),
+                                format!("{prefix:?}: a prefix is one character, not a space"),
                             ));
                         } else if !PALETTE_SCOPES.contains(&scope.as_str()) || scope == "all" {
                             self.push(src.err(
@@ -2263,17 +2297,33 @@ impl<'k> Loader<'k> {
             .map(|(k, n)| (k.clone(), (n.file.clone(), n.line)))
             .collect();
         pack.nodes = raw.into_iter().map(|(k, n)| (k, n.spec)).collect();
-        // Clicks naming an action run its steps.
+        // Clicks naming an action run its steps, when the action applies.
         let actions = pack.actions.clone();
-        for n in pack.nodes.values_mut() {
+        for (id, n) in &mut pack.nodes {
             for c in &mut n.on_click {
-                if let Some(a) = c
+                let Some((_, a)) = c
                     .action
                     .as_deref()
                     .and_then(|a| actions.iter().find(|(k, _)| k == a))
-                {
-                    c.steps = a.1.steps.to_vec();
-                }
+                else {
+                    continue;
+                };
+                c.steps = a.steps.to_vec();
+                c.when = match (&a.when, &c.when) {
+                    (Some(x), Some(y)) => match When::parse(&format!("({x}) && ({y})")) {
+                        Ok(w) => Some(w),
+                        Err(e) => {
+                            self.push(perr(
+                                &format!("node.{id}.on_click"),
+                                None,
+                                format!("its when and the action's when: {e}"),
+                            ));
+                            continue;
+                        }
+                    },
+                    (Some(x), None) => Some(x.clone()),
+                    (None, y) => y.clone(),
+                };
             }
         }
         for (name, r) in &pack.regions {
@@ -2398,11 +2448,13 @@ impl<'k> Loader<'k> {
         ) {
             Ok(mut layer) => {
                 // Action keys first: a later binding in keys.toml wins over them.
-                let expanded: Vec<_> = pack
-                    .actions
-                    .iter()
-                    .flat_map(|(_, a)| a.bindings())
-                    .collect();
+                let mut expanded = Vec::new();
+                for (id, a) in &pack.actions {
+                    match a.bindings() {
+                        Ok(b) => expanded.extend(b),
+                        Err(e) => self.push(src.err(None, &format!("actions.{id}"), e)),
+                    }
+                }
                 layer.bindings.splice(0..0, expanded);
                 pack.keys = layer;
             }

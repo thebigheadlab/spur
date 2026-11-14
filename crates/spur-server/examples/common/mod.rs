@@ -2,10 +2,11 @@
 //!
 //! The key layer is example-only. The server ships no bindings; UX packs bring them.
 
+use std::collections::HashMap;
 use std::os::unix::net::UnixStream;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use spur_rpc::{Caps, ClientEnd, ClientKind, ClientMsg, ServerMsg, Size, SurfaceView};
+use spur_rpc::{Caps, ClientEnd, ClientKind, ClientMsg, ListView, ServerMsg, Size, SurfaceView};
 use spur_server::Session;
 
 /// Insert-mode typing, arrows, Home, Enter, Backspace, save, undo and redo.
@@ -73,6 +74,8 @@ pub struct Client {
     pub view: Option<SurfaceView>,
     /// The id the server gave this client.
     pub id: u64,
+    /// The latest window of each list node.
+    pub lists: HashMap<String, ListView>,
     ping: u64,
 }
 
@@ -89,6 +92,7 @@ impl Client {
             end: ClientEnd::unix(mine).expect("client end"),
             view: None,
             id: 0,
+            lists: HashMap::new(),
             ping: 0,
         };
         c.end
@@ -111,6 +115,45 @@ impl Client {
         let ping = ClientMsg::Ping { id: self.ping };
         self.end.send_batch(vec![key, ping]).expect("send");
         self.wait();
+    }
+
+    /// Sends keys; returns when their frame arrived, and when the last window of
+    /// list `node` with a newer generation arrived (reading until `quiet` passes
+    /// with nothing after the frame).
+    #[allow(dead_code, reason = "each example uses part of this module")]
+    pub fn keys_settle(
+        &mut self,
+        keys: &str,
+        node: &str,
+        quiet: Duration,
+    ) -> (Duration, Option<Duration>) {
+        let before = self.lists.get(node).map_or(0, |l| l.generation);
+        self.ping += 1;
+        let t = Instant::now();
+        let key = ClientMsg::Key { key: keys.into() };
+        let ping = ClientMsg::Ping { id: self.ping };
+        self.end.send_batch(vec![key, ping]).expect("send");
+        let mut frame = None;
+        let mut last = None;
+        loop {
+            let wait = if frame.is_some() { quiet } else { WAIT };
+            match self.end.recv_timeout(wait) {
+                Ok(Some(ServerMsg::Pong { id, .. })) if id == self.ping => {
+                    frame = Some(t.elapsed());
+                }
+                Ok(Some(m)) => {
+                    let newer = matches!(&m, ServerMsg::List { node: n, list }
+                        if n == node && list.generation > before);
+                    self.take(m);
+                    if newer {
+                        last = Some(t.elapsed());
+                    }
+                }
+                Ok(None) if frame.is_some() => break,
+                other => panic!("no pong: {other:?}"),
+            }
+        }
+        (frame.unwrap_or_default(), last)
     }
 
     /// Reports node sizes, as a client does after laying out, and waits for the frame.
@@ -155,6 +198,9 @@ impl Client {
                 view.resolve(self.view.as_ref())
                     .expect("frames arrive in order");
                 self.view = Some(view);
+            }
+            ServerMsg::List { node, list } => {
+                self.lists.insert(node, list);
             }
             ServerMsg::Flush { frame } => {
                 let _ = self.end.send(ClientMsg::Ack { frame });

@@ -1376,6 +1376,24 @@ fn go_to_line_moves_the_cursor() {
 }
 
 #[test]
+fn go_to_line_scrolls_a_long_file() {
+    let root = workspace("palette-line-long");
+    let text = "line\n".repeat(2000);
+    std::fs::write(root.join("long.txt"), text).unwrap();
+    let s = session_in(&root, &["long.txt"]);
+    let mut c = Client::attach(&s, 160, 45);
+    c.keys("<C-g>1200<CR>");
+    let v = c.view.as_ref().unwrap();
+    assert_eq!(v.cursors[0].line, 1199);
+    let rows = u32::try_from(v.lines.len()).unwrap();
+    assert!(
+        v.top_line <= 1199 && 1199 < v.top_line + rows,
+        "the view scrolled to the cursor: top {}",
+        v.top_line
+    );
+}
+
+#[test]
 fn a_press_outside_the_palette_closes_it_and_moves_nothing() {
     let root = workspace("palette-outside");
     let s = session_in(&root, &["notes.txt"]);
