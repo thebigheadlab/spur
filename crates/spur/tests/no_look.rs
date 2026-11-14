@@ -65,7 +65,10 @@ fn rust_files(dir: &Path) -> Vec<PathBuf> {
         let p = e.path();
         if p.is_dir() {
             out.extend(rust_files(&p));
-        } else if p.extension().is_some_and(|x| x == "rs") {
+        } else if p.extension().is_some_and(|x| x == "rs")
+            // Test modules kept in their own files (`#[path = "x_tests.rs"]`).
+            && !p.file_name().is_some_and(|n| n.to_string_lossy().ends_with("_tests.rs"))
+        {
             out.push(p);
         }
     }
