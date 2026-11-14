@@ -11,6 +11,7 @@
 
 mod client;
 mod frame;
+mod highlight;
 mod input;
 mod lang;
 mod session;

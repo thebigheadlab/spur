@@ -60,6 +60,10 @@ When the editor ends any other way (a signal, a lost client, a panic) the launch
 
 When the pack comes from a folder (`spur --ux DIR`), a watcher thread hashes the pack's files every 250 ms and sends them to the session when anything changed. The session loads them under the command panic guard. On success it swaps the pack, migrates each client's UI state (values that still fit are kept; a changed type or a value no longer allowed resets to the new default; removed keys leave the state and the scope), swaps the pack's key layer and redraws. On failure it keeps the old pack, logs every error and shows the first as the pack notice, also to clients that attach later. Clients are migrated on copies first and switched together, so a panic while reloading leaves every client on the old pack (and shows an internal-error notice). The watcher's starting hash is taken before the pack is first loaded, so an edit made during startup is still seen. The embedded pack is never watched.
 
+### Syntax colours
+
+The owner chose simple colours now. `highlight.rs` is one generic tokeniser configured per language by a small table (keywords, line and block comment markers, string quotes; Rust chars and lifetimes), keyed by the language id from the file extension. It emits only the fixed `syntax.*` names (keyword, type, function, string, number, comment, punctuation), which themes map to colours. It is line-local: a block comment or multi-line string is coloured on its first line only. The session keeps the last surface as plain text and colours only the rows it sends, since a row the client copies was coloured when first sent and a line's colours depend only on its text and language. Tree-sitter replaces it later.
+
 ### The terminal client
 
 `spur-tui` depends only on `spur-rpc`, `crossterm` and `unicode-width`; it never links the server, core or keymap. It lays out the tree in cells (one pass per container along its main axis; fixed and `fit` sizes first, `fill` shares the rest by weight), paints styles as tone areas without box lines, and writes only the cells that changed, inside synchronised-output markers, in one write. Every string from the server is cleaned before it reaches the grid, so file names and text cannot inject escape sequences. Without true colour, theme colours map to distinct xterm-256 entries so tones do not merge. Keys become `spur-keymap` notation; where the terminal supports the kitty keyboard protocol, ctrl+shift keys arrive distinct. Mouse presses and the wheel only (no motion tracking).
@@ -83,7 +87,7 @@ The `no_look` test covers the core crates and `spur-tui`: no hex colours, no key
 - `ui.list.activate` from the wire `command` message reports a failed `editor.open` as a status notice, like a key, not as the command's error.
 - Save latency: the slice budget was p50 < 0.3 ms for a save with the modified dot changing. `buffer.save` syncs the file to disk (about 1.35 ms on the test machine), so the absolute number is about 1.8 ms. The pack's part (evaluation and frames) adds about 0.26 ms over a bare save, within budget; the budget is taken to hold for the UI part only.
 - The 300x100 full-redraw budget (5 ms) is checked in release builds (about 3.4 ms measured); debug builds, which CI runs, allow 50 ms.
-- Syntax colours are not in this slice; the code view is plain text until the owner picks between a line tokeniser and waiting for tree-sitter.
+- Markdown and plain text are not coloured (the slice plan coloured `"` strings in every language); JSON gets strings, numbers, punctuation and `true`/`false`/`null`.
 
 ## Latency
 
@@ -91,11 +95,11 @@ The `no_look` test covers the core crates and `spur-tui`: no hex colours, no key
 
 | Scenario | p50 ms | p99 ms | Budget (p50) |
 |---|---|---|---|
-| Typing, 80x24, ux_fresh | 0.158 | 0.271 | < 0.2 |
-| Typing, 300x100, ux_fresh | 0.184 | 0.387 | < 0.2 |
-| Tree Down/Up in a 5,000-entry folder | 0.218 | 0.336 | < 0.3 |
-| Save, bare session | 1.524 | 2.131 | reference |
-| Save with the modified dot, ux_fresh | 1.787 | 2.498 | see deviations |
+| Typing in a Rust file, 80x24, ux_fresh with colours | 0.130 | 0.170 | < 0.2 |
+| Typing in a Rust file, 300x100, ux_fresh with colours | 0.176 | 0.364 | < 0.2 |
+| Tree Down/Up in a 5,000-entry folder | 0.177 | 0.222 | < 0.3 |
+| Save, bare session | 1.388 | 2.078 | reference |
+| Save with the modified dot, ux_fresh | 1.613 | 2.341 | see deviations |
 
 ## Consequences
 

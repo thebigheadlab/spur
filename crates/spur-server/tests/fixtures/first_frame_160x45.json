@@ -755,7 +755,26 @@
         {
           "spans": [
             {
-              "text": "fn main() {}"
+              "hl": "syntax.keyword",
+              "text": "fn"
+            },
+            {
+              "text": " "
+            },
+            {
+              "hl": "syntax.function",
+              "text": "main"
+            },
+            {
+              "hl": "syntax.punctuation",
+              "text": "()"
+            },
+            {
+              "text": " "
+            },
+            {
+              "hl": "syntax.punctuation",
+              "text": "{}"
             }
           ]
         },

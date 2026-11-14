@@ -132,7 +132,7 @@ mod bench {
         let dir = std::env::temp_dir().join(format!("spur-latency-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("temp dir");
-        let mut path = dir.join("bench.txt");
+        let mut path = dir.join("bench.rs");
         std::fs::write(&path, text).expect("temp file");
         if kind == Kind::Tree {
             let folder = dir.join("big");

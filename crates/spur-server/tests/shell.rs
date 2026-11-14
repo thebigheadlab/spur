@@ -1048,3 +1048,27 @@ fn a_reload_keeps_the_theme_override_and_swaps_the_keys() {
     assert!(notice.contains("paper"), "{notice}");
     assert_eq!(c.app_bg.as_deref(), Some("#f3f3f2"));
 }
+
+#[test]
+fn code_is_coloured_and_copied_rows_keep_their_colours() {
+    let root = workspace("colours");
+    let s = session_in(&root, &["notes.txt", "src/lib.rs"]);
+    let mut c = Client::attach(&s, 160, 30);
+    let hl = |c: &Client, row: usize| -> Vec<(String, Option<String>)> {
+        c.view.as_ref().unwrap().lines[row]
+            .spans
+            .iter()
+            .map(|s| (s.text.clone(), s.hl.clone()))
+            .collect()
+    };
+    // Plain text stays plain.
+    assert_eq!(hl(&c, 0), [("one".to_owned(), None)]);
+    c.command("editor.open", json!({ "path": root.join("src/lib.rs") }));
+    let first = hl(&c, 0);
+    assert_eq!(first[0], ("pub".into(), Some("syntax.keyword".into())));
+    assert!(first.contains(&("f".into(), Some("syntax.function".into()))));
+    // A new second line is sent; the first row is copied and keeps its colours.
+    c.keys("<C-Home><End><CR>let");
+    assert_eq!(hl(&c, 0), first);
+    assert_eq!(hl(&c, 1)[0], ("let".into(), Some("syntax.keyword".into())));
+}

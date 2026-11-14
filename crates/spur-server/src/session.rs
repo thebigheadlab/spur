@@ -1432,7 +1432,17 @@ fn render_ux(c: &mut Client, ux: &mut Ux, ed: &Editor, ctx: &Context, others: &[
         } else {
             None
         };
-        let wire = (base != Some(&view)).then(|| frame::delta(base, &view));
+        // `last_view` keeps plain text; only the rows sent are coloured.
+        let wire = (base != Some(&view)).then(|| {
+            let mut wire = frame::delta(base, &view);
+            let path = ed
+                .views
+                .get(&c.active)
+                .and_then(|v| ed.docs.get(&v.doc))
+                .and_then(|d| d.path.as_deref());
+            crate::highlight::apply(crate::lang::of_path(path), &mut wire.lines);
+            wire
+        });
         (view, wire)
     });
     finish(c, msgs, surface_id, surface);
