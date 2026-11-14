@@ -1121,3 +1121,67 @@ fn saving_under_a_new_language_recolours_every_row() {
     let line = &c.view.as_ref().unwrap().lines[0].spans;
     assert_eq!(line[0].hl.as_deref(), Some("syntax.keyword"), "{line:?}");
 }
+
+#[test]
+fn ui_commands_are_core_commands_with_events() {
+    let root = workspace("uievents");
+    let s = session_in(&root, &["notes.txt"]);
+    let mut c = Client::attach(&s, 160, 30);
+    c.send(ClientMsg::Subscribe {
+        filters: vec!["ui.*".into()],
+    });
+    c.sync();
+    // Through a key: ctrl+b runs ui.set steps; the events name the client.
+    let msgs = c.keys("<C-b>");
+    let names: Vec<(String, Value)> = msgs
+        .iter()
+        .filter_map(|m| match m {
+            ServerMsg::Event { name, payload, .. } => Some((name.clone(), payload.clone())),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        names.iter().any(|(n, p)| n == "ui.changed"
+            && p["key"] == "ui.sidebar_open"
+            && p["client"].is_u64()),
+        "{names:?}"
+    );
+    // Focus changes publish ui.focused once.
+    assert!(matches!(
+        c.command("ui.focus", json!({ "region": "agent" })),
+        Reply::Ok(_)
+    ));
+    let msgs = c.sync();
+    let _ = msgs;
+    let focused = c
+        .log
+        .iter()
+        .filter(|m| matches!(m, ServerMsg::Event { name, .. } if name == "ui.focused"))
+        .count();
+    assert_eq!(focused, 1);
+    // A second focus on the same region publishes nothing.
+    assert!(matches!(
+        c.command("ui.focus", json!({ "region": "agent" })),
+        Reply::Ok(_)
+    ));
+    let focused = c
+        .log
+        .iter()
+        .filter(|m| matches!(m, ServerMsg::Event { name, .. } if name == "ui.focused"))
+        .count();
+    assert_eq!(focused, 1);
+}
+
+#[test]
+fn quit_from_a_command_drops_the_client_after_the_call() {
+    let root = workspace("uiquit");
+    let s = session_in(&root, &["notes.txt"]);
+    let mut c = Client::attach(&s, 160, 30);
+    c.send(ClientMsg::Command {
+        req: 3,
+        id: "ui.quit".into(),
+        args: json!({}),
+    });
+    c.sync();
+    assert_eq!(c.bye.as_deref(), Some("quit"));
+}

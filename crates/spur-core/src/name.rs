@@ -180,6 +180,8 @@ pub const RESERVED_EVENT_FAMILIES: &[&str] = &[
     "agent",
     "changeset",
     "checkpoint",
+    "ui",
+    "setting",
 ];
 
 /// Reserved event names. Families in [`RESERVED_EVENT_FAMILIES`] cover the
@@ -204,6 +206,8 @@ pub mod events {
     pub const AGENT_EDIT_APPLIED: &str = "agent.edit.applied";
     pub const CHECKPOINT_CREATED: &str = "checkpoint.created";
     pub const CHECKPOINT_RESTORED: &str = "checkpoint.restored";
+    pub const UI_CHANGED: &str = "ui.changed";
+    pub const UI_FOCUSED: &str = "ui.focused";
 }
 
 #[cfg(test)]

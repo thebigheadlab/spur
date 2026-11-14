@@ -25,11 +25,11 @@ use spur_rpc::{
 
 use crate::client::{Client, SendFail, Shutter};
 use crate::frame::{self, SURFACE, bare_ui};
-use crate::ux::commands::{UI_COMMANDS, ui_id};
+use crate::ux::commands::{Effect, UiHost, register_ui_commands};
 use crate::ux::files::{Files, parent_of};
 use crate::ux::pack::{Pack, PackError, PackSource};
 use crate::ux::state::{self, ScopeInput, UiState};
-use crate::ux::{Ux, eval};
+use crate::ux::{EDITOR_REGION, Ux, eval};
 
 /// Lines kept between the cursor and the edge of the surface.
 pub const SCROLL_MARGIN: usize = 3;
@@ -523,6 +523,7 @@ impl State {
         }
         let mut core = Core::new(Editor::new());
         register_editor_commands(&mut core).map_err(|e| SessionError::Register(e.to_string()))?;
+        register_ui_commands(&mut core).map_err(|e| SessionError::Register(e.to_string()))?;
         if let Some(setup) = cfg.setup {
             setup(&mut core);
         }
@@ -575,13 +576,12 @@ impl State {
         let Some(ux) = self.ux.as_mut() else {
             return;
         };
-        let mut known: BTreeSet<String> = self
+        let known: BTreeSet<String> = self
             .core
             .commands()
             .iter()
             .map(|m| m.id.to_string())
             .collect();
-        known.extend(UI_COMMANDS.iter().map(|s| (*s).to_owned()));
         let loaded = Pack::load(files, &|id| known.contains(id)).and_then(|p| {
             match p.theme_named(ux.theme.as_deref()) {
                 Some(_) => Ok(p),
@@ -1130,31 +1130,41 @@ impl State {
         conn: u64,
         mut inv: Invocation,
     ) -> Option<Result<Value, CommandError>> {
-        // `ui.*` runs outside the bookkeeping below: it may call `run_as` itself
-        // (activating a file runs `editor.open`), and that view change must stand.
-        if let Some(id) = ui_id(&inv) {
-            self.clients.get(&conn)?;
-            let id = id.to_string();
-            let args = inv.args.clone();
-            let res = catch_unwind(AssertUnwindSafe(|| self.ui_command(conn, &id, &args)));
-            if let Ok(r) = res {
-                if let Err(e) = &r {
-                    self.log(&format!("{id}: {}", e.message));
-                }
-                return Some(r);
-            }
-            self.core.state.focus = self.anchor;
-            self.log(&format!("caught a panic in {id}"));
-            self.error(conn, PANIC_MESSAGE.into());
-            return None;
-        }
         let client = self.clients.get(&conn)?;
         let (id, view, rows) = (client.id, client.active, client.rows());
         inv.actor = client.actor.clone();
         inv.client = Some(id);
+        let ui_only = match &inv.command {
+            spur_core::Target::Id(c) => c.namespace() == "ui",
+            spur_core::Target::Handle(_) => false,
+        };
         let old_doc = self.core.state.views.get(&view).map(|v| v.doc);
         self.core.state.focus = view;
-        let res = catch_unwind(AssertUnwindSafe(|| self.core.execute(inv)));
+        let mut effects = Vec::new();
+        let res = {
+            let Self {
+                core, clients, ux, ..
+            } = self;
+            let mut host = match (clients.get_mut(&conn), ux.as_mut()) {
+                (Some(client), Some(ux)) if client.ui.is_some() => Some(UiHost {
+                    client,
+                    ux,
+                    effects: Vec::new(),
+                }),
+                _ => None,
+            };
+            let res = catch_unwind(AssertUnwindSafe(|| {
+                core.execute_with(
+                    inv,
+                    host.as_mut()
+                        .map(|h| h as &mut dyn spur_core::ClientHost<Editor>),
+                )
+            }));
+            if let Some(h) = host {
+                effects = h.effects;
+            }
+            res
+        };
         let focus = std::mem::replace(&mut self.core.state.focus, self.anchor);
         // A command may move the client to another view it owns (`editor.open`).
         let mut active = view;
@@ -1171,16 +1181,66 @@ impl State {
         if !self.core.state.views.contains_key(&active) {
             active = self.core.state.add_view_for(self.home, Some(id));
         }
-        self.core.state.scroll_view(active, rows, SCROLL_MARGIN);
+        // A UI-only call that left the view alone redraws only this client.
+        if !(ui_only && active == view) {
+            self.core.state.scroll_view(active, rows, SCROLL_MARGIN);
+            if let Some(c) = self.clients.get_mut(&conn) {
+                c.active = active;
+            }
+            self.mark_peers(conn, old_doc);
+        }
+        for e in effects {
+            match e {
+                Effect::CheckFocus => self.check_focus(conn),
+                Effect::Quit => self.drop_client(conn),
+            }
+        }
+        let Ok(r) = res else {
+            self.error(conn, PANIC_MESSAGE.into());
+            return None;
+        };
+        if let Err(e) = &r
+            && ui_only
+        {
+            self.log(&format!("ui command failed: {}", e.message));
+        }
+        Some(r)
+    }
+
+    /// Moves the client's focus to `region` (the focus check then runs as after
+    /// any command).
+    pub(crate) fn set_focus(&mut self, conn: u64, region: &str) {
         if let Some(c) = self.clients.get_mut(&conn) {
-            c.active = active;
+            crate::ux::commands::set_focus(c, region);
         }
-        self.mark_peers(conn, old_doc);
-        if let Ok(r) = res {
-            return Some(r);
+    }
+
+    /// Shows a failed command in the client's status notice.
+    pub(crate) fn set_status(&mut self, conn: u64, command: &str, reason: &str) {
+        if let (Some(ux), Some(c)) = (self.ux.as_ref(), self.clients.get_mut(&conn)) {
+            crate::ux::commands::set_status(ux, c, command, reason);
         }
-        self.error(conn, PANIC_MESSAGE.into());
-        None
+    }
+
+    /// Refreshes the client's scope and moves focus to the editor if its region is
+    /// not shown.
+    pub(crate) fn check_focus(&mut self, conn: u64) {
+        self.refresh_client(conn);
+        let (Some(ux), Some(c)) = (self.ux.as_ref(), self.clients.get_mut(&conn)) else {
+            return;
+        };
+        let Some(ui) = c.ui.as_mut() else {
+            return;
+        };
+        let ok = ux.pack.regions.get(&ui.focus).is_some_and(|r| {
+            crate::ux::state::shown(&ux.pack, &r.node, &Scoped(&[self.core.context(), &c.scope]))
+        });
+        if !ok && ui.focus != EDITOR_REGION {
+            ui.focus = EDITOR_REGION.into();
+            c.keymap.reset();
+            c.dirty = true;
+            self.refresh_client(conn);
+        }
     }
 
     /// Marks the client dirty, and every frontend showing its document (or `also`).
@@ -1326,8 +1386,7 @@ fn drain_events(c: &mut Client) {
 
 /// Loads the session's pack and checks its theme.
 fn load_ux(core: &Core<Editor>, src: &PackSource, cfg: &SessionConfig) -> Result<Ux, SessionError> {
-    let mut known: BTreeSet<String> = core.commands().iter().map(|m| m.id.to_string()).collect();
-    known.extend(UI_COMMANDS.iter().map(|s| (*s).to_owned()));
+    let known: BTreeSet<String> = core.commands().iter().map(|m| m.id.to_string()).collect();
     let pack = Pack::from_source(src, &|id| known.contains(id)).map_err(SessionError::Pack)?;
     if pack.theme_named(cfg.theme.as_deref()).is_none() {
         let name = cfg.theme.clone().unwrap_or_else(|| pack.theme.clone());

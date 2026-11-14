@@ -1,30 +1,93 @@
-//! The `ui.*` commands: per-client UI state changes, run by the server itself (a
-//! core command handler cannot reach a client's UI state). `State::run_as` sends
-//! them here before any of its own bookkeeping.
+//! The `ui.*` commands: per-client UI state changes. They are core commands (in
+//! `Core::commands()`, audited, run through middleware), but their work needs the
+//! calling client's UI state, which the core cannot see. `State::run_as` passes a
+//! [`UiHost`] for the client into the call; the shared handler takes it and runs
+//! the command here. Work that changes the session itself (checking focus, dropping
+//! a client) is returned as [`Effect`]s, applied after the call.
 
 use serde_json::{Value, json};
-use spur_core::{Actor, CommandError, CommandId, Context, Invocation, Scoped};
+use spur_core::editor::Editor;
+use spur_core::{
+    ClientHost, CommandError, CommandId, CommandMeta, Context, Core, Cx, EventName, RegisterError,
+    RemoteSide, Scoped, events,
+};
 use spur_rpc::ServerMsg;
 
 use super::EDITOR_REGION;
+use super::Ux;
 use super::files::Activate;
 use super::pack::StateValue;
-use super::state::{first_list, shown};
-use crate::session::State;
+use super::state::first_list;
+use crate::client::Client;
 
-/// Every `ui.*` command id.
-pub const UI_COMMANDS: &[&str] = &[
-    "ui.set",
-    "ui.toggle",
-    "ui.cycle",
-    "ui.focus",
-    "ui.list.move",
-    "ui.list.page",
-    "ui.list.activate",
-    "ui.tree.expand",
-    "ui.tree.collapse",
-    "ui.quit",
+/// Every `ui.*` command id, with its description.
+pub const UI_COMMANDS: &[(&str, &str)] = &[
+    ("ui.set", "Set a UI state key of the pack."),
+    ("ui.toggle", "Flip a boolean UI state key."),
+    (
+        "ui.cycle",
+        "Step a UI state key through its allowed values.",
+    ),
+    ("ui.focus", "Move keyboard focus to a region."),
+    ("ui.list.move", "Move the selection of the focused list."),
+    (
+        "ui.list.page",
+        "Move the selection of the focused list by pages.",
+    ),
+    ("ui.list.activate", "Activate the selected item of a list."),
+    (
+        "ui.tree.expand",
+        "Expand the selected folder of the focused tree.",
+    ),
+    (
+        "ui.tree.collapse",
+        "Collapse the selected folder of the focused tree.",
+    ),
+    ("ui.quit", "Quit, asking first if a document is modified."),
 ];
+
+/// Session work a `ui.*` command asks for; applied by `run_as` after the call.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Effect {
+    /// Refresh the client's scope and move focus to the editor if its region
+    /// is hidden.
+    CheckFocus,
+    /// Drop the client (after a confirmed quit).
+    Quit,
+}
+
+/// A client's UI side of one call.
+pub(crate) struct UiHost<'a> {
+    pub client: &'a mut Client,
+    pub ux: &'a mut Ux,
+    pub effects: Vec<Effect>,
+}
+
+fn cmd(id: &str) -> CommandId {
+    CommandId::new(id).unwrap_or_else(|e| unreachable!("{e}"))
+}
+
+/// Registers every `ui.*` command with the core.
+///
+/// # Errors
+///
+/// A duplicate id.
+pub fn register_ui_commands(core: &mut Core<Editor>) -> Result<(), RegisterError> {
+    for (id, description) in UI_COMMANDS {
+        let mut meta = CommandMeta::new(cmd(id), *description);
+        meta.remote_side = RemoteSide::Ui;
+        let command = cmd(id);
+        core.register_fn(meta, move |cx, args| {
+            let Some(host) = cx.take_host() else {
+                return Err(CommandError::failed("this client has no UI state"));
+            };
+            let res = host.call(cx, &command, args);
+            cx.put_host(host);
+            res
+        })?;
+    }
+    Ok(())
+}
 
 fn arg<'a>(args: &'a Value, name: &str) -> Result<&'a Value, CommandError> {
     args.get(name)
@@ -43,45 +106,59 @@ fn arg_int(args: &Value, name: &str) -> Result<i64, CommandError> {
         .ok_or_else(|| CommandError::bad_args(format!("{name} must be an integer")))
 }
 
-impl State {
-    /// Runs a `ui.*` command as `conn`.
-    pub(crate) fn ui_command(
+fn emit(cx: &mut Cx<'_, Editor>, name: &str, payload: Value) {
+    if let Ok(n) = EventName::new(name) {
+        let _ = cx.emit(n, payload);
+    }
+}
+
+impl ClientHost<Editor> for UiHost<'_> {
+    fn call(
         &mut self,
-        conn: u64,
-        id: &str,
+        cx: &mut Cx<'_, Editor>,
+        id: &CommandId,
         args: &Value,
     ) -> Result<Value, CommandError> {
-        if !UI_COMMANDS.contains(&id) {
-            return Err(CommandError::unknown(id));
-        }
-        let has_ui = self.clients.get(&conn).is_some_and(|c| c.ui.is_some());
-        if self.ux.is_none() || !has_ui {
+        if self.client.ui.is_none() {
             return Err(CommandError::failed("this client has no UI state"));
         }
-        match id {
-            "ui.set" | "ui.toggle" | "ui.cycle" => self.ui_set(conn, id, args)?,
+        match id.as_str() {
+            "ui.set" | "ui.toggle" | "ui.cycle" => {
+                let (key, value) = self.ui_set(id.as_str(), args)?;
+                emit(
+                    cx,
+                    events::UI_CHANGED,
+                    json!({ "client": self.client.id.0, "key": key, "value": value }),
+                );
+            }
             "ui.focus" => {
                 let region = arg_str(args, "region")?;
-                let known = self
-                    .ux
-                    .as_ref()
-                    .is_some_and(|u| u.pack.regions.contains_key(region));
-                if !known {
+                if !self.ux.pack.regions.contains_key(region) {
                     return Err(CommandError::bad_args(format!("no region {region:?}")));
                 }
-                self.set_focus(conn, region);
+                if set_focus(self.client, region) {
+                    emit(
+                        cx,
+                        events::UI_FOCUSED,
+                        json!({ "client": self.client.id.0, "region": region }),
+                    );
+                }
             }
             "ui.list.move" | "ui.list.page" => {
                 let by = arg_int(args, "by")?;
-                self.list_move(conn, by, id == "ui.list.page");
+                self.list_move(cx.context, by, id.as_str() == "ui.list.page");
             }
-            "ui.list.activate" => self.list_activate(conn, None),
-            "ui.tree.expand" | "ui.tree.collapse" => {
-                let expand = id == "ui.tree.expand";
-                let (Some(ux), Some(c)) = (self.ux.as_mut(), self.clients.get_mut(&conn)) else {
-                    return Ok(Value::Null);
+            "ui.list.activate" => {
+                let list = match args.get("list") {
+                    None | Some(Value::Null) => None,
+                    Some(_) => Some(arg_str(args, "list")?.to_owned()),
                 };
-                if let Some(list) = focused_list(ux, c, self.core.context())
+                self.list_activate(cx, list);
+            }
+            "ui.tree.expand" | "ui.tree.collapse" => {
+                let expand = id.as_str() == "ui.tree.expand";
+                let (ux, c) = (&mut *self.ux, &mut *self.client);
+                if let Some(list) = focused_list(ux, c, cx.context)
                     && let Some(t) = c.ui.as_mut().and_then(|u| u.trees.get_mut(&list))
                 {
                     if expand {
@@ -91,22 +168,20 @@ impl State {
                     }
                 }
             }
-            "ui.quit" => self.quit(conn),
-            _ => return Err(CommandError::unknown(id)),
+            "ui.quit" => self.quit(cx.state),
+            other => return Err(CommandError::unknown(other)),
         }
-        if let Some(c) = self.clients.get_mut(&conn) {
-            c.dirty = true;
-        }
-        self.check_focus(conn);
+        self.client.dirty = true;
+        self.effects.push(Effect::CheckFocus);
         Ok(Value::Null)
     }
+}
 
-    fn ui_set(&mut self, conn: u64, id: &str, args: &Value) -> Result<(), CommandError> {
-        let (Some(ux), Some(c)) = (self.ux.as_ref(), self.clients.get_mut(&conn)) else {
-            return Ok(());
-        };
-        let Some(ui) = c.ui.as_mut() else {
-            return Ok(());
+impl UiHost<'_> {
+    /// Sets a state key; returns the key and its new value.
+    fn ui_set(&mut self, id: &str, args: &Value) -> Result<(String, Value), CommandError> {
+        let Some(ui) = self.client.ui.as_mut() else {
+            return Err(CommandError::failed("this client has no UI state"));
         };
         let key = arg_str(args, "key")?;
         let Some(current) = ui.values.get(key) else {
@@ -114,7 +189,7 @@ impl State {
                 "{key} is not a state key of this pack"
             )));
         };
-        let allowed = ux.pack.state_values.get(key);
+        let allowed = self.ux.pack.state_values.get(key);
         let new = match id {
             "ui.toggle" => match current {
                 StateValue::Bool(b) => StateValue::Bool(!b),
@@ -147,49 +222,18 @@ impl State {
                 v
             }
         };
+        let value = match &new {
+            StateValue::Bool(b) => json!(b),
+            StateValue::Int(n) => json!(n),
+            StateValue::Str(s) => json!(s),
+        };
         ui.values.insert(key.to_owned(), new);
-        Ok(())
+        Ok((key.to_owned(), value))
     }
 
-    /// Moves focus to `region` (the focus check then runs as after any command).
-    pub(crate) fn set_focus(&mut self, conn: u64, region: &str) {
-        if let Some(c) = self.clients.get_mut(&conn)
-            && let Some(ui) = c.ui.as_mut()
-            && ui.focus != region
-        {
-            region.clone_into(&mut ui.focus);
-            c.keymap.reset();
-            c.dirty = true;
-        }
-    }
-
-    /// Refreshes the client's scope and moves focus to the editor if its region is
-    /// not shown.
-    pub(crate) fn check_focus(&mut self, conn: u64) {
-        self.refresh_client(conn);
-        let (Some(ux), Some(c)) = (self.ux.as_ref(), self.clients.get_mut(&conn)) else {
-            return;
-        };
-        let Some(ui) = c.ui.as_mut() else {
-            return;
-        };
-        let ok =
-            ux.pack.regions.get(&ui.focus).is_some_and(|r| {
-                shown(&ux.pack, &r.node, &Scoped(&[self.core.context(), &c.scope]))
-            });
-        if !ok && ui.focus != EDITOR_REGION {
-            ui.focus = EDITOR_REGION.into();
-            c.keymap.reset();
-            c.dirty = true;
-            self.refresh_client(conn);
-        }
-    }
-
-    fn list_move(&mut self, conn: u64, by: i64, page: bool) {
-        let (Some(ux), Some(c)) = (self.ux.as_mut(), self.clients.get_mut(&conn)) else {
-            return;
-        };
-        let Some(list) = focused_list(ux, c, self.core.context()) else {
+    fn list_move(&mut self, global: &Context, by: i64, page: bool) {
+        let (ux, c) = (&mut *self.ux, &mut *self.client);
+        let Some(list) = focused_list(ux, c, global) else {
             return;
         };
         let rows = c.rows_hint();
@@ -206,73 +250,39 @@ impl State {
     }
 
     /// Activates the selected item of the focused list, or of `list` (a click).
-    pub(crate) fn list_activate(&mut self, conn: u64, list: Option<String>) {
-        let (Some(ux), Some(c)) = (self.ux.as_mut(), self.clients.get_mut(&conn)) else {
-            return;
-        };
-        let Some(list) = list.or_else(|| focused_list(ux, c, self.core.context())) else {
+    /// Opening a file that fails shows the status notice; the call still succeeds.
+    fn list_activate(&mut self, cx: &mut Cx<'_, Editor>, list: Option<String>) {
+        let (ux, c) = (&mut *self.ux, &mut *self.client);
+        let Some(list) = list.or_else(|| focused_list(ux, c, cx.context)) else {
             return;
         };
         let Some(t) = c.ui.as_mut().and_then(|u| u.trees.get_mut(&list)) else {
             return;
         };
-        c.dirty = true;
         if let Activate::Open(path) = t.activate(&mut ux.files) {
-            let inv = Invocation::new(
-                CommandId::new("editor.open").unwrap_or_else(|e| unreachable!("{e}")),
-                Actor::User,
-            )
-            .args(json!({ "path": path }));
-            match self.run_as(conn, inv) {
-                Some(Ok(_)) => self.set_focus(conn, EDITOR_REGION),
-                Some(Err(e)) => self.set_status(conn, "editor.open", &e.message),
-                None => {}
+            match cx.execute(&cmd("editor.open"), &json!({ "path": path })) {
+                Ok(_) => {
+                    set_focus(c, EDITOR_REGION);
+                }
+                Err(e) => set_status(ux, c, "editor.open", &e.message),
             }
         }
     }
 
-    /// Shows a failed command in the client's status notice.
-    pub(crate) fn set_status(&mut self, conn: u64, command: &str, reason: &str) {
-        let Some(ux) = self.ux.as_ref() else {
-            return;
-        };
-        let text = ux.pack.message(
-            "command.failed",
-            &[("command", command), ("reason", reason)],
-        );
-        if let Some(c) = self.clients.get_mut(&conn)
-            && let Some(ui) = c.ui.as_mut()
-        {
-            ui.status = Some(text);
-            c.dirty = true;
-        }
-    }
-
-    fn quit(&mut self, conn: u64) {
-        let Some(ux) = self.ux.as_ref() else {
-            return;
-        };
-        let mut modified: Vec<_> = self
-            .core
-            .state
+    fn quit(&mut self, ed: &Editor) {
+        let mut modified: Vec<_> = ed
             .docs
             .iter()
             .filter(|(_, d)| d.modified())
             .map(|(id, d)| (*id, d.path.clone()))
             .collect();
         modified.sort_by_key(|(id, _)| *id);
-        let armed = self
-            .clients
-            .get(&conn)
-            .and_then(|c| c.ui.as_ref())
-            .is_some_and(|u| u.quit_armed);
+        let armed = self.client.ui.as_ref().is_some_and(|u| u.quit_armed);
         if modified.is_empty() || armed {
-            if let Some(c) = self.clients.get_mut(&conn) {
-                c.batch.push(ServerMsg::Bye {
-                    reason: "quit".into(),
-                });
-            }
-            self.drop_client(conn);
+            self.client.batch.push(ServerMsg::Bye {
+                reason: "quit".into(),
+            });
+            self.effects.push(Effect::Quit);
             return;
         }
         let name = modified[0]
@@ -280,30 +290,45 @@ impl State {
             .as_deref()
             .and_then(|p| p.file_name())
             .map_or_else(
-                || ux.pack.message("doc.untitled", &[]),
+                || self.ux.pack.message("doc.untitled", &[]),
                 |n| n.to_string_lossy().into_owned(),
             );
-        let text = ux.pack.message("quit.unsaved", &[("doc", &name)]);
-        if let Some(c) = self.clients.get_mut(&conn)
-            && let Some(ui) = c.ui.as_mut()
-        {
+        let text = self.ux.pack.message("quit.unsaved", &[("doc", &name)]);
+        if let Some(ui) = self.client.ui.as_mut() {
             ui.prompt = Some(text);
         }
     }
 }
 
+/// Moves the client's focus to `region`. True if it changed.
+pub(crate) fn set_focus(c: &mut Client, region: &str) -> bool {
+    if let Some(ui) = c.ui.as_mut()
+        && ui.focus != region
+    {
+        region.clone_into(&mut ui.focus);
+        c.keymap.reset();
+        c.dirty = true;
+        return true;
+    }
+    false
+}
+
+/// Shows a failed command in the client's status notice.
+pub(crate) fn set_status(ux: &Ux, c: &mut Client, command: &str, reason: &str) {
+    let text = ux.pack.message(
+        "command.failed",
+        &[("command", command), ("reason", reason)],
+    );
+    if let Some(ui) = c.ui.as_mut() {
+        ui.status = Some(text);
+        c.dirty = true;
+    }
+}
+
 /// The first shown list node inside the focused region, under the client's
 /// current scope (keys handled before the next render see the new state).
-fn focused_list(ux: &super::Ux, c: &crate::client::Client, global: &Context) -> Option<String> {
+fn focused_list(ux: &Ux, c: &Client, global: &Context) -> Option<String> {
     let ui = c.ui.as_ref()?;
     let region = ux.pack.regions.get(&ui.focus)?;
     first_list(&ux.pack, &region.node, &Scoped(&[global, &c.scope]))
-}
-
-/// True if `inv` is a `ui.*` command; its id.
-pub(crate) fn ui_id(inv: &Invocation) -> Option<&CommandId> {
-    match &inv.command {
-        spur_core::Target::Id(id) if id.namespace() == "ui" => Some(id),
-        _ => None,
-    }
 }

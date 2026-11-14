@@ -181,7 +181,12 @@ impl State {
                     if let Some(item) = item
                         && self.list_select(conn, node, item)
                     {
-                        self.list_activate(conn, Some(node.to_owned()));
+                        let id = CommandId::new("ui.list.activate")
+                            .unwrap_or_else(|e| unreachable!("{e}"));
+                        let inv = Invocation::new(id, Actor::User).args(json!({ "list": node }));
+                        if let Some(Err(e)) = self.run_as(conn, inv) {
+                            self.input_failed(conn, "ui.list.activate", e.message);
+                        }
                     }
                 } else {
                     self.click(conn, node);

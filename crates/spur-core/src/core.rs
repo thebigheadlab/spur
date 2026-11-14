@@ -316,6 +316,24 @@ struct InvInfo {
     register: Option<char>,
 }
 
+/// The calling client's side of a command: a frontend's UI state, which the core
+/// cannot see. The server passes one into [`Core::execute_with`]; a handler takes
+/// it with [`Cx::take_host`] and puts it back with [`Cx::put_host`].
+pub trait ClientHost<S> {
+    /// Runs a client-side command for the calling client. `cx` gives the context,
+    /// the editor state, `emit` and `execute` (a nested call has no host).
+    ///
+    /// # Errors
+    ///
+    /// The command's error.
+    fn call(
+        &mut self,
+        cx: &mut Cx<'_, S>,
+        id: &CommandId,
+        args: &Value,
+    ) -> Result<Value, CommandError>;
+}
+
 /// What a command handler sees.
 pub struct Cx<'a, S> {
     /// Session state.
@@ -329,6 +347,19 @@ pub struct Cx<'a, S> {
     depth: u32,
     /// The extension whose handler is running, if any; it may only emit `<id>.*`.
     owner: Option<Arc<str>>,
+    host: Option<&'a mut dyn ClientHost<S>>,
+}
+
+impl<'a, S> Cx<'a, S> {
+    /// Takes the calling client's host, if the call has one and no handler holds it.
+    pub fn take_host(&mut self) -> Option<&'a mut dyn ClientHost<S>> {
+        self.host.take()
+    }
+
+    /// Puts back a host taken with [`Cx::take_host`].
+    pub fn put_host(&mut self, host: &'a mut dyn ClientHost<S>) {
+        self.host = Some(host);
+    }
 }
 
 impl<S> Cx<'_, S> {
@@ -391,6 +422,10 @@ impl<S> Cx<'_, S> {
             info: &info,
             depth: self.depth + 1,
             owner: None,
+            host: match &mut self.host {
+                Some(h) => Some(&mut **h),
+                None => None,
+            },
         };
         run(&mut child, &Target::Id(id.clone()), args)
     }
@@ -692,6 +727,20 @@ impl<S> Core<S> {
     ///
     /// Returns the command's error, or `unknown_command`, `vetoed`, `too_deep`.
     pub fn execute(&mut self, inv: Invocation) -> Result<Value, CommandError> {
+        self.execute_with(inv, None)
+    }
+
+    /// Runs a command for a client with a [`ClientHost`] (its UI state), which
+    /// `ui.*` handlers use. Otherwise like [`Core::execute`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Core::execute`].
+    pub fn execute_with(
+        &mut self,
+        inv: Invocation,
+        host: Option<&mut dyn ClientHost<S>>,
+    ) -> Result<Value, CommandError> {
         let info = InvInfo {
             actor: inv.actor,
             client: inv.client,
@@ -708,6 +757,10 @@ impl<S> Core<S> {
             info: &info,
             depth: 0,
             owner: None,
+            host: match host {
+                Some(h) => Some(&mut *h as &mut dyn ClientHost<S>),
+                None => None,
+            },
         };
         let result = run(&mut cx, &inv.command, &inv.args);
         for (name, actor, payload) in self.outbox.drain(..) {
@@ -1084,5 +1137,55 @@ mod tests {
         assert!(
             matches!(sub.try_recv(), Some(Delivery::Event(e)) if e.name.as_str() == "buffer.changed")
         );
+    }
+
+    struct Host(Vec<String>);
+
+    impl ClientHost<St> for Host {
+        fn call(
+            &mut self,
+            cx: &mut Cx<'_, St>,
+            id: &CommandId,
+            _args: &Value,
+        ) -> Result<Value, CommandError> {
+            self.0.push(id.to_string());
+            cx.state.n += 1;
+            // A nested call sees no host while this one runs.
+            cx.execute(&CommandId::new("t.host").unwrap(), &json!({}))
+                .map(|_| Value::Null)
+                .or_else(|e| Ok(json!(e.message)))
+        }
+    }
+
+    #[test]
+    fn a_client_host_reaches_handlers_and_is_not_shared_with_nested_calls() {
+        let mut c = Core::new(St::default());
+        c.register_fn(CommandMeta::new(id("t.host"), "host"), |cx, args| {
+            let Some(h) = cx.take_host() else {
+                return Err(CommandError::failed("no host"));
+            };
+            let r = h.call(cx, &CommandId::new("t.host").unwrap(), args);
+            cx.put_host(h);
+            r
+        })
+        .unwrap();
+        c.register_fn(CommandMeta::new(id("t.outer"), "outer"), |cx, _| {
+            cx.execute(&CommandId::new("t.host").unwrap(), &json!({}))
+        })
+        .unwrap();
+        let mut host = Host(Vec::new());
+        let r = c
+            .execute_with(Invocation::new(id("t.host"), Actor::User), Some(&mut host))
+            .unwrap();
+        assert_eq!(r, json!("no host"));
+        // Passed on to nested calls of other commands.
+        c.execute_with(Invocation::new(id("t.outer"), Actor::User), Some(&mut host))
+            .unwrap();
+        assert_eq!(host.0.len(), 2);
+        assert_eq!(c.state.n, 2);
+        let e = c
+            .execute(Invocation::new(id("t.host"), Actor::User))
+            .unwrap_err();
+        assert_eq!(e.message, "no host");
     }
 }

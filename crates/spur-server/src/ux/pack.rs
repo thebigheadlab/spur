@@ -429,9 +429,8 @@ impl Pack {
 pub fn default_commands() -> BTreeSet<String> {
     let mut core = spur_core::Core::new(spur_core::editor::Editor::new());
     let _ = spur_core::editor::register_editor_commands(&mut core);
-    let mut ids: BTreeSet<String> = core.commands().iter().map(|m| m.id.to_string()).collect();
-    ids.extend(super::commands::UI_COMMANDS.iter().map(|s| (*s).to_owned()));
-    ids
+    let _ = super::commands::register_ui_commands(&mut core);
+    core.commands().iter().map(|m| m.id.to_string()).collect()
 }
 
 /// Reads a pack's files: `*.toml` at the top and in `components/` and `themes/`,
