@@ -119,6 +119,23 @@
       "overlay.dim": {
         "bg": "#111215"
       },
+      "palette": {
+        "bg": "#202227"
+      },
+      "palette.input": {
+        "fg": "#ecedf0"
+      },
+      "palette.note": {
+        "fg": "#888c95",
+        "italic": true
+      },
+      "palette.placeholder": {
+        "fg": "#888c95"
+      },
+      "palette.scope": {
+        "bold": true,
+        "fg": "#8b93ff"
+      },
       "path": {
         "fg": "#888c95"
       },
@@ -282,6 +299,44 @@
                         "weight": 1
                       },
                       "id": "keys_save",
+                      "kind": "row",
+                      "width": {
+                        "type": "fit"
+                      }
+                    },
+                    {
+                      "children": [
+                        {
+                          "height": {
+                            "type": "fit"
+                          },
+                          "id": "k_palette",
+                          "kind": "text",
+                          "style": "key",
+                          "text": " ctrl+space ",
+                          "width": {
+                            "type": "fit"
+                          }
+                        },
+                        {
+                          "height": {
+                            "type": "fit"
+                          },
+                          "id": "h_palette",
+                          "kind": "text",
+                          "style": "hint",
+                          "text": "go to ",
+                          "width": {
+                            "type": "fit"
+                          }
+                        }
+                      ],
+                      "gap": 1,
+                      "height": {
+                        "type": "fill",
+                        "weight": 1
+                      },
+                      "id": "keys_find",
                       "kind": "row",
                       "width": {
                         "type": "fit"

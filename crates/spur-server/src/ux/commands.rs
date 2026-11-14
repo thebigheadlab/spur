@@ -13,11 +13,13 @@ use spur_core::{
 };
 use spur_rpc::ServerMsg;
 
-use super::EDITOR_REGION;
-use super::Ux;
+use super::client_ui::{close_palette, open_palette, palette_rows, query_changed, set_scope};
+use super::field::Step as FieldStep;
 use super::files::Activate;
-use super::pack::StateValue;
-use super::state::first_list;
+use super::pack::{PALETTE_SCOPES, PALETTE_SOURCE, StateValue};
+use super::palette::Run;
+use super::state::{first_list, focused_input};
+use super::{EDITOR_REGION, Ux};
 use crate::client::Client;
 
 /// Every `ui.*` command id, with its description.
@@ -44,6 +46,26 @@ pub const UI_COMMANDS: &[(&str, &str)] = &[
         "Collapse the selected folder of the focused tree.",
     ),
     ("ui.quit", "Quit, asking first if a document is modified."),
+    (
+        "ui.palette.open",
+        "Open the palette in a scope (all, files, recent, actions, line), or switch scope.",
+    ),
+    ("ui.palette.close", "Close the palette."),
+    ("ui.input.insert", "Type text into the focused input."),
+    (
+        "ui.input.delete_backward",
+        "Delete the selection or the char before the cursor in the focused input.",
+    ),
+    (
+        "ui.input.delete_forward",
+        "Delete the selection or the char after the cursor in the focused input.",
+    ),
+    (
+        "ui.input.move",
+        "Move the cursor of the focused input (by char, word, start or end).",
+    ),
+    ("ui.input.clear", "Empty the focused input."),
+    ("ui.input.focus", "Focus an input of the focused region."),
 ];
 
 /// Session work a `ui.*` command asks for; applied by `run_as` after the call.
@@ -54,6 +76,8 @@ pub(crate) enum Effect {
     CheckFocus,
     /// Drop the client (after a confirmed quit).
     Quit,
+    /// Run a pack action as a key press in the focused region (a palette row).
+    RunAction(String),
 }
 
 /// A client's UI side of one call.
@@ -113,6 +137,7 @@ fn emit(cx: &mut Cx<'_, Editor>, name: &str, payload: Value) {
 }
 
 impl ClientHost<Editor> for UiHost<'_> {
+    #[allow(clippy::too_many_lines)]
     fn call(
         &mut self,
         cx: &mut Cx<'_, Editor>,
@@ -146,7 +171,7 @@ impl ClientHost<Editor> for UiHost<'_> {
             }
             "ui.list.move" | "ui.list.page" => {
                 let by = arg_int(args, "by")?;
-                self.list_move(cx.context, by, id.as_str() == "ui.list.page");
+                self.list_move(cx, by, id.as_str() == "ui.list.page");
             }
             "ui.list.activate" => {
                 let list = match args.get("list") {
@@ -169,6 +194,75 @@ impl ClientHost<Editor> for UiHost<'_> {
                 }
             }
             "ui.quit" => self.quit(cx.state),
+            "ui.palette.open" => {
+                let scope = arg_str(args, "scope")?;
+                if !PALETTE_SCOPES.contains(&scope) {
+                    return Err(CommandError::bad_args(format!(
+                        "unknown scope {scope:?} ({})",
+                        PALETTE_SCOPES.join(", ")
+                    )));
+                }
+                let query = match args.get("query") {
+                    None | Some(Value::Null) => None,
+                    Some(_) => Some(arg_str(args, "query")?),
+                };
+                open_palette(self.ux, self.client, scope, query).map_err(CommandError::failed)?;
+            }
+            "ui.palette.close" => close_palette(self.ux, self.client, cx.context),
+            "ui.input.insert" => {
+                let text = arg_str(args, "text")?;
+                self.input_edit(cx.context, |f| f.insert(text), Some(text), false);
+            }
+            "ui.input.delete_backward" => {
+                self.input_edit(cx.context, super::field::Field::delete_backward, None, true);
+            }
+            "ui.input.delete_forward" => {
+                self.input_edit(cx.context, super::field::Field::delete_forward, None, false);
+            }
+            "ui.input.clear" => {
+                self.input_edit(cx.context, super::field::Field::clear, None, false);
+            }
+            "ui.input.move" => {
+                let step = match arg_str(args, "by")? {
+                    "char" => FieldStep::Char,
+                    "word" => FieldStep::Word,
+                    "start" => FieldStep::Start,
+                    "end" => FieldStep::End,
+                    other => {
+                        return Err(CommandError::bad_args(format!(
+                            "by: {other:?} is not char, word, start or end"
+                        )));
+                    }
+                };
+                let back = args.get("back").and_then(Value::as_bool).unwrap_or(false);
+                let extend = args.get("extend").and_then(Value::as_bool).unwrap_or(false);
+                self.input_edit(cx.context, |f| f.move_by(step, !back, extend), None, false);
+            }
+            "ui.input.focus" => {
+                let node = arg_str(args, "node")?;
+                let ok = self
+                    .ux
+                    .pack
+                    .nodes
+                    .get(node)
+                    .is_some_and(|n| n.kind == spur_rpc::NodeKind::Input)
+                    && self.client.ui.as_ref().is_some_and(|u| {
+                        self.ux
+                            .pack
+                            .regions
+                            .get(&u.focus)
+                            .is_some_and(|r| self.ux.pack.within(node, &r.node))
+                    });
+                if !ok {
+                    return Err(CommandError::bad_args(format!(
+                        "{node:?} is not an input of the focused region"
+                    )));
+                }
+                if let Some(ui) = self.client.ui.as_mut() {
+                    ui.input = Some(node.to_owned());
+                    self.client.keymap.reset();
+                }
+            }
             other => return Err(CommandError::unknown(other)),
         }
         self.client.dirty = true;
@@ -231,12 +325,73 @@ impl UiHost<'_> {
         Ok((key.to_owned(), value))
     }
 
-    fn list_move(&mut self, global: &Context, by: i64, page: bool) {
+    /// Edits the focused input. In the palette's empty input, a scope prefix
+    /// typed switches scope instead, and backspace (`back`) returns to the scope it
+    /// opened with.
+    fn input_edit(
+        &mut self,
+        global: &Context,
+        f: impl FnOnce(&mut super::field::Field),
+        typed: Option<&str>,
+        back: bool,
+    ) {
+        let (ux, c) = (&mut *self.ux, &mut *self.client);
+        let Some(ui) = c.ui.as_ref() else { return };
+        let Some(input) = focused_input(&ux.pack, ui, &Scoped(&[global, &c.scope])) else {
+            return;
+        };
+        let palette = ux.pack.palette.as_ref().is_some_and(|p| p.input == input);
+        let Some(ui) = c.ui.as_mut() else { return };
+        let before = ui.fields.get(&input).cloned().unwrap_or_default();
+        if palette && before.text.is_empty() {
+            let prefix = typed.and_then(|t| ux.pack.prefixes.iter().find(|(p, _)| p == t));
+            let scope = match prefix {
+                Some((_, scope)) => Some(scope.clone()),
+                None if back && ui.palette.scope != ui.palette.open_scope => {
+                    Some(ui.palette.open_scope.clone())
+                }
+                None => None,
+            };
+            if let Some(scope) = scope {
+                set_scope(&mut ui.palette, &scope);
+                c.dirty = true;
+                query_changed(ux, c);
+                return;
+            }
+        }
+        let mut after = before.clone();
+        f(&mut after);
+        let changed = after.text != before.text;
+        ui.fields.insert(input, after);
+        c.dirty = true;
+        if palette && changed {
+            query_changed(ux, c);
+        }
+    }
+
+    fn list_move(&mut self, cx: &Cx<'_, Editor>, by: i64, page: bool) {
+        let global: &Context = cx.context;
         let (ux, c) = (&mut *self.ux, &mut *self.client);
         let Some(list) = focused_list(ux, c, global) else {
             return;
         };
         let rows = c.rows_hint();
+        if is_palette(ux, &list) {
+            let Some(r) = palette_rows(ux, c, cx.state, global) else {
+                return;
+            };
+            let Some(ui) = c.ui.as_mut() else { return };
+            let height = ui.list_rows.get(&list).copied().unwrap_or(rows);
+            let step = if page {
+                by.saturating_mul(i64::from(height.max(1)))
+            } else {
+                by
+            };
+            let m = ux.matchers.get(&c.id.0);
+            r.settle(&mut ui.palette, m, ux.index.root());
+            r.move_by(&mut ui.palette, step, height, m, ux.index.root());
+            return;
+        }
         let Some(ui) = c.ui.as_mut() else { return };
         let height = ui.list_rows.get(&list).copied().unwrap_or(rows);
         if let Some(t) = ui.trees.get_mut(&list) {
@@ -256,6 +411,10 @@ impl UiHost<'_> {
         let Some(list) = list.or_else(|| focused_list(ux, c, cx.context)) else {
             return;
         };
+        if is_palette(ux, &list) {
+            self.palette_run(cx);
+            return;
+        }
         let Some(t) = c.ui.as_mut().and_then(|u| u.trees.get_mut(&list)) else {
             return;
         };
@@ -266,6 +425,41 @@ impl UiHost<'_> {
                 }
                 Err(e) => set_status(ux, c, "editor.open", &e.message),
             }
+        }
+    }
+
+    /// Runs the selected palette row: closes the palette, then opens, moves or
+    /// runs the action (after the call, as a key press in the restored region).
+    fn palette_run(&mut self, cx: &mut Cx<'_, Editor>) {
+        let (ux, c) = (&mut *self.ux, &mut *self.client);
+        let Some(rows) = palette_rows(ux, c, cx.state, cx.context) else {
+            return;
+        };
+        let Some(ui) = c.ui.as_mut() else { return };
+        let m = ux.matchers.get(&c.id.0);
+        rows.settle(&mut ui.palette, m, ux.index.root());
+        let Some(run) = rows.run(&ui.palette, m, ux.index.root()) else {
+            return;
+        };
+        close_palette(ux, c, cx.context);
+        match run {
+            Run::Open(path) => {
+                set_focus(c, EDITOR_REGION);
+                if let Err(e) = cx.execute(&cmd("editor.open"), &json!({ "path": path })) {
+                    set_status(ux, c, "editor.open", &e.message);
+                }
+            }
+            Run::Line(line, col) => {
+                set_focus(c, EDITOR_REGION);
+                let args = match col {
+                    Some(col) => json!({ "line": line, "col": col }),
+                    None => json!({ "line": line }),
+                };
+                if let Err(e) = cx.execute(&cmd("view.move_to"), &args) {
+                    set_status(ux, c, "view.move_to", &e.message);
+                }
+            }
+            Run::Action(id) => self.effects.push(Effect::RunAction(id)),
         }
     }
 
@@ -323,6 +517,14 @@ pub(crate) fn set_status(ux: &Ux, c: &mut Client, command: &str, reason: &str) {
         ui.status = Some(text);
         c.dirty = true;
     }
+}
+
+/// True if list node `list` shows the palette.
+pub(crate) fn is_palette(ux: &Ux, list: &str) -> bool {
+    ux.pack
+        .nodes
+        .get(list)
+        .is_some_and(|n| n.source.as_deref() == Some(PALETTE_SOURCE))
 }
 
 /// The first shown list node inside the focused region, under the client's

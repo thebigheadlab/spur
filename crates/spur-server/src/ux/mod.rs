@@ -1,14 +1,23 @@
 //! UX packs: the look of a session, loaded from TOML, and the per-client UI model
 //! built from it.
 
+pub mod actions;
+pub mod client_ui;
 pub mod commands;
 pub mod eval;
+pub mod field;
 pub mod files;
+pub mod index;
 pub mod pack;
+pub mod palette;
 pub mod state;
 pub mod watch;
 
+use std::collections::BTreeMap;
+
 use files::Files;
+use index::Index;
+use palette::{Matcher, Notify};
 
 /// The region of the code surface; focus returns here.
 pub const EDITOR_REGION: &str = "editor";
@@ -31,6 +40,12 @@ pub struct Ux {
     pub pack_error: Option<String>,
     /// Rises with each pack loaded, so clients get the theme again.
     pub generation: u64,
+    /// The workspace file index (walked when a palette first opens).
+    pub index: Index,
+    /// File matchers by client, made when a client first opens the palette.
+    pub matchers: BTreeMap<u64, Matcher>,
+    /// Posts a client's `MatchReady` to the session.
+    pub notify: Option<Notify>,
 }
 
 impl Ux {

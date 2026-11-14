@@ -1,0 +1,183 @@
+# ux_fresh actions: named steps with keys. A titled action shows in the palette
+# (ctrl+space, then > for actions) with its key. Keys listed here are bound in
+# the action's modes (default "insert", the code); keys.toml adds the special
+# cases (a later binding there wins when its `when` holds). The first key that
+# applies is the one hints show.
+
+# --- Palette ---
+
+[actions.palette_all]
+command = "ui.palette.open"
+args = { scope = "all" }
+modes = ["insert", "sidebar", "agent", "palette"]
+keys = ["<C-Space>"]
+
+[actions.go_to_file]
+title = "Go to file"
+command = "ui.palette.open"
+args = { scope = "files" }
+modes = ["insert", "sidebar", "agent", "palette"]
+keys = ["<C-p>"]
+
+[actions.recent_files]
+title = "Recent files"
+command = "ui.palette.open"
+args = { scope = "recent" }
+modes = ["insert", "sidebar", "agent", "palette"]
+keys = ["<C-e>"]
+
+[actions.go_to_line]
+title = "Go to line"
+command = "ui.palette.open"
+args = { scope = "line" }
+modes = ["insert", "sidebar", "agent", "palette"]
+keys = ["<C-g>"]
+
+[actions.palette_close]
+command = "ui.palette.close"
+modes = ["palette"]
+keys = ["<Esc>"]
+
+# --- Code ---
+
+[actions.save]
+title = "Save"
+command = "buffer.save"
+keys = ["<C-s>"]
+
+[actions.undo]
+title = "Undo"
+command = "editor.undo"
+keys = ["<C-z>"]
+
+[actions.redo]
+title = "Redo"
+command = "editor.redo"
+keys = ["<C-S-z>", "<C-y>"]
+
+# --- Shell ---
+
+[actions.toggle_sidebar]
+title = "Toggle sidebar"
+run = [
+  { command = "ui.set", args = { key = "ui.sidebar_open", value = true } },
+  { command = "ui.focus", args = { region = "sidebar" } },
+]
+modes = ["insert", "sidebar", "agent"]
+keys = ["<C-b>"]
+
+[actions.toggle_agent]
+title = "Toggle agent column"
+run = [
+  { command = "ui.set", args = { key = "ui.agent_open", value = true } },
+  { command = "ui.focus", args = { region = "agent" } },
+]
+modes = ["insert", "sidebar", "agent"]
+keys = ["<C-A-b>"]
+
+[actions.agent_show]
+title = "Show agent"
+run = [
+  { command = "ui.set", args = { key = "ui.agent_open", value = true } },
+  { command = "ui.focus", args = { region = "agent" } },
+]
+modes = ["insert", "sidebar", "agent"]
+keys = ["<C-k>a"]
+
+# The sidebar views. The ctrl+k chords come first: every terminal sends them.
+[actions.sidebar_files]
+title = "Show Files"
+run = [
+  { command = "ui.set", args = { key = "ui.sidebar", value = "files" } },
+  { command = "ui.set", args = { key = "ui.sidebar_open", value = true } },
+  { command = "ui.focus", args = { region = "sidebar" } },
+]
+modes = ["insert", "sidebar", "agent"]
+keys = ["<C-k>e", "<C-S-e>", "<A-1>"]
+
+[actions.sidebar_sessions]
+title = "Show Sessions"
+run = [
+  { command = "ui.set", args = { key = "ui.sidebar", value = "sessions" } },
+  { command = "ui.set", args = { key = "ui.sidebar_open", value = true } },
+  { command = "ui.focus", args = { region = "sidebar" } },
+]
+modes = ["insert", "sidebar", "agent"]
+keys = ["<C-k>j", "<C-S-j>", "<A-2>"]
+
+[actions.sidebar_search]
+title = "Show Search"
+run = [
+  { command = "ui.set", args = { key = "ui.sidebar", value = "search" } },
+  { command = "ui.set", args = { key = "ui.sidebar_open", value = true } },
+  { command = "ui.focus", args = { region = "sidebar" } },
+]
+modes = ["insert", "sidebar", "agent"]
+keys = ["<C-k>f", "<C-S-f>", "<A-3>"]
+
+[actions.sidebar_git]
+title = "Show Git"
+run = [
+  { command = "ui.set", args = { key = "ui.sidebar", value = "git" } },
+  { command = "ui.set", args = { key = "ui.sidebar_open", value = true } },
+  { command = "ui.focus", args = { region = "sidebar" } },
+]
+modes = ["insert", "sidebar", "agent"]
+keys = ["<C-k>g", "<C-S-g>", "<A-4>"]
+
+[actions.quit]
+title = "Quit"
+command = "ui.quit"
+modes = ["insert", "sidebar", "agent", "palette"]
+keys = ["<C-q>"]
+
+# --- Lists (the Files list and the palette) ---
+
+[actions.list_up]
+command = "ui.list.move"
+args = { by = -1 }
+modes = ["sidebar", "palette"]
+keys = ["<Up>"]
+
+[actions.list_down]
+command = "ui.list.move"
+args = { by = 1 }
+modes = ["sidebar", "palette"]
+keys = ["<Down>"]
+
+[actions.list_page_up]
+command = "ui.list.page"
+args = { by = -1 }
+modes = ["sidebar", "palette"]
+keys = ["<PageUp>"]
+
+[actions.list_page_down]
+command = "ui.list.page"
+args = { by = 1 }
+modes = ["sidebar", "palette"]
+keys = ["<PageDown>"]
+
+[actions.list_open]
+command = "ui.list.activate"
+modes = ["sidebar", "palette"]
+keys = ["<CR>"]
+
+[actions.back_to_code]
+command = "ui.focus"
+args = { region = "editor" }
+modes = ["sidebar", "agent"]
+keys = ["<Esc>"]
+
+# --- Agent column ---
+
+[actions.agent_tab_prev]
+command = "ui.cycle"
+args = { key = "ui.agent_tab", by = -1 }
+modes = ["agent"]
+keys = ["<Left>"]
+
+[actions.agent_tab_next]
+command = "ui.cycle"
+args = { key = "ui.agent_tab", by = 1 }
+modes = ["agent"]
+keys = ["<Right>"]

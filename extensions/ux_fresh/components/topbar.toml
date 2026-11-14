@@ -1,7 +1,7 @@
 # The top bar: brand and workspace on the left; on the right the notice, or the name
-# of the focused panel and its keys. This is the only place key hints appear.
-# Every hint is a key from keys.toml, written the way messages write keys (ctrl+q),
-# in plain ASCII. The workspace name gives way when the row is short of room.
+# of the focused panel and its keys. Key hints are {key:<action>}: the action's first
+# key that works where focus is, printed by pack.toml [keys.display]. The workspace
+# name gives way when the row is short of room.
 
 [node.topbar]
 kind = "row"
@@ -52,7 +52,7 @@ kind = "row"
 width = "fit"
 gap = 1
 when = "!ui.notice"
-children = ["keys_code", "keys_files", "keys_sidebar", "keys_agent", "keys_back", "k_quit", "h_quit"]
+children = ["keys_code", "keys_files", "keys_sidebar", "keys_agent", "keys_palette", "keys_back", "k_quit", "h_quit"]
 
 # Code.
 [node.keys_code]
@@ -60,7 +60,7 @@ kind = "row"
 width = "fit"
 gap = 1
 when = "ui.focus == editor"
-children = ["at_code", "keys_save", "k_files", "h_files", "k_agent", "h_agent"]
+children = ["at_code", "keys_save", "keys_find", "k_files", "h_files", "k_agent", "h_agent"]
 
 [node.at_code]
 kind = "text"
@@ -75,9 +75,27 @@ gap = 1
 when = "client.cols >= 100"
 children = ["k_save", "h_save"]
 
+# The palette, where there is room for it.
+[node.keys_find]
+kind = "row"
+width = "fit"
+gap = 1
+when = "client.cols >= 120"
+children = ["k_palette", "h_palette"]
+
+[node.k_palette]
+kind = "text"
+text = " {key:palette_all} "
+style = "key"
+
+[node.h_palette]
+kind = "text"
+text = "go to "
+style = "hint"
+
 [node.k_save]
 kind = "text"
-text = " ctrl+s "
+text = " {key:save} "
 style = "key"
 
 [node.h_save]
@@ -87,7 +105,7 @@ style = "hint"
 
 [node.k_files]
 kind = "text"
-text = " ctrl+k e "
+text = " {key:sidebar_files} "
 style = "key"
 
 [node.h_files]
@@ -97,7 +115,7 @@ style = "hint"
 
 [node.k_agent]
 kind = "text"
-text = " ctrl+k a "
+text = " {key:agent_show} "
 style = "key"
 
 [node.h_agent]
@@ -120,7 +138,7 @@ style = "focus"
 
 [node.k_move]
 kind = "text"
-text = " up/down "
+text = " {key:list_up}/{key:list_down} "
 style = "key"
 
 [node.h_move]
@@ -130,7 +148,7 @@ style = "hint"
 
 [node.k_open]
 kind = "text"
-text = " enter "
+text = " {key:list_open} "
 style = "key"
 
 [node.h_open]
@@ -154,7 +172,7 @@ style = "focus"
 
 [node.k_to_files]
 kind = "text"
-text = " ctrl+k e "
+text = " {key:sidebar_files} "
 style = "key"
 
 [node.h_to_files]
@@ -177,7 +195,7 @@ style = "focus"
 
 [node.k_tabs]
 kind = "text"
-text = " left/right "
+text = " {key:agent_tab_prev}/{key:agent_tab_next} "
 style = "key"
 
 [node.h_tabs]
@@ -185,17 +203,60 @@ kind = "text"
 text = "tabs "
 style = "hint"
 
+# The palette.
+[node.keys_palette]
+kind = "row"
+width = "fit"
+gap = 1
+when = "ui.focus == palette"
+children = ["at_palette", "k_pmove", "h_pmove", "k_prun", "h_prun", "k_pclose", "h_pclose"]
+
+[node.at_palette]
+kind = "text"
+text = " PALETTE "
+style = "focus"
+
+[node.k_pmove]
+kind = "text"
+text = " {key:list_up}/{key:list_down} "
+style = "key"
+
+[node.h_pmove]
+kind = "text"
+text = "move "
+style = "hint"
+
+[node.k_prun]
+kind = "text"
+text = " {key:list_open} "
+style = "key"
+
+[node.h_prun]
+kind = "text"
+text = "run "
+style = "hint"
+
+[node.k_pclose]
+kind = "text"
+text = " {key:palette_close} "
+style = "key"
+
+[node.h_pclose]
+kind = "text"
+text = "close "
+style = "hint"
+
 # Sidebar and agent column: back to the code.
 [node.keys_back]
 kind = "row"
 width = "fit"
 gap = 1
-when = "ui.focus != editor"
+when = "ui.focus != editor && ui.focus != palette"
 children = ["k_esc", "h_esc"]
 
 [node.k_esc]
 kind = "text"
-text = " esc "
+text = " {key:back_to_code} "
 style = "key"
 
 [node.h_esc]
@@ -205,7 +266,7 @@ style = "hint"
 
 [node.k_quit]
 kind = "text"
-text = " ctrl+q "
+text = " {key:quit} "
 style = "key"
 
 [node.h_quit]

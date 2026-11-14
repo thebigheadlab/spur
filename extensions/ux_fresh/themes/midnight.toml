@@ -56,6 +56,13 @@ comment = "#6e7891"
 "prompt" = { fg = "t2", bold = true }
 "input" = { fg = "dim" }
 
+# Palette (an overlay; no outline)
+"palette" = { bg = "field" }
+"palette.scope" = { fg = "accent_text", bold = true }
+"palette.input" = { fg = "t1" }
+"palette.placeholder" = { fg = "dim" }
+"palette.note" = { fg = "dim", italic = true }
+
 # Fixed tokens (named by the protocol)
 "gutter" = { fg = "t3" }
 "gutter.current" = { fg = "t1" }

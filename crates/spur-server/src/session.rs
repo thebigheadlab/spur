@@ -25,9 +25,12 @@ use spur_rpc::{
 
 use crate::client::{Client, SendFail, Shutter};
 use crate::frame::{self, SURFACE, bare_ui};
+use crate::ux::client_ui;
 use crate::ux::commands::{Effect, UiHost, register_ui_commands};
 use crate::ux::files::{Files, parent_of};
+use crate::ux::index::Index;
 use crate::ux::pack::{Pack, PackError, PackSource};
+use crate::ux::palette::Notify;
 use crate::ux::state::{self, ScopeInput, UiState};
 use crate::ux::{EDITOR_REGION, Ux, eval};
 
@@ -172,6 +175,10 @@ enum In {
     Modified(SyncSender<Modified>),
     /// The pack folder's files changed: their paths and text.
     PackFiles(Vec<(String, String)>),
+    /// A client's file matcher has new results (or the index finished a walk).
+    MatchReady {
+        conn: u64,
+    },
     /// Panics outside the per-message guard (tests of the rescue path).
     Panic,
     Shutdown,
@@ -232,8 +239,8 @@ impl Session {
         let first = watched
             .as_ref()
             .and_then(|(dir, _)| crate::ux::watch::hash(dir));
-        let state = State::new(cfg, samples.clone())?;
         let (tx, rx) = mpsc::channel();
+        let state = State::new(cfg, samples.clone(), tx.clone())?;
         let watch = watched.and_then(|(dir, every)| {
             let (stop_tx, stop_rx) = mpsc::channel::<()>();
             let inbox = tx.clone();
@@ -509,7 +516,11 @@ pub(crate) struct State {
 }
 
 impl State {
-    fn new(cfg: SessionConfig, samples: Arc<Mutex<Vec<Duration>>>) -> Result<Self, SessionError> {
+    fn new(
+        cfg: SessionConfig,
+        samples: Arc<Mutex<Vec<Duration>>>,
+        inbox: Sender<In>,
+    ) -> Result<Self, SessionError> {
         let mut layers = Vec::new();
         for (name, toml) in &cfg.keymap {
             let source = Source::Extension {
@@ -527,10 +538,18 @@ impl State {
         if let Some(setup) = cfg.setup {
             setup(&mut core);
         }
-        let ux = match &cfg.pack {
+        let mut ux = match &cfg.pack {
             Some(src) => Some(load_ux(&core, src, &cfg)?),
             None => None,
         };
+        if let Some(ux) = ux.as_mut() {
+            let inbox = Mutex::new(inbox);
+            ux.notify = Some(Notify(Arc::new(move |conn| {
+                if let Ok(tx) = inbox.lock() {
+                    let _ = tx.send(In::MatchReady { conn });
+                }
+            })));
+        }
         let saved = if ux.is_some() {
             core.bus_mut()
                 .subscribe(Filter::new([events::BUFFER_SAVED]), DEFAULT_QUEUE, None)
@@ -691,6 +710,7 @@ impl State {
                         && let Some(rel) = ux.files.rel(Path::new(path))
                     {
                         ux.files.reread(parent_of(&rel));
+                        ux.index.add(&rel);
                     }
                 }
                 // Some saves were missed: read every folder again.
@@ -865,7 +885,21 @@ impl State {
                     }
                 }
             }
+            In::MatchReady { conn } => self.match_ready(conn),
             In::Panic | In::Shutdown => {}
+        }
+    }
+
+    /// Takes in a client's new file matches; redraws it if its palette is open.
+    fn match_ready(&mut self, conn: u64) {
+        let (Some(ux), Some(c)) = (self.ux.as_mut(), self.clients.get_mut(&conn)) else {
+            return;
+        };
+        if let Some(m) = ux.matchers.get_mut(&conn) {
+            m.ready();
+        }
+        if client_ui::palette_open(ux, c) {
+            c.dirty = true;
         }
     }
 
@@ -972,6 +1006,10 @@ impl State {
             return;
         };
         self.removed = true;
+        if let Some(ux) = self.ux.as_mut() {
+            ux.index.detach(conn);
+            ux.matchers.remove(&conn);
+        }
         let doc = self.core.state.views.get(&client.active).map(|v| v.doc);
         let owned: Vec<ViewId> = self
             .core
@@ -1042,6 +1080,7 @@ impl State {
                         ui.sent_theme = None;
                         ui.sent_ui = None;
                         ui.sent_lists.clear();
+                        ui.sent_fields.clear();
                     }
                     c.dirty = true;
                 }
@@ -1193,6 +1232,7 @@ impl State {
             match e {
                 Effect::CheckFocus => self.check_focus(conn),
                 Effect::Quit => self.drop_client(conn),
+                Effect::RunAction(id) => self.run_action(conn, &id),
             }
         }
         let Ok(r) = res else {
@@ -1205,6 +1245,36 @@ impl State {
             self.log(&format!("ui command failed: {}", e.message));
         }
         Some(r)
+    }
+
+    /// Runs a pack action's steps as a key press would, in the client's focused
+    /// region; a failed step shows as the status notice and stops the rest.
+    pub(crate) fn run_action(&mut self, conn: u64, id: &str) {
+        self.check_focus(conn);
+        let steps = {
+            let (Some(ux), Some(c)) = (self.ux.as_ref(), self.clients.get(&conn)) else {
+                return;
+            };
+            let Some(a) = ux.pack.action(id) else {
+                return;
+            };
+            let ed = &self.core.state;
+            let mode = client_ui::key_mode(Some(ux), c, ed, self.core.context());
+            a.press(&c.keymap, &mode, &Scoped(&[self.core.context(), &c.scope]))
+        };
+        for step in steps.iter() {
+            let name = step.command.to_string();
+            let inv = Invocation::new(step.command.clone(), spur_core::Actor::User)
+                .args(step.args.clone());
+            match self.run_as(conn, inv) {
+                None => return,
+                Some(Err(e)) => {
+                    self.set_status(conn, &name, &e.message);
+                    return;
+                }
+                Some(Ok(_)) => {}
+            }
+        }
     }
 
     /// Moves the client's focus to `region` (the focus check then runs as after
@@ -1403,6 +1473,9 @@ fn load_ux(core: &Core<Editor>, src: &PackSource, cfg: &SessionConfig) -> Result
         workspace,
         pack_error: None,
         generation: 1,
+        index: Index::new(cfg.root.clone()),
+        matchers: BTreeMap::new(),
+        notify: None,
     })
 }
 
@@ -1431,10 +1504,32 @@ fn render_bare(c: &mut Client, ed: &Editor, others: &[(u64, ViewId)]) {
     finish(c, msgs, SURFACE, Some((view, wire)));
 }
 
-/// Renders a client with UI state: theme, tree, lists and surface, each when changed.
+/// Renders a client with UI state: theme, tree, overlays, inputs, lists and surface,
+/// each when changed.
+#[allow(clippy::too_many_lines)]
 fn render_ux(c: &mut Client, ux: &mut Ux, ed: &Editor, ctx: &Context, others: &[(u64, ViewId)]) {
-    let built = eval::tree(&ux.pack, &Scoped(&[ctx, &c.scope]));
-    let (rows, hint) = (c.rows(), c.rows_hint());
+    let doc_path = ed
+        .views
+        .get(&c.active)
+        .and_then(|v| ed.docs.get(&v.doc))
+        .and_then(|d| d.path.clone());
+    if let Some(ui) = c.ui.as_mut() {
+        ui.visit(doc_path.as_deref());
+    }
+    // The palette's rows first: their note is a context key the tree reads.
+    let mut rows = client_ui::palette_rows(ux, c, ed, ctx);
+    let note = rows.as_ref().map_or(String::new(), |r| r.note.clone());
+    let _ = c.scope.set("palette.note", note.as_str());
+    let built = {
+        let look = Scoped(&[ctx, &c.scope]);
+        let hints = |a: &str, node: &str| client_ui::hint(ux, c, ed, &look, a, node);
+        eval::tree(&ux.pack, &look, &hints)
+    };
+    let focused_input =
+        c.ui.as_ref()
+            .and_then(|ui| state::focused_input(&ux.pack, ui, &Scoped(&[ctx, &c.scope])));
+    let (rows_n, hint) = (c.rows(), c.rows_hint());
+    let conn = c.id.0;
     let Some(ui) = c.ui.as_mut() else {
         return;
     };
@@ -1450,39 +1545,60 @@ fn render_ux(c: &mut Client, ux: &mut Ux, ed: &Editor, ctx: &Context, others: &[
         ui.sent_theme = Some(ux.generation);
     }
     let surface_id = ux.pack.surface.as_str();
-    let focus = ux
-        .pack
-        .regions
-        .get(&ui.focus)
-        .map_or_else(|| surface_id.to_owned(), |r| r.node.clone());
+    let focus = focused_input.unwrap_or_else(|| {
+        ux.pack
+            .regions
+            .get(&ui.focus)
+            .map_or_else(|| surface_id.to_owned(), |r| r.node.clone())
+    });
     let surface_was_shown = ui
         .sent_ui
         .as_ref()
-        .is_some_and(|(n, _)| has_node(n, surface_id));
+        .is_some_and(|s| has_node(&s.root, surface_id));
     let surface_shown = has_node(&built.root, surface_id);
-    let tree = (built.root, focus);
+    let tree = state::SentUi {
+        root: built.root,
+        focus,
+        overlays: built.overlays,
+    };
     if ui.sent_ui.as_ref() != Some(&tree) {
         msgs.push(ServerMsg::Ui {
-            root: tree.0.clone(),
-            focus: Some(tree.1.clone()),
-            overlays: Vec::new(),
+            root: tree.root.clone(),
+            focus: Some(tree.focus.clone()),
+            overlays: tree.overlays.clone(),
         });
         ui.sent_ui = Some(tree);
     }
-    // A list that left the tree is sent again in full when it comes back.
+    // Inputs and lists that left the tree are sent again in full when they come back.
+    ui.sent_fields.retain(|k, _| built.inputs.contains(k));
+    for id in &built.inputs {
+        let f = ui.fields.get(id).cloned().unwrap_or_default();
+        if ui.sent_fields.get(id) != Some(&f) {
+            msgs.push(ServerMsg::Input {
+                node: id.clone(),
+                text: f.text.clone(),
+                cursor: u32::try_from(f.cursor).unwrap_or(u32::MAX),
+                anchor: f.anchor.map(|a| u32::try_from(a).unwrap_or(u32::MAX)),
+            });
+            ui.sent_fields.insert(id.clone(), f);
+        }
+    }
     ui.sent_lists.retain(|k, _| built.lists.contains(k));
-    let current = ed
-        .views
-        .get(&c.active)
-        .and_then(|v| ed.docs.get(&v.doc))
-        .and_then(|d| d.path.as_deref())
-        .and_then(|p| ux.files.rel(p));
+    let current = doc_path.as_deref().and_then(|p| ux.files.rel(p));
     for id in &built.lists {
         let height = ui.list_rows.get(id).copied().unwrap_or(hint);
-        let Some(t) = ui.trees.get_mut(id) else {
-            continue;
+        let window = if crate::ux::commands::is_palette(ux, id) {
+            let Some(r) = rows.as_mut() else {
+                continue;
+            };
+            r.settle(&mut ui.palette, ux.matchers.get(&conn), ux.index.root());
+            r.window(&mut ui.palette, height, ux.matchers.get_mut(&conn))
+        } else {
+            let Some(t) = ui.trees.get_mut(id) else {
+                continue;
+            };
+            t.window(&mut ux.files, height, &ux.pack, current.as_deref())
         };
-        let window = t.window(&mut ux.files, height, &ux.pack, current.as_deref());
         if ui.sent_lists.get(id) != Some(&window) {
             msgs.push(ServerMsg::List {
                 node: id.clone(),
@@ -1491,6 +1607,7 @@ fn render_ux(c: &mut Client, ux: &mut Ux, ed: &Editor, ctx: &Context, others: &[
             ui.sent_lists.insert(id.clone(), window);
         }
     }
+    let rows = rows_n;
     let surface = surface_shown.then(|| {
         let view = frame::surface(ed, c.active, rows, others);
         // A surface new in the tree starts from a full frame, and so does a new

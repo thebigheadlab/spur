@@ -119,6 +119,23 @@
       "overlay.dim": {
         "bg": "#111215"
       },
+      "palette": {
+        "bg": "#202227"
+      },
+      "palette.input": {
+        "fg": "#ecedf0"
+      },
+      "palette.note": {
+        "fg": "#888c95",
+        "italic": true
+      },
+      "palette.placeholder": {
+        "fg": "#888c95"
+      },
+      "palette.scope": {
+        "bold": true,
+        "fg": "#8b93ff"
+      },
       "path": {
         "fg": "#888c95"
       },

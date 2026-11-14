@@ -11,12 +11,13 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use spur_core::editor::VIEW_KEYS;
 use spur_core::{CommandId, Source, When, check_name};
-use spur_keymap::{Layer, Step};
+use spur_keymap::{Layer, LayerSpec, Step, parse_keys};
 use spur_rpc::{Dim, NodeKind, Token, tokens};
 use toml::Spanned;
 use toml::de::{DeTable, DeValue, ValueDeserializer};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use super::actions::{Action, ActionKey, KeyDisplay};
 use crate::lang;
 
 /// Pack format version this server reads.
@@ -29,7 +30,29 @@ pub const MESSAGES: &[(&str, &[&str])] = &[
     ("command.failed", &["command", "reason"]),
     ("list.more", &["count"]),
     ("list.unreadable", &["reason"]),
+    ("palette.scope.all", &[]),
+    ("palette.scope.files", &[]),
+    ("palette.scope.recent", &[]),
+    ("palette.scope.actions", &[]),
+    ("palette.scope.line", &[]),
+    ("palette.section.files", &[]),
+    ("palette.section.recent", &[]),
+    ("palette.section.actions", &[]),
+    ("palette.no_matches", &[]),
+    ("palette.no_folder", &[]),
+    ("palette.indexing", &["count"]),
+    ("palette.capped", &["count"]),
+    ("palette.line.go", &["line"]),
+    ("palette.line.go_col", &["line", "col"]),
+    ("palette.line.last", &["line"]),
+    ("palette.line.hint", &[]),
 ];
+
+/// Palette scopes: every source, and `all`.
+pub const PALETTE_SCOPES: &[&str] = &["all", "files", "recent", "actions", "line"];
+
+/// The list source of the palette (lists and inputs).
+pub const PALETTE_SOURCE: &str = "palette";
 
 /// Icons the Files provider uses.
 pub const REQUIRED_ICONS: &[&str] = &["folder", "folder_open", "file"];
@@ -39,6 +62,11 @@ pub const REQUIRED_ICONS: &[&str] = &["folder", "folder_open", "file"];
 pub const BUILTIN_KEYS: &[&str] = &[
     "ui.focus",
     "ui.notice",
+    "ui.input",
+    "ui.overlay",
+    "palette.scope",
+    "palette.label",
+    "palette.note",
     "client.cols",
     "client.rows",
     "doc.name",
@@ -225,6 +253,8 @@ pub struct ClickEntry {
     pub when: Option<When>,
     /// What runs.
     pub steps: Vec<Step>,
+    /// Or an action, by id (its steps run).
+    pub action: Option<String>,
 }
 
 /// A node as the pack defines it.
@@ -270,6 +300,38 @@ pub struct NodeSpec {
     pub border_style_active: Option<String>,
     /// Text: repeat to fill the width.
     pub repeat: bool,
+    /// Input: placeholder style (`text` is the placeholder).
+    pub placeholder_style: Option<String>,
+    /// Input: key mode while it has focus (else its region's).
+    pub mode: Option<String>,
+}
+
+/// An overlay: `[overlays.<id>]`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OverlaySpec {
+    /// Its root node (no parent).
+    pub node: String,
+    /// First row.
+    pub top: u32,
+    /// Width in cells.
+    pub width: u32,
+    /// Most rows.
+    pub max_height: u32,
+    /// 0 to 100.
+    pub dim: u8,
+    /// Action run by a press outside it.
+    pub on_dismiss: Option<String>,
+}
+
+/// Where the palette lives in a pack.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PaletteSpec {
+    /// Its overlay id.
+    pub overlay: String,
+    /// The region that holds its input.
+    pub region: String,
+    /// The query input node.
+    pub input: String,
 }
 
 /// A theme with its tokens resolved to `#rrggbb`.
@@ -336,6 +398,16 @@ pub struct Pack {
     pub(crate) themes: BTreeMap<String, Theme>,
     /// The one surface node (the editor region).
     pub(crate) surface: String,
+    /// Overlays by id.
+    pub(crate) overlays: BTreeMap<String, OverlaySpec>,
+    /// Actions, in pack order.
+    pub(crate) actions: Vec<(String, Action)>,
+    /// Palette scope prefixes: (typed text, scope).
+    pub(crate) prefixes: Vec<(String, String)>,
+    /// How key hints print.
+    pub(crate) key_display: KeyDisplay,
+    /// The palette, if the pack has one.
+    pub(crate) palette: Option<PaletteSpec>,
 }
 
 impl Pack {
@@ -407,6 +479,19 @@ impl Pack {
         self.regions
             .iter()
             .find(|(_, r)| self.within(node, &r.node))
+            .map(|(k, _)| k.as_str())
+    }
+
+    /// The action named `id`.
+    pub(crate) fn action(&self, id: &str) -> Option<&Action> {
+        self.actions.iter().find(|(k, _)| k == id).map(|(_, a)| a)
+    }
+
+    /// The overlay whose tree holds `node`.
+    pub(crate) fn overlay_of(&self, node: &str) -> Option<&str> {
+        self.overlays
+            .iter()
+            .find(|(_, o)| self.within(node, &o.node))
             .map(|(k, _)| k.as_str())
     }
 
@@ -594,6 +679,65 @@ struct ClickToml {
     args: Option<Value>,
     #[serde(default)]
     run: Vec<StepToml>,
+    action: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ActionToml {
+    title: Option<String>,
+    command: Option<String>,
+    args: Option<Value>,
+    #[serde(default)]
+    run: Vec<StepToml>,
+    when: Option<String>,
+    modes: Option<Vec<String>>,
+    #[serde(default)]
+    keys: Vec<ActionKeyToml>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum ActionKeyToml {
+    Plain(String),
+    With { keys: String, when: Option<String> },
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OverlayToml {
+    node: String,
+    top: u32,
+    width: u32,
+    max_height: u32,
+    #[serde(default)]
+    dim: u8,
+    on_dismiss: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PaletteToml {
+    #[serde(default)]
+    prefixes: BTreeMap<String, String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct KeysToml {
+    display: Option<KeyDisplayToml>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct KeyDisplayToml {
+    ctrl: Option<String>,
+    shift: Option<String>,
+    alt: Option<String>,
+    #[serde(rename = "super")]
+    super_: Option<String>,
+    #[serde(default)]
+    names: BTreeMap<String, String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -612,6 +756,10 @@ struct Loader<'k> {
     duplicates: bool,
     /// A file did not parse.
     syntax_failed: bool,
+    /// Where each action was defined, and its modes' place: (file, line).
+    action_at: BTreeMap<String, (String, u32)>,
+    /// Where each overlay was defined (pack.toml line).
+    overlay_at: BTreeMap<String, u32>,
 }
 
 /// Raw node, before cross-checks.
@@ -630,6 +778,8 @@ impl<'k> Loader<'k> {
             errors: Vec::new(),
             duplicates: false,
             syntax_failed: false,
+            action_at: BTreeMap::new(),
+            overlay_at: BTreeMap::new(),
         }
     }
 
@@ -643,6 +793,7 @@ impl<'k> Loader<'k> {
         let mut settings = None;
         let mut node_files = Vec::new();
         let mut keys = None;
+        let mut actions = None;
         let mut theme_files = Vec::new();
         for (path, text) in files {
             match path.as_str() {
@@ -650,6 +801,7 @@ impl<'k> Loader<'k> {
                 "settings.toml" => settings = Some(text),
                 "layout.toml" => node_files.push((path, text)),
                 "keys.toml" => keys = Some(text),
+                "actions.toml" => actions = Some(text),
                 p if is_in(p, "components/") => node_files.push((path, text)),
                 p if is_in(p, "themes/") => theme_files.push((path, text)),
                 p if Path::new(p)
@@ -660,7 +812,7 @@ impl<'k> Loader<'k> {
                         file: p.to_owned(),
                         line: None,
                         path: String::new(),
-                        message: "not a pack file (pack.toml, settings.toml, layout.toml, keys.toml, components/*.toml, themes/*.toml)".into(),
+                        message: "not a pack file (pack.toml, settings.toml, layout.toml, keys.toml, actions.toml, components/*.toml, themes/*.toml)".into(),
                     });
                 }
                 _ => {}
@@ -704,10 +856,18 @@ impl<'k> Loader<'k> {
             keys: Layer::new("ux", Source::Core),
             themes: BTreeMap::new(),
             surface: String::new(),
+            overlays: BTreeMap::new(),
+            actions: Vec::new(),
+            prefixes: Vec::new(),
+            key_display: KeyDisplay::default(),
+            palette: None,
         };
         let mut pack_lines = BTreeMap::new();
         if let Some(text) = pack_toml {
             self.pack_file(text, &mut pack, &mut pack_lines);
+        }
+        if let Some(text) = actions {
+            self.actions_file(text, &mut pack);
         }
         if let Some(text) = settings {
             self.settings_file(text, &mut pack);
@@ -726,6 +886,7 @@ impl<'k> Loader<'k> {
         }
         self.check_themes(&pack);
         let known_keys = self.check_nodes(&mut pack, raw, &pack_lines);
+        self.check_actions(&pack, &known_keys);
         if let Some(text) = keys {
             self.keys_file(text, &mut pack, &known_keys);
         }
@@ -1043,6 +1204,82 @@ impl<'k> Loader<'k> {
                         }
                     }
                 }
+                "actions" => self.actions(&src, v, pack),
+                "overlays" => {
+                    let Some(t) = self.table(&src, v, key) else {
+                        continue;
+                    };
+                    for (k, v) in entries(t) {
+                        let path = format!("overlays.{k}");
+                        if !is_ident(k) {
+                            self.push(src.err(Some(v.span()), &path, "use [a-z][a-z0-9_]*"));
+                            continue;
+                        }
+                        let Some(o) = self.de::<OverlayToml>(&src, v, &path) else {
+                            continue;
+                        };
+                        if o.dim > 100 {
+                            self.push(src.err(Some(v.span()), &format!("{path}.dim"), "0 to 100"));
+                        }
+                        if o.width == 0 || o.max_height == 0 {
+                            self.push(src.err(
+                                Some(v.span()),
+                                &path,
+                                "width and max_height must be at least 1",
+                            ));
+                        }
+                        self.overlay_at
+                            .insert(k.to_owned(), src.line(v.span().start));
+                        pack.overlays.insert(
+                            k.to_owned(),
+                            OverlaySpec {
+                                node: o.node,
+                                top: o.top,
+                                width: o.width,
+                                max_height: o.max_height,
+                                dim: o.dim.min(100),
+                                on_dismiss: o.on_dismiss,
+                            },
+                        );
+                    }
+                }
+                "palette" => {
+                    let Some(p) = self.de::<PaletteToml>(&src, v, key) else {
+                        continue;
+                    };
+                    for (prefix, scope) in p.prefixes {
+                        if prefix.is_empty() || prefix.chars().any(char::is_whitespace) {
+                            self.push(src.err(
+                                Some(v.span()),
+                                "palette.prefixes",
+                                format!("{prefix:?}: a prefix is text without spaces"),
+                            ));
+                        } else if !PALETTE_SCOPES.contains(&scope.as_str()) || scope == "all" {
+                            self.push(src.err(
+                                Some(v.span()),
+                                &format!("palette.prefixes.{prefix}"),
+                                format!("unknown scope {scope:?} (files, recent, actions, line)"),
+                            ));
+                        } else {
+                            pack.prefixes.push((prefix, scope));
+                        }
+                    }
+                }
+                "keys" => {
+                    let Some(k) = self.de::<KeysToml>(&src, v, key) else {
+                        continue;
+                    };
+                    if let Some(d) = k.display {
+                        let def = KeyDisplay::default();
+                        pack.key_display = KeyDisplay {
+                            ctrl: d.ctrl.unwrap_or(def.ctrl),
+                            shift: d.shift.unwrap_or(def.shift),
+                            alt: d.alt.unwrap_or(def.alt),
+                            super_: d.super_.unwrap_or(def.super_),
+                            names: d.names,
+                        };
+                    }
+                }
                 other => self.push(src.err(Some(v.span()), other, "unknown key")),
             }
         }
@@ -1255,6 +1492,211 @@ impl<'k> Loader<'k> {
         }
     }
 
+    fn actions_file(&mut self, text: &str, pack: &mut Pack) {
+        let src = Src::new("actions.toml", text);
+        let Some(doc) = self.parse(&src, text) else {
+            return;
+        };
+        for (key, v) in entries(&doc) {
+            if key == "actions" {
+                self.actions(&src, v, pack);
+            } else {
+                self.push(src.err(
+                    Some(v.span()),
+                    key,
+                    "unknown key (actions go in [actions.<id>])",
+                ));
+            }
+        }
+    }
+
+    /// `[actions.<id>]` tables.
+    fn actions(&mut self, src: &Src<'_>, v: &Spanned<DeValue<'_>>, pack: &mut Pack) {
+        let Some(t) = self.table(src, v, "actions") else {
+            return;
+        };
+        // In file order: the palette lists actions as the pack writes them.
+        let mut list = entries(t);
+        list.sort_by_key(|(_, v)| v.span().start);
+        for (k, v) in list {
+            let path = format!("actions.{k}");
+            if !is_ident(k) {
+                self.push(src.err(Some(v.span()), &path, "use [a-z][a-z0-9_]*"));
+                continue;
+            }
+            if let Some((file, line)) = self.action_at.get(k) {
+                self.push(src.err(
+                    Some(v.span()),
+                    &path,
+                    format!("already defined in {file}:{line}"),
+                ));
+                continue;
+            }
+            let Some(a) = self.de::<ActionToml>(src, v, &path) else {
+                continue;
+            };
+            let Some(steps) = self.steps(src, v.span(), &path, a.command, a.args, a.run) else {
+                continue;
+            };
+            let when = match a.when.as_deref().map(When::parse) {
+                Some(Ok(w)) => Some(w),
+                Some(Err(e)) => {
+                    self.push(src.err(
+                        Some(v.span()),
+                        &format!("{path}.when"),
+                        format!("bad clause: {e}"),
+                    ));
+                    continue;
+                }
+                None => None,
+            };
+            let mut keys = Vec::new();
+            for (i, key) in a.keys.into_iter().enumerate() {
+                let kpath = format!("{path}.keys[{i}]");
+                let (notation, kwhen) = match key {
+                    ActionKeyToml::Plain(s) => (s, None),
+                    ActionKeyToml::With { keys, when } => (keys, when),
+                };
+                let parsed = match parse_keys(&notation) {
+                    Ok(p) if !p.is_empty() => p,
+                    Ok(_) => {
+                        self.push(src.err(Some(v.span()), &kpath, "no keys"));
+                        continue;
+                    }
+                    Err(e) => {
+                        self.push(src.err(
+                            Some(v.span()),
+                            &kpath,
+                            format!("bad keys {notation:?}: {e}"),
+                        ));
+                        continue;
+                    }
+                };
+                let when = match kwhen.as_deref().map(When::parse) {
+                    Some(Ok(w)) => Some(w),
+                    Some(Err(e)) => {
+                        self.push(src.err(Some(v.span()), &kpath, format!("bad clause: {e}")));
+                        continue;
+                    }
+                    None => None,
+                };
+                keys.push(ActionKey { keys: parsed, when });
+            }
+            self.action_at.insert(
+                k.to_owned(),
+                (src.file.to_owned(), src.line(v.span().start)),
+            );
+            pack.actions.push((
+                k.to_owned(),
+                Action {
+                    title: a.title,
+                    steps: steps.into(),
+                    when,
+                    modes: a.modes.unwrap_or_else(|| vec!["insert".to_owned()]),
+                    keys,
+                },
+            ));
+        }
+    }
+
+    /// `command` (+ `args`) or `run`, checked against the known commands.
+    fn steps(
+        &mut self,
+        src: &Src<'_>,
+        span: Range<usize>,
+        path: &str,
+        command: Option<String>,
+        args: Option<Value>,
+        run: Vec<StepToml>,
+    ) -> Option<Vec<Step>> {
+        let raw: Vec<(String, Option<Value>)> = match (command, run.is_empty()) {
+            (Some(c), true) => vec![(c, args)],
+            (None, false) if args.is_none() => {
+                run.into_iter().map(|s| (s.command, s.args)).collect()
+            }
+            _ => {
+                self.push(src.err(
+                    Some(span),
+                    path,
+                    "give either command (with optional args) or run",
+                ));
+                return None;
+            }
+        };
+        let mut steps = Vec::new();
+        let mut ok = true;
+        for (c, args) in raw {
+            match CommandId::new(&c) {
+                Ok(id) if (self.known)(&c) => steps.push(Step {
+                    command: id,
+                    args: Arc::new(args.unwrap_or(Value::Null)),
+                }),
+                _ => {
+                    ok = false;
+                    self.push(src.err(Some(span.clone()), path, format!("unknown command {c:?}")));
+                }
+            }
+        }
+        ok.then_some(steps)
+    }
+
+    /// Action modes, conditions and overlay dismiss actions, once modes and keys are
+    /// known.
+    fn check_actions(&mut self, pack: &Pack, keys: &BTreeSet<String>) {
+        let mut modes: BTreeSet<&str> = pack
+            .regions
+            .values()
+            .filter_map(|r| r.mode.as_deref())
+            .collect();
+        modes.extend(pack.nodes.values().filter_map(|n| n.mode.as_deref()));
+        modes.insert("insert");
+        for (id, a) in &pack.actions {
+            let (file, line) = self.action_at.get(id).cloned().unwrap_or_default();
+            let e = |m: String| PackError {
+                file: file.clone(),
+                line: Some(line),
+                path: format!("actions.{id}"),
+                message: m,
+            };
+            let mut errs = Vec::new();
+            for m in &a.modes {
+                if !modes.contains(m.as_str()) {
+                    errs.push(e(format!(
+                        "unknown mode {m:?} (modes: {})",
+                        modes.iter().copied().collect::<Vec<_>>().join(", ")
+                    )));
+                }
+            }
+            let whens = a
+                .when
+                .iter()
+                .chain(a.keys.iter().filter_map(|k| k.when.as_ref()));
+            for w in whens {
+                for k in w.keys() {
+                    if !keys.contains(k) {
+                        errs.push(e(format!("unknown key {k}")));
+                    }
+                }
+            }
+            for err in errs {
+                self.push(err);
+            }
+        }
+        for (id, o) in &pack.overlays {
+            if let Some(a) = &o.on_dismiss
+                && pack.action(a).is_none()
+            {
+                let line = self.overlay_at.get(id).copied();
+                self.push(PackError {
+                    file: "pack.toml".into(),
+                    line,
+                    path: format!("overlays.{id}.on_dismiss"),
+                    message: format!("no action {a:?}"),
+                });
+            }
+        }
+    }
+
     #[allow(clippy::too_many_lines)]
     fn node_file(&mut self, path: &str, text: &str, raw: &mut BTreeMap<String, RawNode>) {
         let src = Src::new(path, text);
@@ -1317,11 +1759,12 @@ impl<'k> Loader<'k> {
             "icon" => NodeKind::Icon,
             "list" => NodeKind::List,
             "surface" => NodeKind::Surface,
+            "input" => NodeKind::Input,
             other => {
                 self.push(src.err(
                     Some(kv.span()),
                     &format!("{npath}.kind"),
-                    format!("unknown kind {other:?} (row, column, card, spacer, text, icon, list, surface)"),
+                    format!("unknown kind {other:?} (row, column, card, spacer, text, icon, list, surface, input)"),
                 ));
                 return None;
             }
@@ -1332,7 +1775,11 @@ impl<'k> Loader<'k> {
             kind,
             children: Vec::new(),
             width: if fit_default { Dim::Fit } else { Dim::FILL },
-            height: if fit_default { Dim::Fit } else { Dim::FILL },
+            height: if fit_default || kind == NodeKind::Input {
+                Dim::Fit
+            } else {
+                Dim::FILL
+            },
             when: None,
             style: None,
             style_active: None,
@@ -1349,6 +1796,8 @@ impl<'k> Loader<'k> {
             border_style: None,
             border_style_active: None,
             repeat: false,
+            placeholder_style: None,
+            mode: None,
         };
         let mut reads = Vec::new();
         for (k, v) in &f {
@@ -1361,11 +1810,13 @@ impl<'k> Loader<'k> {
                 | "border"
                 | "border_style"
                 | "border_style_active" => container,
-                "text" | "repeat" => kind == NodeKind::Text,
+                "text" => matches!(kind, NodeKind::Text | NodeKind::Input),
+                "repeat" => kind == NodeKind::Text,
                 "icon" => kind == NodeKind::Icon,
-                "source" => kind == NodeKind::List,
+                "source" => matches!(kind, NodeKind::List | NodeKind::Input),
+                "placeholder_style" | "mode" => kind == NodeKind::Input,
                 "gutter" | "current_line" => kind == NodeKind::Surface,
-                "on_click" => !matches!(kind, NodeKind::List | NodeKind::Surface),
+                "on_click" => !matches!(kind, NodeKind::List | NodeKind::Surface | NodeKind::Input),
                 _ => false,
             };
             if !allowed {
@@ -1432,6 +1883,8 @@ impl<'k> Loader<'k> {
                 }
                 "icon" => spec.icon = self.string(src, v, &path),
                 "source" => spec.source = self.string(src, v, &path),
+                "placeholder_style" => spec.placeholder_style = self.string(src, v, &path),
+                "mode" => spec.mode = self.string(src, v, &path),
                 "gutter" => spec.gutter = self.de(src, v, &path).unwrap_or(false),
                 "current_line" => spec.current_line = self.de(src, v, &path).unwrap_or(false),
                 "on_click" => spec.on_click = self.on_click(src, v, &path, &mut reads),
@@ -1530,37 +1983,30 @@ impl<'k> Loader<'k> {
                 },
                 None => None,
             };
-            let raw: Vec<(String, Option<Value>)> = match (entry.command, entry.run.is_empty()) {
-                (Some(c), true) => vec![(c, entry.args)],
-                (None, false) if entry.args.is_none() => {
-                    entry.run.into_iter().map(|s| (s.command, s.args)).collect()
-                }
-                _ => {
+            if let Some(a) = entry.action {
+                if entry.command.is_some() || !entry.run.is_empty() || entry.args.is_some() {
                     self.push(src.err(
                         Some(e.span()),
                         &epath,
-                        "give either command (with optional args) or run",
+                        "give action, command (with optional args) or run",
                     ));
                     continue;
                 }
-            };
-            let mut steps = Vec::new();
-            for (c, args) in raw {
-                match CommandId::new(&c) {
-                    Ok(id) if (self.known)(&c) => steps.push(Step {
-                        command: id,
-                        args: Arc::new(args.unwrap_or(Value::Null)),
-                    }),
-                    _ => {
-                        self.push(src.err(
-                            Some(e.span()),
-                            &epath,
-                            format!("unknown command {c:?}"),
-                        ));
-                    }
-                }
+                out.push(ClickEntry {
+                    when,
+                    steps: Vec::new(),
+                    action: Some(a),
+                });
+                continue;
             }
-            out.push(ClickEntry { when, steps });
+            let steps = self
+                .steps(src, e.span(), &epath, entry.command, entry.args, entry.run)
+                .unwrap_or_default();
+            out.push(ClickEntry {
+                when,
+                steps,
+                action: None,
+            });
         }
         out
     }
@@ -1633,6 +2079,24 @@ impl<'k> Loader<'k> {
             } else {
                 let mut seen = BTreeSet::new();
                 let mut stack = vec![pack.root.clone()];
+                for (oid, o) in &pack.overlays {
+                    let path = format!("overlays.{oid}.node");
+                    let line = self.overlay_at.get(oid).copied();
+                    if !raw.contains_key(&o.node) {
+                        self.push(perr(&path, line, format!("no node {:?}", o.node)));
+                    } else if o.node == pack.root || pack.parent.contains_key(&o.node) {
+                        self.push(perr(
+                            &path,
+                            line,
+                            format!(
+                                "{:?} is the root or a child; an overlay's node stands alone",
+                                o.node
+                            ),
+                        ));
+                    } else {
+                        stack.push(o.node.clone());
+                    }
+                }
                 while let Some(n) = stack.pop() {
                     if !seen.insert(n.clone()) {
                         continue;
@@ -1647,7 +2111,9 @@ impl<'k> Loader<'k> {
                             file: n.file.clone(),
                             line: Some(n.line),
                             path: format!("node.{id}"),
-                            message: "not reachable from the root (or part of a cycle)".into(),
+                            message:
+                                "not reachable from the root or an overlay (or part of a cycle)"
+                                    .into(),
                         });
                     }
                 }
@@ -1672,6 +2138,7 @@ impl<'k> Loader<'k> {
                 ("style_active", &n.spec.style_active),
                 ("border_style", &n.spec.border_style),
                 ("border_style_active", &n.spec.border_style_active),
+                ("placeholder_style", &n.spec.placeholder_style),
             ] {
                 if let Some(s) = s
                     && !pack.themes.is_empty()
@@ -1699,17 +2166,39 @@ impl<'k> Loader<'k> {
                     format!("no icon {i:?} in pack.toml"),
                 ));
             }
-            if let Some(s) = &n.spec.source
-                && s != "workspace.files"
-            {
-                self.push(e(
-                    format!("node.{id}.source"),
-                    format!("unknown source {s:?} (workspace.files)"),
-                ));
+            if let Some(s) = &n.spec.source {
+                let ok = match n.spec.kind {
+                    NodeKind::List => s == "workspace.files" || s == PALETTE_SOURCE,
+                    _ => s == PALETTE_SOURCE,
+                };
+                if !ok {
+                    self.push(e(
+                        format!("node.{id}.source"),
+                        if n.spec.kind == NodeKind::List {
+                            format!("unknown source {s:?} (workspace.files, palette)")
+                        } else {
+                            format!("unknown source {s:?} (palette)")
+                        },
+                    ));
+                }
             }
             for (path, k) in &n.reads {
-                if !keys.contains(k) {
+                if let Some(a) = k.strip_prefix("key:") {
+                    if pack.action(a).is_none() {
+                        self.push(e(path.clone(), format!("no action {a:?} for {{{k}}}")));
+                    }
+                } else if !keys.contains(k) {
                     self.push(e(path.clone(), format!("unknown key {k}")));
+                }
+            }
+            for (i, c) in n.spec.on_click.iter().enumerate() {
+                if let Some(a) = &c.action
+                    && pack.action(a).is_none()
+                {
+                    self.push(e(
+                        format!("node.{id}.on_click[{i}].action"),
+                        format!("no action {a:?}"),
+                    ));
                 }
             }
         }
@@ -1769,7 +2258,24 @@ impl<'k> Loader<'k> {
                 }
             }
         }
+        let node_at: BTreeMap<String, (String, u32)> = raw
+            .iter()
+            .map(|(k, n)| (k.clone(), (n.file.clone(), n.line)))
+            .collect();
         pack.nodes = raw.into_iter().map(|(k, n)| (k, n.spec)).collect();
+        // Clicks naming an action run its steps.
+        let actions = pack.actions.clone();
+        for n in pack.nodes.values_mut() {
+            for c in &mut n.on_click {
+                if let Some(a) = c
+                    .action
+                    .as_deref()
+                    .and_then(|a| actions.iter().find(|(k, _)| k == a))
+                {
+                    c.steps = a.1.steps.to_vec();
+                }
+            }
+        }
         for (name, r) in &pack.regions {
             let path = format!("regions.{name}");
             if !pack.nodes.contains_key(&r.node) {
@@ -1796,20 +2302,110 @@ impl<'k> Loader<'k> {
                 }
             }
         }
+        self.check_inputs(pack, &node_at);
         keys
     }
 
+    /// Inputs sit in a region; the palette's input and list sit in one overlay.
+    fn check_inputs(&mut self, pack: &mut Pack, at: &BTreeMap<String, (String, u32)>) {
+        let e = |id: &str, m: String| {
+            let (file, line) = at.get(id).cloned().unwrap_or_default();
+            PackError {
+                file,
+                line: Some(line),
+                path: format!("node.{id}"),
+                message: m,
+            }
+        };
+        let mut errs = Vec::new();
+        let mut palette_inputs = Vec::new();
+        for (id, n) in &pack.nodes {
+            if n.kind == NodeKind::Input && pack.region_of(id).is_none() {
+                errs.push(e(
+                    id,
+                    "an input must be inside a region (it takes focus)".into(),
+                ));
+            }
+            if n.source.as_deref() == Some(PALETTE_SOURCE) {
+                if pack.overlay_of(id).is_none() {
+                    errs.push(e(id, "the palette lives in an overlay ([overlays])".into()));
+                }
+                if n.kind == NodeKind::Input {
+                    palette_inputs.push(id.clone());
+                }
+            }
+        }
+        let lists: Vec<&String> = pack
+            .nodes
+            .iter()
+            .filter(|(_, n)| {
+                n.kind == NodeKind::List && n.source.as_deref() == Some(PALETTE_SOURCE)
+            })
+            .map(|(k, _)| k)
+            .collect();
+        match palette_inputs.as_slice() {
+            [] => {
+                for l in lists {
+                    errs.push(e(l, "a palette list needs a palette input".into()));
+                }
+            }
+            [input] => {
+                let overlay = pack.overlay_of(input).map(str::to_owned);
+                for l in lists {
+                    if pack.overlay_of(l).map(str::to_owned) != overlay {
+                        errs.push(e(
+                            l,
+                            "must be in the same overlay as the palette input".into(),
+                        ));
+                    }
+                }
+                if let (Some(overlay), Some(region)) = (overlay, pack.region_of(input)) {
+                    pack.palette = Some(PaletteSpec {
+                        overlay,
+                        region: region.to_owned(),
+                        input: input.clone(),
+                    });
+                }
+            }
+            more => {
+                for i in more {
+                    errs.push(e(i, "a pack has at most one palette input".into()));
+                }
+            }
+        }
+        for err in errs {
+            self.push(err);
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
     fn keys_file(&mut self, text: &str, pack: &mut Pack, keys: &BTreeSet<String>) {
         let src = Src::new("keys.toml", text);
         let name = format!("ux:{}", pack.id);
-        match Layer::from_toml(
+        let spec = match expand_actions(text, pack) {
+            Ok(s) => s,
+            Err(e) => {
+                self.push(src.err(None, "", e));
+                return;
+            }
+        };
+        match Layer::from_spec(
             &name,
             Source::Extension {
                 id: pack.id.as_str().into(),
             },
-            text,
+            spec,
         ) {
-            Ok(layer) => pack.keys = layer,
+            Ok(mut layer) => {
+                // Action keys first: a later binding in keys.toml wins over them.
+                let expanded: Vec<_> = pack
+                    .actions
+                    .iter()
+                    .flat_map(|(_, a)| a.bindings())
+                    .collect();
+                layer.bindings.splice(0..0, expanded);
+                pack.keys = layer;
+            }
             Err(e) => {
                 self.push(src.err(None, "", e.to_string()));
                 return;
@@ -1847,6 +2443,17 @@ impl<'k> Loader<'k> {
                                 "command" => {
                                     if let Some(c) = v.get_ref().as_str() {
                                         check_cmd(self, c, v.span(), &path);
+                                    }
+                                }
+                                "action" => {
+                                    if let Some(a) = v.get_ref().as_str()
+                                        && pack.action(a).is_none()
+                                    {
+                                        self.push(src.err(
+                                            Some(v.span()),
+                                            &path,
+                                            format!("no action {a:?}"),
+                                        ));
                                     }
                                 }
                                 "run" => {
@@ -1897,6 +2504,50 @@ impl<'k> Loader<'k> {
             }
         }
     }
+}
+
+/// Reads keys.toml, turning `action = "<id>"` bindings into the action's steps.
+fn expand_actions(text: &str, pack: &Pack) -> Result<LayerSpec, String> {
+    let mut doc: toml::Table = toml::from_str(text).map_err(|e| e.message().to_owned())?;
+    if let Some(toml::Value::Array(binds)) = doc.get_mut("bind") {
+        for (i, b) in binds.iter_mut().enumerate() {
+            let Some(t) = b.as_table_mut() else {
+                continue;
+            };
+            let Some(a) = t.remove("action") else {
+                continue;
+            };
+            let id = a
+                .as_str()
+                .ok_or_else(|| format!("bind[{i}].action: expected a string"))?;
+            if t.contains_key("command") || t.contains_key("run") || t.contains_key("args") {
+                return Err(format!(
+                    "bind[{i}]: give action, command (with optional args) or run"
+                ));
+            }
+            let Some(action) = pack.action(id) else {
+                // Reported with its line by the caller.
+                t.insert("run".into(), toml::Value::Array(Vec::new()));
+                continue;
+            };
+            let mut run = Vec::new();
+            for step in action.steps.iter() {
+                let mut st = toml::Table::new();
+                st.insert(
+                    "command".into(),
+                    toml::Value::String(step.command.to_string()),
+                );
+                if !step.args.is_null() {
+                    let v = toml::Value::try_from(&*step.args).map_err(|e| e.to_string())?;
+                    st.insert("args".into(), v);
+                }
+                run.push(toml::Value::Table(st));
+            }
+            t.insert("run".into(), toml::Value::Array(run));
+        }
+    }
+    serde::Deserialize::deserialize(toml::Value::Table(doc))
+        .map_err(|e: toml::de::Error| e.message().to_owned())
 }
 
 fn is_in(path: &str, dir: &str) -> bool {

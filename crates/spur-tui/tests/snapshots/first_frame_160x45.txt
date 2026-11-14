@@ -1,4 +1,4 @@
-  ◆ spur / demo                                                                         CODE   ctrl+s  save   ctrl+k e  files   ctrl+k a  agent   ctrl+q  quit
+  ◆ spur / demo                                                     CODE   ctrl+s  save   ctrl+space  go to   ctrl+k e  files   ctrl+k a  agent   ctrl+q  quit
      ╭──────────────────────────╮ ╭───────────────────────────────────────────────────────────────────────────────╮ ╭─────────────────────────────────────────╮
   ≡  │ FILES                    │ │  main.rs                                                                Rust  │ │  PLAN                                   │
      │                          │ │                                                                               │ │                                         │

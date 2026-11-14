@@ -33,6 +33,21 @@ agent_fits = "client.cols >= 144"
 editor = { node = "code" }                       # the surface; mode = the view's own mode
 sidebar = { node = "sidebar", mode = "sidebar" }
 agent = { node = "agent", mode = "agent" }
+palette = { node = "palette", mode = "palette" }  # components/palette.toml
+
+[overlays]                 # trees drawn over the shell; one is open at a time
+# The palette: centred, 72 cells wide, 3 rows down, the shell behind it dimmed by
+# half. A press outside it runs on_dismiss.
+palette = { node = "palette", top = 3, width = 72, max_height = 20, dim = 50, on_dismiss = "palette_close" }
+
+[palette]
+prefixes = { ">" = "actions", ":" = "line" }  # typed first in an empty query
+
+[keys.display]             # how key hints print keys
+ctrl = "ctrl+"
+shift = "shift+"
+alt = "alt+"
+names = { Space = "space", CR = "enter", Esc = "esc", BS = "backspace", Del = "delete", Up = "up", Down = "down", Left = "left", Right = "right", PageUp = "page up", PageDown = "page down" }
 
 [icons]                    # one cell wide each; ascii is the fallback
 files = { glyph = "≡", ascii = "F" }
@@ -71,3 +86,20 @@ yaml = "YAML"
 "command.failed" = "{command}: {reason}"
 "list.more" = "{count} more"
 "list.unreadable" = "cannot read: {reason}"
+# The palette.
+"palette.scope.all" = "Go to"
+"palette.scope.files" = "Files"
+"palette.scope.recent" = "Recent"
+"palette.scope.actions" = "Actions"
+"palette.scope.line" = "Line"
+"palette.section.files" = "FILES"
+"palette.section.recent" = "RECENT"
+"palette.section.actions" = "ACTIONS"
+"palette.no_matches" = "No matches"
+"palette.no_folder" = "No folder open"
+"palette.indexing" = "Indexing… {count} files so far"
+"palette.capped" = "Showing the first {count} files"
+"palette.line.go" = "Go to line {line}"
+"palette.line.go_col" = "Go to line {line}, column {col}"
+"palette.line.last" = "Go to the last line ({line})"
+"palette.line.hint" = "Type a line number, or line:column"
