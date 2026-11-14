@@ -258,6 +258,9 @@ pub enum ServerMsg {
         /// Id of the node with keyboard focus.
         #[serde(default)]
         focus: Option<String>,
+        /// Trees drawn on top of `root`, in order (last on top).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        overlays: Vec<Overlay>,
     },
     /// The theme: every style name the server may send, resolved to a token. Sent
     /// before the first `ui` and again when the theme changes.
@@ -277,6 +280,19 @@ pub enum ServerMsg {
         node: String,
         /// Its window.
         list: ListView,
+    },
+    /// The text of one `input` node; sent when it changed, and again when the node
+    /// reappears in the tree.
+    Input {
+        /// The input node's id.
+        node: String,
+        /// Its text.
+        text: String,
+        /// Cursor, in graphemes from the start.
+        cursor: u32,
+        /// Other end of the selection, in graphemes; none without a selection.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        anchor: Option<u32>,
     },
     /// What one surface shows; sent only when it changed.
     Surface {
@@ -386,6 +402,9 @@ pub enum NodeKind {
     Icon,
     /// A scrolling list; its rows arrive in `list` messages.
     List,
+    /// A one-line text field; its text arrives in `input` messages
+    /// ([`Node::text`] is the placeholder shown while it is empty).
+    Input,
     /// A kind this version does not know; laid out as a `column` of its children.
     #[serde(other)]
     Unknown,
@@ -451,6 +470,26 @@ pub struct Node {
     /// Text: repeat the text to fill the node's width.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub repeat: bool,
+    /// Input: style name for the placeholder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placeholder_style: Option<String>,
+}
+
+/// A tree drawn on top of the shell, centred horizontally.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Overlay {
+    /// The tree; its height is its fit height, capped at `max_height`.
+    pub node: Node,
+    /// First row, in cells from the top of the window.
+    pub top: u32,
+    /// Width in cells.
+    pub width: u32,
+    /// Most rows it may take.
+    pub max_height: u32,
+    /// 0 to 100: how far every cell under the overlay is mixed toward the
+    /// background of [`tokens::OVERLAY_DIM`].
+    #[serde(default)]
+    pub dim: u8,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)] // serde passes a reference
@@ -480,6 +519,7 @@ impl Node {
             border_alt: None,
             border_style: None,
             repeat: false,
+            placeholder_style: None,
         }
     }
 }
@@ -523,6 +563,8 @@ pub enum ItemKind {
     More,
     /// A row that could not be read.
     Error,
+    /// A section header; not selectable.
+    Section,
     /// A kind this version does not know; drawn as an entry.
     #[serde(other)]
     Unknown,
@@ -553,6 +595,19 @@ pub struct Item {
     /// The document this client shows ([`tokens::LIST_ROW_CURRENT`]).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub current: bool,
+    /// Dim text after `text` ([`tokens::LIST_DETAIL`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    /// A key hint, drawn right-aligned ([`tokens::LIST_KEY`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    /// Grapheme ranges `[start, end)` of `text` that matched a query
+    /// ([`tokens::LIST_MATCH`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub matches: Vec<[u32; 2]>,
+    /// The same for `detail`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub detail_matches: Vec<[u32; 2]>,
 }
 
 /// The visible window of a list.
@@ -567,6 +622,15 @@ pub struct ListView {
     pub selected: Option<u32>,
     /// The visible items, in order.
     pub items: Vec<Item>,
+    /// Rises when the list's query or source changes, so a client can tell which
+    /// query the rows answer.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub generation: u64,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde passes a reference
+fn is_zero_u64(n: &u64) -> bool {
+    *n == 0
 }
 
 /// Fixed style names the protocol itself uses; every theme should define them.
@@ -599,6 +663,16 @@ pub mod tokens {
     pub const LIST_MORE: &str = "list.more";
     /// An `error` row.
     pub const LIST_ERROR: &str = "list.error";
+    /// A row's `detail` text.
+    pub const LIST_DETAIL: &str = "list.detail";
+    /// A row's key hint.
+    pub const LIST_KEY: &str = "list.key";
+    /// Matched graphemes of a row.
+    pub const LIST_MATCH: &str = "list.match";
+    /// A `section` row.
+    pub const LIST_SECTION: &str = "list.section";
+    /// What a dimming overlay mixes the cells under it toward (its background).
+    pub const OVERLAY_DIM: &str = "overlay.dim";
     /// Highlight names a surface's spans may carry.
     pub const SYNTAX: [&str; 7] = [
         "syntax.keyword",
@@ -610,7 +684,7 @@ pub mod tokens {
         "syntax.punctuation",
     ];
     /// Every fixed name.
-    pub const ALL: [&str; 21] = [
+    pub const ALL: [&str; 26] = [
         GUTTER,
         GUTTER_CURRENT,
         LINE_CURRENT,
@@ -625,6 +699,11 @@ pub mod tokens {
         LIST_ICON,
         LIST_MORE,
         LIST_ERROR,
+        LIST_DETAIL,
+        LIST_KEY,
+        LIST_MATCH,
+        LIST_SECTION,
+        OVERLAY_DIM,
         SYNTAX[0],
         SYNTAX[1],
         SYNTAX[2],
@@ -935,6 +1014,7 @@ mod tests {
                 ..Node::new("root", NodeKind::Column)
             },
             focus: Some("editor".into()),
+            overlays: Vec::new(),
         };
         let text = round_trip(&ui);
         assert!(text.contains(r#""kind":"column""#), "{text}");
@@ -1038,6 +1118,7 @@ mod tests {
         round_trip(&ServerMsg::Ui {
             root: card,
             focus: Some("main".into()),
+            overlays: Vec::new(),
         });
         let theme = ServerMsg::Theme {
             name: "graphite".into(),
@@ -1059,6 +1140,7 @@ mod tests {
         let list = ServerMsg::List {
             node: "files_list".into(),
             list: ListView {
+                generation: 0,
                 offset: 0,
                 total: 2,
                 selected: Some(1),
@@ -1097,7 +1179,7 @@ mod tests {
         assert_eq!(n, surface());
         let i: Item = serde_json::from_str(r#"{"id":"x","text":"x","kind":"symlink"}"#).unwrap();
         assert_eq!(i.kind, ItemKind::Unknown);
-        assert_eq!(tokens::ALL.len(), 21);
+        assert_eq!(tokens::ALL.len(), 26);
     }
 
     fn line(t: &str) -> Line {
@@ -1206,7 +1288,7 @@ mod tests {
                "height":{"type":"fit"}}]}}"#,
         )
         .unwrap();
-        let ServerMsg::Ui { root, focus } = m else {
+        let ServerMsg::Ui { root, focus, .. } = m else {
             panic!("not ui");
         };
         assert_eq!(focus, None);

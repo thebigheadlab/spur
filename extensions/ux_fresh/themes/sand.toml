@@ -71,6 +71,11 @@ comment = "#94897a"
 "list.icon" = { fg = "t3" }
 "list.more" = { fg = "dim", italic = true }
 "list.error" = { fg = "need" }
+"list.detail" = { fg = "t3" }
+"list.key" = { fg = "dim" }
+"list.match" = { fg = "accent_text", bold = true }
+"list.section" = { fg = "dim", bold = true }
+"overlay.dim" = { bg = "bg" }
 "syntax.keyword" = { fg = "kw" }
 "syntax.type" = { fg = "ty" }
 "syntax.function" = { fg = "fn" }

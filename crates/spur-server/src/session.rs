@@ -1424,6 +1424,7 @@ fn render_bare(c: &mut Client, ed: &Editor, others: &[(u64, ViewId)]) {
         msgs.push(ServerMsg::Ui {
             root: ui.clone(),
             focus: Some(SURFACE.into()),
+            overlays: Vec::new(),
         });
         c.last_ui = Some(ui);
     }
@@ -1464,6 +1465,7 @@ fn render_ux(c: &mut Client, ux: &mut Ux, ed: &Editor, ctx: &Context, others: &[
         msgs.push(ServerMsg::Ui {
             root: tree.0.clone(),
             focus: Some(tree.1.clone()),
+            overlays: Vec::new(),
         });
         ui.sent_ui = Some(tree);
     }

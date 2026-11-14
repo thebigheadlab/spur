@@ -390,7 +390,7 @@ impl App {
             ServerMsg::Theme { tokens, .. } => {
                 self.screen.palette = Palette::new(&tokens, self.truecolor);
             }
-            ServerMsg::Ui { root, focus } => {
+            ServerMsg::Ui { root, focus, .. } => {
                 let mut ids = std::collections::HashSet::new();
                 collect_ids(&root, &mut ids);
                 self.screen.lists.retain(|k, _| ids.contains(k.as_str()));

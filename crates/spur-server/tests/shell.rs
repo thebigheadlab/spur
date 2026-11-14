@@ -100,7 +100,7 @@ impl Client {
                 self.theme = Some(name.clone());
                 self.app_bg = tokens.get("app").and_then(|t| t.bg.clone());
             }
-            ServerMsg::Ui { root, focus } => {
+            ServerMsg::Ui { root, focus, .. } => {
                 self.lists.retain(|k, _| find(root, k).is_some());
                 self.root = Some(root.clone());
                 self.focus.clone_from(focus);
