@@ -402,6 +402,11 @@ fn paint_list(g: &mut Grid, r: Rect, l: &ListView, pal: &Palette, focused: bool,
         if let Some(s) = get(tokens::LIST_ROW) {
             g.paint(r.x, y, r.w, 1, s);
         }
+        if item.current
+            && let Some(s) = get(tokens::LIST_ROW_CURRENT)
+        {
+            g.paint(r.x, y, r.w, 1, s);
+        }
         if l.selected == Some(index) {
             let name = if focused {
                 tokens::LIST_ROW_SELECTED_FOCUSED
@@ -703,6 +708,46 @@ mod tests {
             ..Node::new("root", NodeKind::Column)
         };
         assert_eq!(draw(root, 5, 1, false)[0], "-=-=-");
+    }
+
+    #[test]
+    fn the_current_row_takes_its_token() {
+        let mut tokens = std::collections::BTreeMap::new();
+        tokens.insert(
+            tokens::LIST_ROW_CURRENT.to_owned(),
+            spur_rpc::Token {
+                bg: Some("#ff0000".into()),
+                ..spur_rpc::Token::default()
+            },
+        );
+        let list = Node::new("l", NodeKind::List);
+        let mut screen = Screen {
+            root: Some(list),
+            palette: Palette::new(&tokens, true),
+            ..Screen::default()
+        };
+        screen.lists.insert(
+            "l".into(),
+            ListView {
+                items: vec![
+                    spur_rpc::Item {
+                        id: "a".into(),
+                        text: "a".into(),
+                        ..spur_rpc::Item::default()
+                    },
+                    spur_rpc::Item {
+                        id: "b".into(),
+                        text: "b".into(),
+                        current: true,
+                        ..spur_rpc::Item::default()
+                    },
+                ],
+                ..ListView::default()
+            },
+        );
+        let f = paint(&mut screen, 3, 2);
+        assert_eq!(f.grid.cell(0, 0).bg, None);
+        assert!(f.grid.cell(0, 1).bg.is_some());
     }
 
     #[test]

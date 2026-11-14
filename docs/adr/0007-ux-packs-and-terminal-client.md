@@ -52,6 +52,7 @@ Protocol v0 is unreleased, so it changes in place:
 
 - Nodes gain `style`, `padding`, `gap`, `clickable`, `alt` (an ASCII fallback for an icon glyph), `border`, `border_alt` and `border_style` (six glyphs, their ASCII set and the line's style), `repeat` (text), surface options (`gutter`, `current_line`, `tab_width`), and the kinds `card`, `text`, `icon` and `list`.
 - Server messages: `theme {tokens}` (sent before the first `ui` and after any change) and `list {node, view}`.
+- List items carry `current` when the row is the document the client shows; the client paints it with the fixed token `list.row.current` (under any selection), so the open file stays visible when the selection moves or is hidden.
 - `mouse` gains `item` (a list row's id); `layout` reports list nodes as well as surfaces.
 - The `ui` message's `focus` is the focused region's node id. The client shows the terminal cursor only when focus is on a surface, and draws the selected row with the focused token only inside the focused region.
 - A surface is sent in full when its node is new in the tree, its size changed, it shows another document, or the client sent `refresh`. A new `ui` alone no longer forces a full surface.

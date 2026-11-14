@@ -1410,12 +1410,18 @@ fn render_ux(c: &mut Client, ux: &mut Ux, ed: &Editor, ctx: &Context, others: &[
     }
     // A list that left the tree is sent again in full when it comes back.
     ui.sent_lists.retain(|k, _| built.lists.contains(k));
+    let current = ed
+        .views
+        .get(&c.active)
+        .and_then(|v| ed.docs.get(&v.doc))
+        .and_then(|d| d.path.as_deref())
+        .and_then(|p| ux.files.rel(p));
     for id in &built.lists {
         let height = ui.list_rows.get(id).copied().unwrap_or(hint);
         let Some(t) = ui.trees.get_mut(id) else {
             continue;
         };
-        let window = t.window(&mut ux.files, height, &ux.pack);
+        let window = t.window(&mut ux.files, height, &ux.pack, current.as_deref());
         if ui.sent_lists.get(id) != Some(&window) {
             msgs.push(ServerMsg::List {
                 node: id.clone(),

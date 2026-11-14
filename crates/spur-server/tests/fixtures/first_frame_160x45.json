@@ -55,6 +55,9 @@
       "list.row": {
         "fg": "#a4a7b0"
       },
+      "list.row.current": {
+        "fg": "#a4a7b0"
+      },
       "list.row.selected": {
         "bg": "#202227"
       },
@@ -710,6 +713,7 @@
         },
         {
           "alt": " ",
+          "current": true,
           "depth": 1,
           "glyph": "·",
           "id": "src/main.rs",

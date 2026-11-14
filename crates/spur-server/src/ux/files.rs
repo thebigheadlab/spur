@@ -326,8 +326,15 @@ impl Tree {
         }
     }
 
-    /// The window of `height` rows, offset clamped.
-    pub fn window(&mut self, files: &mut Files, height: u32, pack: &Pack) -> ListView {
+    /// The window of `height` rows, offset clamped; `current` is the row id of
+    /// the document the client shows.
+    pub fn window(
+        &mut self,
+        files: &mut Files,
+        height: u32,
+        pack: &Pack,
+        current: Option<&str>,
+    ) -> ListView {
         let ascii = pack.ascii_icons;
         let sel = {
             self.rows(files);
@@ -367,6 +374,7 @@ impl Tree {
                     depth: r.depth,
                     kind: r.kind,
                     open: r.open,
+                    current: r.kind == ItemKind::Entry && current == Some(r.id.as_str()),
                 }
             })
             .collect();

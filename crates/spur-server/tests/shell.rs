@@ -512,6 +512,7 @@ fn the_files_tree_moves_expands_and_opens() {
     let mut c = Client::attach(&s, 160, 30);
     assert_eq!(c.selected(), "notes.txt");
     assert_eq!(c.item_ids(), ["docs", "src", "notes.txt", "README.md"]);
+    assert!(c.files().items[2].current);
     c.keys("<C-S-e>");
     c.keys("<Up>");
     assert_eq!(c.selected(), "src");
@@ -555,6 +556,14 @@ fn the_files_tree_moves_expands_and_opens() {
     c.keys("<CR>");
     assert_eq!(c.focus(), "code");
     assert_eq!(c.node("code_title").text.as_deref(), Some("main.rs"));
+    let current: Vec<&str> = c
+        .files()
+        .items
+        .iter()
+        .filter(|i| i.current)
+        .map(|i| i.id.as_str())
+        .collect();
+    assert_eq!(current, ["src/main.rs"], "the open file's row is marked");
     c.keys("k");
     assert_eq!(c.text().lines().next(), Some("kfn main() {}"));
     let main = std::fs::read_to_string(root.join("src/main.rs")).unwrap();

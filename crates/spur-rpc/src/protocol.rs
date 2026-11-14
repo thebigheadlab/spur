@@ -550,6 +550,9 @@ pub struct Item {
     /// `dir`: expanded.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub open: bool,
+    /// The document this client shows ([`tokens::LIST_ROW_CURRENT`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub current: bool,
 }
 
 /// The visible window of a list.
@@ -584,6 +587,8 @@ pub mod tokens {
     pub const LIST_ROW: &str = "list.row";
     /// The selected row of a list outside the focused node.
     pub const LIST_ROW_SELECTED: &str = "list.row.selected";
+    /// The row of the document the client shows (under a selection).
+    pub const LIST_ROW_CURRENT: &str = "list.row.current";
     /// The selected row of a list inside the focused node.
     pub const LIST_ROW_SELECTED_FOCUSED: &str = "list.row.selected.focused";
     /// A `dir` row's text.
@@ -605,7 +610,7 @@ pub mod tokens {
         "syntax.punctuation",
     ];
     /// Every fixed name.
-    pub const ALL: [&str; 20] = [
+    pub const ALL: [&str; 21] = [
         GUTTER,
         GUTTER_CURRENT,
         LINE_CURRENT,
@@ -614,6 +619,7 @@ pub mod tokens {
         CURSOR_PEER,
         LIST_ROW,
         LIST_ROW_SELECTED,
+        LIST_ROW_CURRENT,
         LIST_ROW_SELECTED_FOCUSED,
         LIST_DIR,
         LIST_ICON,
@@ -1091,7 +1097,7 @@ mod tests {
         assert_eq!(n, surface());
         let i: Item = serde_json::from_str(r#"{"id":"x","text":"x","kind":"symlink"}"#).unwrap();
         assert_eq!(i.kind, ItemKind::Unknown);
-        assert_eq!(tokens::ALL.len(), 20);
+        assert_eq!(tokens::ALL.len(), 21);
     }
 
     fn line(t: &str) -> Line {
