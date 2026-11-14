@@ -3,6 +3,7 @@ dark = false
 
 [palette]
 bg = "#f4efe6"
+scrim = "#6b6b70"     # what the shell fades toward under an overlay
 card = "#fffdf8"       # inside a card
 field = "#f4efe6"      # the ask box (the app background)
 soft = "#efe8dc"
@@ -82,7 +83,7 @@ comment = "#94897a"
 "list.key" = { fg = "dim" }
 "list.match" = { fg = "accent_text", bold = true }
 "list.section" = { fg = "dim", bold = true }
-"overlay.dim" = { bg = "bg" }
+"overlay.dim" = { bg = "scrim" }
 "syntax.keyword" = { fg = "kw" }
 "syntax.type" = { fg = "ty" }
 "syntax.function" = { fg = "fn" }

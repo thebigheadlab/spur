@@ -261,7 +261,14 @@ pub fn paint(screen: &mut Screen, w: u32, h: u32) -> Frame {
         return frame;
     };
     let focus = screen.focus.clone().unwrap_or_default();
-    paint_tree(&mut frame, screen, &root, Rect { x: 0, y: 0, w, h }, &focus);
+    paint_tree(
+        &mut frame,
+        screen,
+        &root,
+        Rect { x: 0, y: 0, w, h },
+        &focus,
+        false,
+    );
     screen.root = Some(root);
     let overlays = std::mem::take(&mut screen.overlays);
     for o in &overlays {
@@ -269,7 +276,8 @@ pub fn paint(screen: &mut Screen, w: u32, h: u32) -> Frame {
         frame.grid.dim(o.dim, target);
         // Presses on the dimmed tree reach the server, which closes the overlay.
         let r = overlay_rect(o, screen, w, h);
-        paint_tree(&mut frame, screen, &o.node, r, &focus);
+        frame.grid.clear(r.x, r.y, r.w, r.h);
+        paint_tree(&mut frame, screen, &o.node, r, &focus, true);
     }
     screen.overlays = overlays;
     frame
@@ -326,12 +334,25 @@ fn fit_h(n: &Node, screen: &Screen) -> u32 {
     }
 }
 
-/// Lays out and draws one tree in `area`.
-fn paint_tree(frame: &mut Frame, screen: &mut Screen, root: &Node, area: Rect, focus: &str) {
+/// Lays out and draws one tree in `area`. Focus inside an overlay makes the whole
+/// overlay focused (its list shows the selection while its input has the cursor).
+fn paint_tree(
+    frame: &mut Frame,
+    screen: &mut Screen,
+    root: &Node,
+    area: Rect,
+    focus: &str,
+    overlay: bool,
+) {
     let placed = layout(root, area);
     // Nodes inside the focused node, by id.
     let mut focused_ids = std::collections::HashSet::new();
-    collect_focused(root, focus, false, &mut focused_ids);
+    let scope = if overlay && placed.iter().any(|p| p.node.id == focus) {
+        root.id.as_str()
+    } else {
+        focus
+    };
+    collect_focused(root, scope, false, &mut focused_ids);
     for p in &placed {
         let n = p.node;
         let r = p.rect;
@@ -970,6 +991,10 @@ mod tests {
         let mut tokens = std::collections::BTreeMap::new();
         tokens.insert("app".to_owned(), tok(Some("#ffffff"), Some("#646464")));
         tokens.insert(tokens::OVERLAY_DIM.to_owned(), tok(None, Some("#000000")));
+        tokens.insert(
+            tokens::LIST_ROW_SELECTED_FOCUSED.to_owned(),
+            tok(None, Some("#0000ff")),
+        );
         let root = Node {
             style: Some("app".into()),
             children: vec![text("t", "behind")],
@@ -1008,10 +1033,16 @@ mod tests {
                         ..spur_rpc::Item::default()
                     })
                     .collect(),
+                selected: Some(0),
                 ..ListView::default()
             },
         );
         let f = paint(&mut screen, 20, 8);
+        // The input has the focus, so the overlay's list shows its selection.
+        assert_eq!(
+            f.grid.cell(5, 2).bg,
+            Some(crate::color::Color::Rgb(0, 0, 255))
+        );
         let lines: Vec<String> = f.grid.lines().iter().map(|l| format!("{l:<20}")).collect();
         // Centred, 10 wide, at row 1; 3 rows: the input and two list rows.
         assert_eq!(&lines[1][5..15], "type      ");

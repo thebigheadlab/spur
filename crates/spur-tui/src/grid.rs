@@ -82,6 +82,16 @@ impl Grid {
         }
     }
 
+    /// Blanks a rectangle: spaces, no colours or attributes.
+    pub fn clear(&mut self, x: u32, y: u32, w: u32, h: u32) {
+        for yy in y..(y + h).min(self.h) {
+            for xx in x..(x + w).min(self.w) {
+                let i = self.at(xx, yy);
+                self.cells[i] = Cell::default();
+            }
+        }
+    }
+
     /// Mixes every cell `pct`% toward `target` (an overlay's dim). Without true
     /// colour the background becomes `target` and the text is marked dim.
     pub fn dim(&mut self, pct: u8, target: Option<Color>) {
