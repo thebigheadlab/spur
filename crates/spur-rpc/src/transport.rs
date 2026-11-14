@@ -134,9 +134,10 @@ impl<S, R> Endpoint<S, R> {
         }
     }
 
-    /// Splits into the bounded batch sender and the receiver, for a server that serves
-    /// the endpoint itself (messages already received but not yet read are dropped).
-    #[doc(hidden)]
+    /// Splits into the bounded batch sender and the batch receiver, so one thread can
+    /// block on receiving while another sends (a terminal client forwards the receiver
+    /// into its own event channel). Split before receiving: messages already received
+    /// but not yet read are dropped.
     pub fn split(self) -> (SyncSender<Vec<S>>, Receiver<Vec<R>>) {
         (self.tx, self.rx)
     }

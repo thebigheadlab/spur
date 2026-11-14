@@ -28,7 +28,8 @@ pub use core::{
     RegisterError, RewriteFn, Target,
 };
 pub use name::{
-    CORE_NAMESPACES, CommandId, EventName, MAX_NAME_LEN, NameError, RESERVED_EVENT_FAMILIES, events,
+    CORE_NAMESPACES, CommandId, EventName, MAX_NAME_LEN, NameError, RESERVED_EVENT_FAMILIES,
+    check_name, events,
 };
 pub use when::{ParseError, When};
 

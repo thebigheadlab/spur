@@ -111,6 +111,9 @@ pub struct Register {
     pub linewise: bool,
 }
 
+/// The names [`Editor::view_keys`] writes, in order.
+pub const VIEW_KEYS: [&str; 3] = ["editor.mode", "buffer.modified", "buffer.has_path"];
+
 /// The session state used as `S` in [`crate::Core`].
 pub struct Editor {
     /// Open documents.
@@ -225,9 +228,11 @@ impl Editor {
         true
     }
 
-    /// Context keys that describe `view`: its mode and its document's state. The core
-    /// publishes them for the focused view; a server publishes them per client.
+    /// Context keys that describe `view` ([`VIEW_KEYS`]): its mode and its document's
+    /// state. The core publishes them for the focused view; a server publishes them
+    /// per client.
     pub fn view_keys(&self, view: ViewId) -> Option<[(&'static str, CtxValue); 3]> {
+        // Keep in step with VIEW_KEYS.
         let v = self.views.get(&view)?;
         let doc = self.docs.get(&v.doc)?;
         Some([
@@ -486,6 +491,14 @@ fn take_cols<'a>(
 #[cfg(test)]
 mod tests {
     use super::take_cols;
+
+    #[test]
+    fn view_keys_match_the_list() {
+        let ed = super::Editor::default();
+        let keys = ed.view_keys(ed.focus).unwrap();
+        let names: Vec<_> = keys.iter().map(|(k, _)| *k).collect();
+        assert_eq!(names, super::VIEW_KEYS);
+    }
 
     #[test]
     fn a_cut_is_seen_across_chunk_boundaries() {

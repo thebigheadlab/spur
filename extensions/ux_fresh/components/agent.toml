@@ -1,0 +1,171 @@
+# The agent column (locked shape: plan on top, project chat with four tabs, ask box).
+# Two cards: the plan, and the chat with its tabs in the first row and the ask box
+# in the last. Only the chat card takes the accent outline when the column has focus.
+# Agents arrive in slice 5; until then each tab shows an empty state.
+
+[node.agent]
+kind = "column"
+width = 43
+when = "cond.agent_shown"
+children = ["plan", "chat"]
+
+[node.plan]
+kind = "card"
+height = "fit"
+style = "card"
+border = "round"
+border_style = "edge"
+padding = [0, 2]
+gap = 1
+children = ["plan_label", "plan_empty"]
+
+[node.plan_label]
+kind = "text"
+text = "PLAN"
+style = "label"
+
+[node.plan_empty]
+kind = "column"
+height = "fit"
+children = ["plan_empty_title", "plan_empty_text"]
+
+[node.plan_empty_title]
+kind = "text"
+text = "No plan yet"
+style = "empty.title"
+
+[node.plan_empty_text]
+kind = "text"
+text = "Steps show here as an agent works."
+style = "empty"
+
+[node.chat]
+kind = "card"
+style = "card"
+border = "round"
+border_style = "edge"
+border_style_active = "edge.focus"
+active = "ui.focus == agent"
+padding = [0, 1]
+children = ["agent_tabs", "chat_view", "threads_view", "library_view", "memory_view", "ask"]
+
+[node.agent_tabs]
+kind = "row"
+height = 1
+gap = 1
+children = ["tab_chat", "tab_threads", "tab_library", "tab_memory"]
+
+[node.tab_chat]
+kind = "text"
+text = " Chat "
+style = "tab"
+style_active = "tab.active"
+active = "ui.agent_tab == chat"
+on_click = [{ command = "ui.set", args = { key = "ui.agent_tab", value = "chat" } }]
+
+[node.tab_threads]
+kind = "text"
+text = " Threads "
+style = "tab"
+style_active = "tab.active"
+active = "ui.agent_tab == threads"
+on_click = [{ command = "ui.set", args = { key = "ui.agent_tab", value = "threads" } }]
+
+[node.tab_library]
+kind = "text"
+text = " Library "
+style = "tab"
+style_active = "tab.active"
+active = "ui.agent_tab == library"
+on_click = [{ command = "ui.set", args = { key = "ui.agent_tab", value = "library" } }]
+
+[node.tab_memory]
+kind = "text"
+text = " Memory "
+style = "tab"
+style_active = "tab.active"
+active = "ui.agent_tab == memory"
+on_click = [{ command = "ui.set", args = { key = "ui.agent_tab", value = "memory" } }]
+
+[node.chat_view]
+kind = "column"
+padding = [1, 1]
+when = "ui.agent_tab == chat"
+children = ["chat_empty_title", "chat_empty_text"]
+
+[node.chat_empty_title]
+kind = "text"
+text = "No messages yet"
+style = "empty.title"
+
+[node.chat_empty_text]
+kind = "text"
+text = "Agent replies show here."
+style = "empty"
+
+[node.threads_view]
+kind = "column"
+padding = [1, 1]
+when = "ui.agent_tab == threads"
+children = ["threads_empty_title", "threads_empty_text"]
+
+[node.threads_empty_title]
+kind = "text"
+text = "No threads yet"
+style = "empty.title"
+
+[node.threads_empty_text]
+kind = "text"
+text = "Each task an agent runs lives here."
+style = "empty"
+
+[node.library_view]
+kind = "column"
+padding = [1, 1]
+when = "ui.agent_tab == library"
+children = ["library_empty_title", "library_empty_text"]
+
+[node.library_empty_title]
+kind = "text"
+text = "No files yet"
+style = "empty.title"
+
+[node.library_empty_text]
+kind = "text"
+text = "Files that agents make are kept here."
+style = "empty"
+
+[node.memory_view]
+kind = "column"
+padding = [1, 1]
+when = "ui.agent_tab == memory"
+children = ["memory_empty_title", "memory_empty_text"]
+
+[node.memory_empty_title]
+kind = "text"
+text = "Nothing remembered yet"
+style = "empty.title"
+
+[node.memory_empty_text]
+kind = "text"
+text = "Notes agents keep about this project."
+style = "empty"
+
+# The ask box: the last row of the chat card, so nothing floats under it.
+[node.ask]
+kind = "row"
+height = 3
+padding = [1, 2]
+gap = 1
+style = "field"
+children = ["ask_prompt", "ask_text"]
+
+[node.ask_prompt]
+kind = "icon"
+icon = "prompt"
+style = "prompt"
+
+[node.ask_text]
+kind = "text"
+text = "Chat input is coming soon"
+style = "input"

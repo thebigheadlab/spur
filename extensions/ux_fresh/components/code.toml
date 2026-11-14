@@ -1,0 +1,44 @@
+# The code card: a title row (unsaved dot, file name, language) over the code. The
+# dot comes first so it is still there when a narrow card cuts the row.
+# The file name and the language are shown here and nowhere else.
+
+[node.main]
+kind = "card"
+style = "card"
+border = "round"
+border_style = "edge"
+border_style_active = "edge.focus"
+active = "ui.focus == editor"
+padding = [0, 1]
+gap = 1
+children = ["code_head", "code"]
+
+[node.code_head]
+kind = "row"
+height = 1
+gap = 1
+children = ["code_modified", "code_title", "code_head_space", "code_lang"]
+
+[node.code_modified]
+kind = "icon"
+icon = "modified"
+style = "modified"
+when = "buffer.modified"
+
+[node.code_title]
+kind = "text"
+text = " {doc.name} "
+style = "title"
+
+[node.code_head_space]
+kind = "spacer"
+
+[node.code_lang]
+kind = "text"
+text = "{doc.language} "
+style = "subtitle"
+
+[node.code]
+kind = "surface"
+gutter = true
+current_line = true

@@ -1,0 +1,448 @@
+# ux_fresh default keys (locked keys sheet, limited to commands that exist in slice 2).
+# Format: spur-keymap layer. Within this file a LATER binding wins over an earlier
+# one for the same keys when its `when` holds, so each key lists its plain action
+# first and its special cases after.
+#
+# Modes: "insert" is the code view's mode; "sidebar" and "agent" are the modes of
+# those focused regions (pack.toml [regions]).
+
+[mode.insert]
+fallback = "editor.insert_text"   # unbound printable keys type
+
+# --- Code: moving and editing ---
+
+[[bind]]
+mode = "insert"
+keys = "<Left>"
+command = "editor.move_left"
+
+[[bind]]
+mode = "insert"
+keys = "<Right>"
+command = "editor.move_right"
+
+[[bind]]
+mode = "insert"
+keys = "<Up>"
+command = "editor.move_up"
+
+[[bind]]
+mode = "insert"
+keys = "<Down>"
+command = "editor.move_down"
+
+[[bind]]
+mode = "insert"
+keys = "<Home>"
+command = "editor.move_first_nonblank"
+
+[[bind]]
+mode = "insert"
+keys = "<End>"
+command = "editor.move_line_end"
+
+[[bind]]
+mode = "insert"
+keys = "<C-Home>"
+command = "editor.move_doc_start"
+
+[[bind]]
+mode = "insert"
+keys = "<C-End>"
+command = "editor.move_doc_end"
+
+[[bind]]
+mode = "insert"
+keys = "<C-Left>"
+command = "editor.move_word_prev"
+
+[[bind]]
+mode = "insert"
+keys = "<C-Right>"
+command = "editor.move_word_next"
+
+[[bind]]
+mode = "insert"
+keys = "<CR>"
+command = "editor.insert_newline"
+
+[[bind]]
+mode = "insert"
+keys = "<BS>"
+command = "editor.delete_backward"
+
+[[bind]]
+mode = "insert"
+keys = "<Del>"
+command = "editor.delete_forward"
+
+[[bind]]
+mode = "insert"
+keys = "<Tab>"
+command = "editor.insert_text"
+args = { text = "    " }
+
+[[bind]]
+mode = "insert"
+keys = "<C-s>"
+command = "buffer.save"
+
+[[bind]]
+mode = "insert"
+keys = "<C-z>"
+command = "editor.undo"
+
+[[bind]]
+mode = "insert"
+keys = "<C-S-z>"
+command = "editor.redo"
+
+[[bind]]
+mode = "insert"
+keys = "<C-y>"
+command = "editor.redo"
+
+
+# --- Shell: everywhere ---
+
+[[bind]]
+mode = "insert sidebar agent"
+keys = "<C-b>"
+run = [
+  { command = "ui.set", args = { key = "ui.sidebar_open", value = true } },
+  { command = "ui.focus", args = { region = "sidebar" } },
+]
+
+[[bind]]
+mode = "insert sidebar agent"
+keys = "<C-b>"
+when = "cond.sidebar_fits && !ui.sidebar_open"
+command = "ui.set"
+args = { key = "ui.sidebar_open", value = true }
+
+[[bind]]
+mode = "insert sidebar agent"
+keys = "<C-b>"
+when = "cond.sidebar_shown"
+command = "ui.set"
+args = { key = "ui.sidebar_open", value = false }
+
+[[bind]]
+mode = "insert sidebar agent"
+keys = "<C-A-b>"
+run = [
+  { command = "ui.set", args = { key = "ui.agent_open", value = true } },
+  { command = "ui.focus", args = { region = "agent" } },
+]
+
+[[bind]]
+mode = "insert sidebar agent"
+keys = "<C-A-b>"
+when = "cond.agent_fits && !ui.agent_open"
+command = "ui.set"
+args = { key = "ui.agent_open", value = true }
+
+[[bind]]
+mode = "insert sidebar agent"
+keys = "<C-A-b>"
+when = "cond.agent_shown"
+command = "ui.set"
+args = { key = "ui.agent_open", value = false }
+
+# Agent column. Shows and focuses it; again while focused returns to the code.
+# Hiding it is <C-A-b>, above.
+
+[[bind]]
+mode = "insert sidebar agent"
+keys = "<C-k>a"
+run = [
+  { command = "ui.set", args = { key = "ui.agent_open", value = true } },
+  { command = "ui.focus", args = { region = "agent" } },
+]
+
+[[bind]]
+mode = "insert sidebar agent"
+keys = "<C-k>a"
+when = "ui.focus == agent"
+command = "ui.focus"
+args = { region = "editor" }
+
+
+# Sidebar: files. Shows and focuses it; again while focused returns to the code.
+
+[[bind]]
+mode = "insert sidebar agent"
+keys = "<C-S-e>"
+run = [
+  { command = "ui.set", args = { key = "ui.sidebar", value = "files" } },
+  { command = "ui.set", args = { key = "ui.sidebar_open", value = true } },
+  { command = "ui.focus", args = { region = "sidebar" } },
+]
+
+[[bind]]
+mode = "insert sidebar agent"
+keys = "<C-S-e>"
+when = "ui.focus == sidebar && ui.sidebar == files"
+command = "ui.focus"
+args = { region = "editor" }
+
+[[bind]]
+mode = "insert sidebar agent"
+keys = "<A-1>"
+run = [
+  { command = "ui.set", args = { key = "ui.sidebar", value = "files" } },
+  { command = "ui.set", args = { key = "ui.sidebar_open", value = true } },
+  { command = "ui.focus", args = { region = "sidebar" } },
+]
+
+[[bind]]
+mode = "insert sidebar agent"
+keys = "<A-1>"
+when = "ui.focus == sidebar && ui.sidebar == files"
+command = "ui.focus"
+args = { region = "editor" }
+
+[[bind]]
+mode = "insert sidebar agent"
+keys = "<C-k>e"
+run = [
+  { command = "ui.set", args = { key = "ui.sidebar", value = "files" } },
+  { command = "ui.set", args = { key = "ui.sidebar_open", value = true } },
+  { command = "ui.focus", args = { region = "sidebar" } },
+]
+
+[[bind]]
+mode = "insert sidebar agent"
+keys = "<C-k>e"
+when = "ui.focus == sidebar && ui.sidebar == files"
+command = "ui.focus"
+args = { region = "editor" }
+
+
+# Sidebar: sessions. Shows and focuses it; again while focused returns to the code.
+
+[[bind]]
+mode = "insert sidebar agent"
+keys = "<C-S-j>"
+run = [
+  { command = "ui.set", args = { key = "ui.sidebar", value = "sessions" } },
+  { command = "ui.set", args = { key = "ui.sidebar_open", value = true } },
+  { command = "ui.focus", args = { region = "sidebar" } },
+]
+
+[[bind]]
+mode = "insert sidebar agent"
+keys = "<C-S-j>"
+when = "ui.focus == sidebar && ui.sidebar == sessions"
+command = "ui.focus"
+args = { region = "editor" }
+
+[[bind]]
+mode = "insert sidebar agent"
+keys = "<A-2>"
+run = [
+  { command = "ui.set", args = { key = "ui.sidebar", value = "sessions" } },
+  { command = "ui.set", args = { key = "ui.sidebar_open", value = true } },
+  { command = "ui.focus", args = { region = "sidebar" } },
+]
+
+[[bind]]
+mode = "insert sidebar agent"
+keys = "<A-2>"
+when = "ui.focus == sidebar && ui.sidebar == sessions"
+command = "ui.focus"
+args = { region = "editor" }
+
+[[bind]]
+mode = "insert sidebar agent"
+keys = "<C-k>j"
+run = [
+  { command = "ui.set", args = { key = "ui.sidebar", value = "sessions" } },
+  { command = "ui.set", args = { key = "ui.sidebar_open", value = true } },
+  { command = "ui.focus", args = { region = "sidebar" } },
+]
+
+[[bind]]
+mode = "insert sidebar agent"
+keys = "<C-k>j"
+when = "ui.focus == sidebar && ui.sidebar == sessions"
+command = "ui.focus"
+args = { region = "editor" }
+
+
+# Sidebar: search. Shows and focuses it; again while focused returns to the code.
+
+[[bind]]
+mode = "insert sidebar agent"
+keys = "<C-S-f>"
+run = [
+  { command = "ui.set", args = { key = "ui.sidebar", value = "search" } },
+  { command = "ui.set", args = { key = "ui.sidebar_open", value = true } },
+  { command = "ui.focus", args = { region = "sidebar" } },
+]
+
+[[bind]]
+mode = "insert sidebar agent"
+keys = "<C-S-f>"
+when = "ui.focus == sidebar && ui.sidebar == search"
+command = "ui.focus"
+args = { region = "editor" }
+
+[[bind]]
+mode = "insert sidebar agent"
+keys = "<A-3>"
+run = [
+  { command = "ui.set", args = { key = "ui.sidebar", value = "search" } },
+  { command = "ui.set", args = { key = "ui.sidebar_open", value = true } },
+  { command = "ui.focus", args = { region = "sidebar" } },
+]
+
+[[bind]]
+mode = "insert sidebar agent"
+keys = "<A-3>"
+when = "ui.focus == sidebar && ui.sidebar == search"
+command = "ui.focus"
+args = { region = "editor" }
+
+[[bind]]
+mode = "insert sidebar agent"
+keys = "<C-k>f"
+run = [
+  { command = "ui.set", args = { key = "ui.sidebar", value = "search" } },
+  { command = "ui.set", args = { key = "ui.sidebar_open", value = true } },
+  { command = "ui.focus", args = { region = "sidebar" } },
+]
+
+[[bind]]
+mode = "insert sidebar agent"
+keys = "<C-k>f"
+when = "ui.focus == sidebar && ui.sidebar == search"
+command = "ui.focus"
+args = { region = "editor" }
+
+
+# Sidebar: git. Shows and focuses it; again while focused returns to the code.
+
+[[bind]]
+mode = "insert sidebar agent"
+keys = "<C-S-g>"
+run = [
+  { command = "ui.set", args = { key = "ui.sidebar", value = "git" } },
+  { command = "ui.set", args = { key = "ui.sidebar_open", value = true } },
+  { command = "ui.focus", args = { region = "sidebar" } },
+]
+
+[[bind]]
+mode = "insert sidebar agent"
+keys = "<C-S-g>"
+when = "ui.focus == sidebar && ui.sidebar == git"
+command = "ui.focus"
+args = { region = "editor" }
+
+[[bind]]
+mode = "insert sidebar agent"
+keys = "<A-4>"
+run = [
+  { command = "ui.set", args = { key = "ui.sidebar", value = "git" } },
+  { command = "ui.set", args = { key = "ui.sidebar_open", value = true } },
+  { command = "ui.focus", args = { region = "sidebar" } },
+]
+
+[[bind]]
+mode = "insert sidebar agent"
+keys = "<A-4>"
+when = "ui.focus == sidebar && ui.sidebar == git"
+command = "ui.focus"
+args = { region = "editor" }
+
+[[bind]]
+mode = "insert sidebar agent"
+keys = "<C-k>g"
+run = [
+  { command = "ui.set", args = { key = "ui.sidebar", value = "git" } },
+  { command = "ui.set", args = { key = "ui.sidebar_open", value = true } },
+  { command = "ui.focus", args = { region = "sidebar" } },
+]
+
+[[bind]]
+mode = "insert sidebar agent"
+keys = "<C-k>g"
+when = "ui.focus == sidebar && ui.sidebar == git"
+command = "ui.focus"
+args = { region = "editor" }
+
+
+
+[[bind]]
+mode = "insert sidebar agent"
+keys = "<C-q>"
+command = "ui.quit"
+
+
+# --- Sidebar ---
+
+[[bind]]
+mode = "sidebar"
+keys = "<Up>"
+command = "ui.list.move"
+args = { by = -1 }
+
+[[bind]]
+mode = "sidebar"
+keys = "<Down>"
+command = "ui.list.move"
+args = { by = 1 }
+
+[[bind]]
+mode = "sidebar"
+keys = "<PageUp>"
+command = "ui.list.page"
+args = { by = -1 }
+
+[[bind]]
+mode = "sidebar"
+keys = "<PageDown>"
+command = "ui.list.page"
+args = { by = 1 }
+
+[[bind]]
+mode = "sidebar"
+keys = "<Right>"
+command = "ui.tree.expand"
+
+[[bind]]
+mode = "sidebar"
+keys = "<Left>"
+command = "ui.tree.collapse"
+
+[[bind]]
+mode = "sidebar"
+keys = "<CR>"
+command = "ui.list.activate"
+
+[[bind]]
+mode = "sidebar"
+keys = "<Esc>"
+command = "ui.focus"
+args = { region = "editor" }
+
+
+# --- Agent column ---
+
+[[bind]]
+mode = "agent"
+keys = "<Left>"
+command = "ui.cycle"
+args = { key = "ui.agent_tab", by = -1 }
+
+[[bind]]
+mode = "agent"
+keys = "<Right>"
+command = "ui.cycle"
+args = { key = "ui.agent_tab", by = 1 }
+
+[[bind]]
+mode = "agent"
+keys = "<Esc>"
+command = "ui.focus"
+args = { region = "editor" }

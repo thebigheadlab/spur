@@ -1,7 +1,7 @@
 //! Building what a client is sent: the UI tree and surface frames.
 
 use spur_core::editor::{Editor, ViewId};
-use spur_rpc::{Cursor, CursorKind, Dim, Line, Node, NodeKind, Pos, Rows, Sel, Span, SurfaceView};
+use spur_rpc::{Cursor, CursorKind, Line, Node, NodeKind, Pos, Rows, Sel, Span, SurfaceView};
 
 /// Id of the editor surface node.
 pub const SURFACE: &str = "editor";
@@ -15,17 +15,8 @@ pub const MAX_MARKS: usize = 10_000;
 /// from slice 2.
 pub fn bare_ui() -> Node {
     Node {
-        id: "root".into(),
-        kind: NodeKind::Column,
-        width: Dim::FILL,
-        height: Dim::FILL,
-        children: vec![Node {
-            id: SURFACE.into(),
-            kind: NodeKind::Surface,
-            width: Dim::FILL,
-            height: Dim::FILL,
-            children: vec![],
-        }],
+        children: vec![Node::new(SURFACE, NodeKind::Surface)],
+        ..Node::new("root", NodeKind::Column)
     }
 }
 

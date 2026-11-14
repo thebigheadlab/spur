@@ -6,8 +6,9 @@
 //! and nothing else.
 //!
 //! Two words: a **message** is one JSON object on the wire; a **frame** is what the
-//! server sends for one change to draw: any `ui` and `surface` messages, closed by
-//! `flush {frame}`. Clients ack frames, not messages.
+//! server sends for one change to draw: any `theme`, `ui`, `list` and `surface`
+//! messages, in that order, closed by `flush {frame}`. Clients ack frames, not
+//! messages.
 //!
 //! # Reaching a server
 //!
@@ -20,7 +21,8 @@
 //! # Conversation
 //!
 //! 1. Client: `hello` listing the versions it speaks. Server: `welcome` (or `bye`
-//!    with a reason), then the first frame: `ui`, one `surface` per surface,
+//!    with a reason), then the first frame: `theme` (when the session has a UX
+//!    pack), `ui`, one `list` per visible list, one `surface` per surface,
 //!    `flush {frame: 1}`.
 //! 2. Client: input (`key`, `paste`, `mouse`, `resize`, `layout`), `command`s and
 //!    `subscribe`. For each batch of input the server sends, in order: `result` and
@@ -35,7 +37,7 @@
 //! 5. A `surface` usually carries only the rows that changed (see "Surfaces" below),
 //!    so the client applies every `surface` it receives, in order, even ones it
 //!    will not draw because a newer frame is already waiting.
-//! 6. Tool clients (scripts) get no `ui`, `surface` or `flush`.
+//! 6. Tool clients (scripts) get no `theme`, `ui`, `list`, `surface` or `flush`.
 //! 7. The connection may end without `bye`: `bye` is sent when the server refuses a
 //!    client, not when the session shuts down or drops a client that stopped
 //!    reading. Treat end of stream as the end of the session.
@@ -83,29 +85,52 @@
 //! Copies read the previous surface as it was; a row may be copied more than once.
 //! [`SurfaceView::resolve`] does this. A client that lost its copy sends `refresh`
 //! once, skips surfaces with `rows` until a full one arrives, and keeps acking every
-//! flush. The first surface, a surface after a new `ui`, and one showing another
-//! document are full.
+//! flush. A surface is full when its node is new in the tree, its size changed, it
+//! shows another document, or the client sent `refresh`. A new `ui` alone does not
+//! make it full: clients keep each surface's last copy across `ui` messages while
+//! the node stays in the tree.
+//!
+//! # Looks, lists and focus
+//!
+//! Nodes carry a `style` name; `theme` maps every style name the server may send to
+//! a [`Token`] (colours as `#rrggbb`). A token's set fields replace what is under
+//! the node; unset ones keep it. The root's style is painted first. The fixed names
+//! in [`tokens`] are used by the protocol itself (gutter, current line, list rows,
+//! `syntax.*` highlight names). `text` nodes carry their text, `icon` nodes a glyph
+//! in `text` and an ASCII fallback in `alt`.
+//!
+//! A `list` node carries no rows: a `list {node, list}` message carries its visible
+//! window ([`ListView`]: offset, total, the selected index and the items). The
+//! client keeps the latest one per node and drops it when the node leaves the tree;
+//! the server sends it again when the node comes back.
+//!
+//! `ui.focus` is the id of the node holding keyboard focus. The client shows the
+//! terminal cursor only when that node is a surface, and draws a list's selected row
+//! with `list.row.selected.focused` when the list is inside the focused node.
 //!
 //! # Input
 //!
 //! `key` carries one or more keys in key notation, fed one by one: plain chars
 //! (`a`, `A`), named keys in angle brackets (`<Esc>`, `<CR>`, `<Tab>`, `<BS>`,
 //! `<Del>`, `<Up>`, `<Down>`, `<Left>`, `<Right>`, `<Home>`, `<End>`, `<PageUp>`,
-//! `<PageDown>`, `<Insert>`, `<Space>`, `<F1>`..`<F12>`), modifiers as prefixes
+//! `<PageDown>`, `<Insert>`, `<Space>`, `<F1>`..`<F24>`), modifiers as prefixes
 //! (`C-` control, `A-` or `M-` alt, `S-` shift, `D-` super: `<C-s>`, `<S-Left>`), and
 //! `<lt>` for a literal `<`. What a key does comes from the bindings the session was
 //! given; a key nothing binds is ignored, and bad notation gets an `error`.
 //!
-//! `paste` inserts text as one edit, never read as keys. `mouse` positions are
-//! document lines and char columns: the client maps screen cells to them (tabs, wide
-//! chars, scrolling); `press` puts the cursor there, `scroll` moves the view by
-//! `lines`.
+//! `paste` inserts text as one edit, never read as keys. `mouse` names the deepest
+//! node under the pointer that is a surface, a list or `clickable`. On a surface,
+//! positions are document lines and char columns: the client maps screen cells to
+//! them (tabs, wide chars, scrolling); `press` puts the cursor there, `scroll` moves
+//! the view by `lines`. On a list, `press` carries the row's `item` id and `scroll`
+//! moves the window. A press on a `clickable` node runs that node's action.
 //!
 //! # Sizes
 //!
 //! A cells client's surface shows `hello.size.rows` lines (at most 500) until it
-//! sends `layout`, which sets each surface's rows from then on (later `resize`
-//! messages no longer change them; send `layout` again). A pixels client gets no
+//! sends `layout`, which sets each surface's and list's rows from then on (later
+//! `resize` messages no longer change them; send `layout` again whenever the set of
+//! surface and list nodes, or one of their sizes, changes). A pixels client gets no
 //! lines until it sends `layout`. Columns are not used to cut lines: each line is
 //! sent up to 4,000 chars with `truncated` set beyond that, and the client clips
 //! and scrolls horizontally. The surface carries the status (path, mode, modified);
@@ -148,9 +173,9 @@ mod protocol;
 mod transport;
 
 pub use protocol::{
-    BadRows, Caps, ClientKind, ClientMsg, Cursor, CursorKind, Dim, Layout, Line, MouseAction, Node,
-    NodeKind, PROTOCOL_VERSION, Pos, Reply, Rows, Sel, ServerMsg, Size, Span, SurfaceSize,
-    SurfaceView, WireError, peek_hello,
+    BadRows, Caps, ClientKind, ClientMsg, Cursor, CursorKind, Dim, Item, ItemKind, Layout, Line,
+    ListView, MouseAction, Node, NodeKind, PROTOCOL_VERSION, Pos, Reply, Rows, Sel, ServerMsg,
+    Size, Span, SurfaceSize, SurfaceView, Token, WireError, peek_hello, tokens,
 };
 pub use transport::{
     ClientEnd, Closed, Endpoint, FrameReader, FrameWriter, MAX_FRAME, QUEUE, ServerEnd, in_process,

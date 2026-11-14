@@ -1,0 +1,80 @@
+# Midnight theme. Palette names are used only inside this file.
+dark = true
+
+[palette]
+bg = "#0d1220"
+card = "#111625"       # inside a card: a shade above the app background
+field = "#1b2336"      # the ask box (soft)
+soft = "#1b2336"
+chip = "#1b2336"       # pills: key hints, tabs, the file name (soft)
+edge = "#36405a"       # card outlines
+t1 = "#e8ecf6"
+t2 = "#a7b0c6"
+dim = "#858ea6"        # quiet text that must still be read (4.5:1 or better)
+t3 = "#6e7891"
+sel = "#1f2c4d"
+accent = "#6ea8ff"
+accent_text = "#6ea8ff" # accent as text: the accent itself
+need = "#ffb36b"
+kw = "#c792ea"
+fn = "#82aaff"
+ty = "#ffcb8b"
+num = "#89ddff"
+punct = "#7f8aa6"
+str = "#a5d6a7"
+comment = "#6e7891"
+
+[tokens]
+# Surfaces and outlines
+"app" = { fg = "t2", bg = "bg" }
+"card" = { bg = "card" }
+"edge" = { fg = "edge" }
+"edge.focus" = { fg = "accent" }
+
+# Top bar
+"brand.mark" = { fg = "accent" }
+"brand" = { fg = "t1", bold = true }
+"path" = { fg = "dim" }
+"notice.mark" = { fg = "need" }
+"notice" = { fg = "t1" }
+"focus" = { fg = "accent_text", bg = "sel", bold = true }
+"key" = { fg = "t2", bg = "chip" }
+"hint" = { fg = "dim" }
+
+# Rail, titles and text
+"rail.item" = { fg = "dim" }
+"rail.item.active" = { fg = "t1", bg = "chip" }
+"label" = { fg = "dim", bold = true }
+"title" = { fg = "t1", bg = "chip", bold = true }
+"subtitle" = { fg = "dim" }
+"modified" = { fg = "need" }
+"tab" = { fg = "dim" }
+"tab.active" = { fg = "t1", bg = "chip", bold = true }
+"empty" = { fg = "dim" }
+"empty.title" = { fg = "t2" }
+"field" = { bg = "field" }
+"prompt" = { fg = "t2", bold = true }
+"input" = { fg = "dim" }
+
+# Fixed tokens (named by the protocol)
+"gutter" = { fg = "t3" }
+"gutter.current" = { fg = "t1" }
+"line.current" = { bg = "soft" }
+"selection" = { bg = "sel" }
+"cursor.secondary" = { fg = "bg", bg = "accent" }
+"cursor.peer" = { fg = "bg", bg = "need" }
+"list.row" = { fg = "t2" }
+"list.row.selected" = {}
+"list.row.current" = { fg = "t1", bg = "soft" }
+"list.row.selected.focused" = { fg = "t1", bg = "sel" }
+"list.dir" = { fg = "t1" }
+"list.icon" = { fg = "t3" }
+"list.more" = { fg = "dim", italic = true }
+"list.error" = { fg = "need" }
+"syntax.keyword" = { fg = "kw" }
+"syntax.type" = { fg = "ty" }
+"syntax.function" = { fg = "fn" }
+"syntax.string" = { fg = "str" }
+"syntax.number" = { fg = "num" }
+"syntax.comment" = { fg = "comment", italic = true }
+"syntax.punctuation" = { fg = "punct" }

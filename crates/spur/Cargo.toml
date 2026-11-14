@@ -21,6 +21,9 @@ spur-server.workspace = true
 spur-tui = { workspace = true, optional = true }
 spur-gui = { workspace = true, optional = true }
 
+[target.'cfg(unix)'.dependencies]
+signal-hook = "0.3"
+
 [features]
 # Frontends are optional so a headless/remote server build skips the GUI stack.
 default = ["tui", "gui"]

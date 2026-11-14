@@ -1,0 +1,80 @@
+# Sand theme. Palette names are used only inside this file.
+dark = false
+
+[palette]
+bg = "#f4efe6"
+card = "#fffdf8"       # inside a card
+field = "#f4efe6"      # the ask box (the app background)
+soft = "#efe8dc"
+chip = "#e9e1d3"       # pills: key hints, tabs, the file name (a step darker than soft)
+edge = "#bdb3a3"       # card outlines
+t1 = "#2b2620"
+t2 = "#5e554a"
+dim = "#6f6558"        # quiet text that must still be read (4.5:1 or better)
+t3 = "#94897a"
+sel = "#efcfb2"
+accent = "#c2602b"
+accent_text = "#8a4722" # accent as text: the accent, darkened to read on sel
+need = "#b4541a"
+kw = "#9b3d6e"
+fn = "#2f6f8f"
+ty = "#a2671b"
+num = "#4f8a3a"
+punct = "#8a7f70"
+str = "#5f7f2f"
+comment = "#94897a"
+
+[tokens]
+# Surfaces and outlines
+"app" = { fg = "t2", bg = "bg" }
+"card" = { bg = "card" }
+"edge" = { fg = "edge" }
+"edge.focus" = { fg = "accent" }
+
+# Top bar
+"brand.mark" = { fg = "accent" }
+"brand" = { fg = "t1", bold = true }
+"path" = { fg = "dim" }
+"notice.mark" = { fg = "need" }
+"notice" = { fg = "t1" }
+"focus" = { fg = "accent_text", bg = "sel", bold = true }
+"key" = { fg = "t2", bg = "chip" }
+"hint" = { fg = "dim" }
+
+# Rail, titles and text
+"rail.item" = { fg = "dim" }
+"rail.item.active" = { fg = "t1", bg = "chip" }
+"label" = { fg = "dim", bold = true }
+"title" = { fg = "t1", bg = "chip", bold = true }
+"subtitle" = { fg = "dim" }
+"modified" = { fg = "need" }
+"tab" = { fg = "dim" }
+"tab.active" = { fg = "t1", bg = "chip", bold = true }
+"empty" = { fg = "dim" }
+"empty.title" = { fg = "t2" }
+"field" = { bg = "field" }
+"prompt" = { fg = "t2", bold = true }
+"input" = { fg = "dim" }
+
+# Fixed tokens (named by the protocol)
+"gutter" = { fg = "t3" }
+"gutter.current" = { fg = "t1" }
+"line.current" = { bg = "soft" }
+"selection" = { bg = "sel" }
+"cursor.secondary" = { fg = "bg", bg = "accent" }
+"cursor.peer" = { fg = "bg", bg = "need" }
+"list.row" = { fg = "t2" }
+"list.row.selected" = {}
+"list.row.current" = { fg = "t1", bg = "soft" }
+"list.row.selected.focused" = { fg = "t1", bg = "sel" }
+"list.dir" = { fg = "t1" }
+"list.icon" = { fg = "t3" }
+"list.more" = { fg = "dim", italic = true }
+"list.error" = { fg = "need" }
+"syntax.keyword" = { fg = "kw" }
+"syntax.type" = { fg = "ty" }
+"syntax.function" = { fg = "fn" }
+"syntax.string" = { fg = "str" }
+"syntax.number" = { fg = "num" }
+"syntax.comment" = { fg = "comment", italic = true }
+"syntax.punctuation" = { fg = "punct" }

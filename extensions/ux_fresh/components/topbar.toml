@@ -1,0 +1,214 @@
+# The top bar: brand and workspace on the left; on the right the notice, or the name
+# of the focused panel and its keys. This is the only place key hints appear.
+# Every hint is a key from keys.toml, written the way messages write keys (ctrl+q),
+# in plain ASCII. The workspace name gives way when the row is short of room.
+
+[node.topbar]
+kind = "row"
+height = 1
+padding = [0, 2]
+gap = 1
+children = ["brand_mark", "brand", "brand_sep", "workspace", "notice_mark", "notice", "keys"]
+
+[node.brand_mark]
+kind = "icon"
+icon = "brand"
+style = "brand.mark"
+
+[node.brand]
+kind = "text"
+text = "spur"
+style = "brand"
+when = "client.cols >= 100"
+
+[node.brand_sep]
+kind = "text"
+text = "/"
+style = "path"
+when = "client.cols >= 100"
+
+[node.workspace]
+kind = "text"
+width = "fill"
+text = "{workspace.name}"
+style = "path"
+
+# The notice (quit prompt, failed command, broken pack) takes the place of the keys.
+[node.notice_mark]
+kind = "icon"
+icon = "modified"
+style = "notice.mark"
+when = "ui.notice"
+
+[node.notice]
+kind = "text"
+text = "{ui.notice}"
+style = "notice"
+when = "ui.notice"
+
+# One group per place focus can be, then the way back to the code, then quit.
+[node.keys]
+kind = "row"
+width = "fit"
+gap = 1
+when = "!ui.notice"
+children = ["keys_code", "keys_files", "keys_sidebar", "keys_agent", "keys_back", "k_quit", "h_quit"]
+
+# Code.
+[node.keys_code]
+kind = "row"
+width = "fit"
+gap = 1
+when = "ui.focus == editor"
+children = ["at_code", "keys_save", "k_files", "h_files", "k_agent", "h_agent"]
+
+[node.at_code]
+kind = "text"
+text = " CODE "
+style = "focus"
+
+# Left out below 100 columns, where the row would push the workspace name out.
+[node.keys_save]
+kind = "row"
+width = "fit"
+gap = 1
+when = "client.cols >= 100"
+children = ["k_save", "h_save"]
+
+[node.k_save]
+kind = "text"
+text = " ctrl+s "
+style = "key"
+
+[node.h_save]
+kind = "text"
+text = "save "
+style = "hint"
+
+[node.k_files]
+kind = "text"
+text = " ctrl+k e "
+style = "key"
+
+[node.h_files]
+kind = "text"
+text = "files "
+style = "hint"
+
+[node.k_agent]
+kind = "text"
+text = " ctrl+k a "
+style = "key"
+
+[node.h_agent]
+kind = "text"
+text = "agent "
+style = "hint"
+
+# The Files list.
+[node.keys_files]
+kind = "row"
+width = "fit"
+gap = 1
+when = "ui.focus == sidebar && ui.sidebar == files"
+children = ["at_files", "k_move", "h_move", "k_open", "h_open"]
+
+[node.at_files]
+kind = "text"
+text = " FILES "
+style = "focus"
+
+[node.k_move]
+kind = "text"
+text = " up/down "
+style = "key"
+
+[node.h_move]
+kind = "text"
+text = "move "
+style = "hint"
+
+[node.k_open]
+kind = "text"
+text = " enter "
+style = "key"
+
+[node.h_open]
+kind = "text"
+text = "open "
+style = "hint"
+
+# The other sidebar views have no keys of their own yet; their card title names them.
+# The one key shown is the way back to Files.
+[node.keys_sidebar]
+kind = "row"
+width = "fit"
+gap = 1
+when = "ui.focus == sidebar && ui.sidebar != files"
+children = ["at_sidebar", "k_to_files", "h_to_files"]
+
+[node.at_sidebar]
+kind = "text"
+text = " SIDEBAR "
+style = "focus"
+
+[node.k_to_files]
+kind = "text"
+text = " ctrl+k e "
+style = "key"
+
+[node.h_to_files]
+kind = "text"
+text = "files "
+style = "hint"
+
+# Agent column.
+[node.keys_agent]
+kind = "row"
+width = "fit"
+gap = 1
+when = "ui.focus == agent"
+children = ["at_agent", "k_tabs", "h_tabs"]
+
+[node.at_agent]
+kind = "text"
+text = " AGENT "
+style = "focus"
+
+[node.k_tabs]
+kind = "text"
+text = " left/right "
+style = "key"
+
+[node.h_tabs]
+kind = "text"
+text = "tabs "
+style = "hint"
+
+# Sidebar and agent column: back to the code.
+[node.keys_back]
+kind = "row"
+width = "fit"
+gap = 1
+when = "ui.focus != editor"
+children = ["k_esc", "h_esc"]
+
+[node.k_esc]
+kind = "text"
+text = " esc "
+style = "key"
+
+[node.h_esc]
+kind = "text"
+text = "code "
+style = "hint"
+
+[node.k_quit]
+kind = "text"
+text = " ctrl+q "
+style = "key"
+
+[node.h_quit]
+kind = "text"
+text = "quit"
+style = "hint"
