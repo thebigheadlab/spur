@@ -1,14 +1,22 @@
 //! Input from clients: keys, paste, mouse and size.
 
+use std::sync::Arc;
 use std::time::Instant;
 
 use serde_json::json;
-use spur_core::{CommandId, Invocation, Scoped};
+use spur_core::{Actor, CommandId, Invocation, Scoped, Target};
 use spur_keymap::{Dispatch, parse_keys};
-use spur_rpc::{MouseAction, ServerMsg, Size, SurfaceSize};
+use spur_rpc::{MouseAction, NodeKind, ServerMsg, Size, SurfaceSize};
 
-use crate::frame::SURFACE;
 use crate::session::{SCROLL_MARGIN, State};
+
+/// The command id of an invocation, for notices.
+fn command_name(inv: &Invocation) -> String {
+    match &inv.command {
+        Target::Id(id) => id.to_string(),
+        Target::Handle(_) => "command".into(),
+    }
+}
 
 impl State {
     pub(crate) fn key(&mut self, conn: u64, notation: &str) {
@@ -21,20 +29,40 @@ impl State {
         };
         let now = Instant::now();
         for key in keys {
+            self.input_arrived(conn);
+            self.check_focus(conn);
             let Some(c) = self.clients.get_mut(&conn) else {
                 return;
             };
-            c.refresh_scope(&self.core.state);
-            let mode = self
-                .core
-                .state
-                .views
-                .get(&c.active)
-                .map_or_else(|| self.core.state.default_mode.clone(), |v| v.mode.clone());
+            // The focused region's mode, or the view's own for the editor.
+            let region_mode = c.ui.as_ref().and_then(|ui| {
+                let r = self.ux.as_ref()?.pack.regions.get(&ui.focus)?;
+                r.mode.as_deref().map(Arc::<str>::from)
+            });
+            let mode = region_mode.unwrap_or_else(|| {
+                self.core
+                    .state
+                    .views
+                    .get(&c.active)
+                    .map_or_else(|| self.core.state.default_mode.clone(), |v| v.mode.clone())
+            });
             let lookup = Scoped(&[self.core.context(), &c.scope]);
             let feed = c.keymap.feed(key, &mode, &lookup, now);
             for d in feed.run {
                 self.dispatch(conn, &d);
+            }
+        }
+    }
+
+    /// Clears the client's prompt and status notices; the quit prompt counts as
+    /// confirmed for this input (a second quit key).
+    fn input_arrived(&mut self, conn: u64) {
+        if let Some(c) = self.clients.get_mut(&conn)
+            && let Some(ui) = c.ui.as_mut()
+        {
+            ui.quit_armed = ui.prompt.is_some();
+            if ui.prompt.take().is_some() | ui.status.take().is_some() {
+                c.dirty = true;
             }
         }
     }
@@ -44,18 +72,31 @@ impl State {
             return;
         };
         for inv in d.invocations(&c.actor) {
-            if self.run_as(conn, inv).is_none() {
-                return;
+            let name = command_name(&inv);
+            match self.run_as(conn, inv) {
+                None => return,
+                Some(Err(e)) => self.set_status(conn, &name, &e.message),
+                Some(Ok(_)) => {}
             }
         }
     }
 
-    /// Inserts `text` as one undo step of its own, never read as keys.
+    /// Inserts `text` as one undo step of its own, never read as keys. Ignored while
+    /// focus is not on the editor, so it never edits a document out of sight.
     pub(crate) fn paste(&mut self, conn: u64, text: &str) {
+        self.input_arrived(conn);
+        let elsewhere = self
+            .clients
+            .get(&conn)
+            .and_then(|c| c.ui.as_ref())
+            .is_some_and(|u| u.focus != "editor");
+        if elsewhere {
+            return;
+        }
         self.end_step(conn);
         let id = CommandId::new("editor.insert_text").unwrap_or_else(|e| unreachable!("{e}"));
         // `run_as` replaces the actor with the client's.
-        let inv = Invocation::new(id, spur_core::Actor::User).args(json!({ "text": text }));
+        let inv = Invocation::new(id, Actor::User).args(json!({ "text": text }));
         if let Some(Err(e)) = self.run_as(conn, inv) {
             self.error(conn, e.message);
         }
@@ -69,35 +110,117 @@ impl State {
         }
     }
 
+    /// A press or wheel on `node`; `at` is (line, col, lines).
     pub(crate) fn mouse(
         &mut self,
         conn: u64,
         node: &str,
         action: MouseAction,
-        line: u32,
-        col: u32,
-        lines: i32,
+        at: (u32, u32, i32),
+        item: Option<&str>,
     ) {
-        if node != SURFACE {
-            return;
-        }
+        let (line, col, lines) = at;
+        let surface = node == self.surface_id();
+        let (region, kind) = match self.ux.as_ref() {
+            Some(ux) => (
+                ux.pack.region_of(node).map(str::to_owned),
+                ux.pack.nodes.get(node).map(|n| n.kind),
+            ),
+            None => (None, None),
+        };
         match action {
             MouseAction::Press => {
-                let id = CommandId::new("view.move_to").unwrap_or_else(|e| unreachable!("{e}"));
-                let inv = Invocation::new(id, spur_core::Actor::User)
-                    .args(json!({ "line": line, "col": col }));
-                if let Some(Err(e)) = self.run_as(conn, inv) {
-                    self.error(conn, e.message);
+                self.input_arrived(conn);
+                if let Some(r) = &region {
+                    self.set_focus(conn, r);
+                }
+                self.check_focus(conn);
+                if surface {
+                    let id = CommandId::new("view.move_to").unwrap_or_else(|e| unreachable!("{e}"));
+                    let inv =
+                        Invocation::new(id, Actor::User).args(json!({ "line": line, "col": col }));
+                    if let Some(Err(e)) = self.run_as(conn, inv) {
+                        self.error(conn, e.message);
+                    }
+                } else if kind == Some(NodeKind::List) {
+                    if let Some(item) = item
+                        && self.list_select(conn, node, item)
+                    {
+                        self.list_activate(conn, Some(node.to_owned()));
+                    }
+                } else {
+                    self.click(conn, node);
                 }
             }
-            MouseAction::Scroll => {
+            MouseAction::Scroll if surface => {
                 let Some(c) = self.clients.get_mut(&conn) else {
                     return;
                 };
                 self.core.state.scroll_by(c.active, lines as isize);
                 c.dirty = true;
             }
-            MouseAction::Unknown => {}
+            MouseAction::Scroll if kind == Some(NodeKind::List) => {
+                let (Some(ux), Some(c)) = (self.ux.as_mut(), self.clients.get_mut(&conn)) else {
+                    return;
+                };
+                let hint = c.rows_hint();
+                if let Some(ui) = c.ui.as_mut()
+                    && let Some(t) = ui.trees.get_mut(node)
+                {
+                    let height = ui.list_rows.get(node).copied().unwrap_or(hint);
+                    t.rows(&mut ux.files);
+                    t.scroll(lines, height);
+                    c.dirty = true;
+                }
+            }
+            MouseAction::Scroll | MouseAction::Unknown => {}
+        }
+        self.check_focus(conn);
+    }
+
+    /// Selects `item` in list `node`. False if the item is not a visible row.
+    fn list_select(&mut self, conn: u64, node: &str, item: &str) -> bool {
+        let (Some(ux), Some(c)) = (self.ux.as_mut(), self.clients.get_mut(&conn)) else {
+            return false;
+        };
+        let Some(t) = c.ui.as_mut().and_then(|u| u.trees.get_mut(node)) else {
+            return false;
+        };
+        t.rows(&mut ux.files);
+        t.select(item)
+    }
+
+    /// Runs the last `on_click` entry of `node` whose `when` holds.
+    fn click(&mut self, conn: u64, node: &str) {
+        let steps = {
+            let (Some(ux), Some(c)) = (self.ux.as_ref(), self.clients.get(&conn)) else {
+                return;
+            };
+            let look = Scoped(&[self.core.context(), &c.scope]);
+            let Some(spec) = ux.pack.nodes.get(node) else {
+                return;
+            };
+            let Some(entry) = spec
+                .on_click
+                .iter()
+                .rev()
+                .find(|e| e.when.as_ref().is_none_or(|w| w.eval(&look)))
+            else {
+                return;
+            };
+            entry.steps.clone()
+        };
+        for step in steps {
+            let name = step.command.to_string();
+            let inv = Invocation::new(step.command, Actor::User).args(step.args);
+            match self.run_as(conn, inv) {
+                None => return,
+                Some(Err(e)) => {
+                    self.set_status(conn, &name, &e.message);
+                    return;
+                }
+                Some(Ok(_)) => {}
+            }
         }
     }
 
@@ -109,18 +232,35 @@ impl State {
         let (view, rows) = (c.active, c.rows());
         c.dirty = true;
         self.core.state.scroll_view(view, rows, SCROLL_MARGIN);
+        self.check_focus(conn);
     }
 
+    /// Sizes the client's layout gave its surface and list nodes.
     pub(crate) fn layout(&mut self, conn: u64, surfaces: &[SurfaceSize]) {
+        let surface = self.surface_id().to_owned();
+        let ux = self.ux.as_ref();
         let Some(c) = self.clients.get_mut(&conn) else {
             return;
         };
-        if let Some(s) = surfaces.iter().find(|s| s.node == SURFACE) {
+        if let Some(s) = surfaces.iter().find(|s| s.node == surface) {
             c.surface = Some((s.rows, s.cols));
+        }
+        if let (Some(ux), Some(ui)) = (ux, c.ui.as_mut()) {
+            for s in surfaces {
+                let list = ux
+                    .pack
+                    .nodes
+                    .get(&s.node)
+                    .is_some_and(|n| n.kind == NodeKind::List);
+                if list {
+                    ui.list_rows.insert(s.node.clone(), s.rows);
+                }
+            }
         }
         let (view, rows) = (c.active, c.rows());
         c.dirty = true;
         self.core.state.scroll_view(view, rows, SCROLL_MARGIN);
+        self.check_focus(conn);
     }
 
     pub(crate) fn error(&mut self, conn: u64, message: String) {

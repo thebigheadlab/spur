@@ -1,0 +1,783 @@
+[
+  {
+    "dark": true,
+    "name": "graphite",
+    "tokens": {
+      "app": {
+        "bg": "#111215",
+        "fg": "#a4a7b0"
+      },
+      "cursor.peer": {
+        "bg": "#f0b37e",
+        "fg": "#111215"
+      },
+      "cursor.secondary": {
+        "bg": "#8b93ff",
+        "fg": "#111215"
+      },
+      "empty": {
+        "fg": "#6c707a"
+      },
+      "gutter": {
+        "fg": "#474a52"
+      },
+      "gutter.current": {
+        "fg": "#a4a7b0"
+      },
+      "input": {
+        "bg": "#202227",
+        "fg": "#6c707a"
+      },
+      "label": {
+        "bold": true,
+        "fg": "#6c707a"
+      },
+      "label.focused": {
+        "bold": true,
+        "fg": "#8b93ff"
+      },
+      "line.current": {
+        "bg": "#202227"
+      },
+      "list.dir": {
+        "fg": "#ecedf0"
+      },
+      "list.error": {
+        "fg": "#f0b37e"
+      },
+      "list.icon": {
+        "fg": "#6c707a"
+      },
+      "list.more": {
+        "fg": "#6c707a",
+        "italic": true
+      },
+      "list.row": {
+        "fg": "#a4a7b0"
+      },
+      "list.row.selected": {
+        "bg": "#202227"
+      },
+      "list.row.selected.focused": {
+        "bg": "#262a4a",
+        "fg": "#ecedf0"
+      },
+      "modified": {
+        "fg": "#f0b37e"
+      },
+      "notice": {
+        "fg": "#f0b37e"
+      },
+      "panel": {
+        "bg": "#17181c"
+      },
+      "rail": {
+        "bg": "#17181c"
+      },
+      "rail.item": {
+        "fg": "#6c707a"
+      },
+      "rail.item.active": {
+        "bg": "#202227",
+        "fg": "#8b93ff"
+      },
+      "selection": {
+        "bg": "#262a4a"
+      },
+      "subtitle": {
+        "fg": "#6c707a"
+      },
+      "syntax.comment": {
+        "fg": "#6c707a",
+        "italic": true
+      },
+      "syntax.function": {
+        "fg": "#7fb8f0"
+      },
+      "syntax.keyword": {
+        "fg": "#c49cde"
+      },
+      "syntax.number": {
+        "fg": "#7fd1c7"
+      },
+      "syntax.punctuation": {
+        "fg": "#80858f"
+      },
+      "syntax.string": {
+        "fg": "#a5cf9a"
+      },
+      "syntax.type": {
+        "fg": "#e6c98f"
+      },
+      "tab": {
+        "fg": "#6c707a"
+      },
+      "tab.active": {
+        "bg": "#202227",
+        "bold": true,
+        "fg": "#ecedf0"
+      },
+      "title": {
+        "bold": true,
+        "fg": "#ecedf0"
+      },
+      "title.focused": {
+        "bold": true,
+        "fg": "#8b93ff"
+      },
+      "topbar": {
+        "bg": "#111215"
+      },
+      "topbar.brand": {
+        "bold": true,
+        "fg": "#ecedf0"
+      },
+      "topbar.path": {
+        "fg": "#6c707a"
+      },
+      "topbar.tab": {
+        "bg": "#202227",
+        "fg": "#ecedf0"
+      }
+    },
+    "type": "theme"
+  },
+  {
+    "focus": "code",
+    "root": {
+      "children": [
+        {
+          "children": [
+            {
+              "height": {
+                "type": "fit"
+              },
+              "id": "brand",
+              "kind": "text",
+              "style": "topbar.brand",
+              "text": "spur",
+              "width": {
+                "type": "fit"
+              }
+            },
+            {
+              "height": {
+                "type": "fit"
+              },
+              "id": "brand_sep",
+              "kind": "text",
+              "style": "topbar.path",
+              "text": "/",
+              "width": {
+                "type": "fit"
+              }
+            },
+            {
+              "height": {
+                "type": "fit"
+              },
+              "id": "workspace",
+              "kind": "text",
+              "style": "topbar.path",
+              "text": "demo",
+              "width": {
+                "type": "fit"
+              }
+            },
+            {
+              "height": {
+                "type": "fill",
+                "weight": 1
+              },
+              "id": "topbar_space",
+              "kind": "spacer",
+              "width": {
+                "type": "fill",
+                "weight": 1
+              }
+            },
+            {
+              "height": {
+                "type": "fit"
+              },
+              "id": "doc_tab",
+              "kind": "text",
+              "style": "topbar.tab",
+              "text": " main.rs ",
+              "width": {
+                "type": "fit"
+              }
+            }
+          ],
+          "gap": 1,
+          "height": {
+            "n": 1,
+            "type": "units"
+          },
+          "id": "topbar",
+          "kind": "row",
+          "padding": [
+            0,
+            1
+          ],
+          "style": "topbar",
+          "width": {
+            "type": "fill",
+            "weight": 1
+          }
+        },
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "alt": "F",
+                  "clickable": true,
+                  "height": {
+                    "type": "fit"
+                  },
+                  "id": "rail_files",
+                  "kind": "icon",
+                  "style": "rail.item.active",
+                  "text": "≡",
+                  "width": {
+                    "type": "fill",
+                    "weight": 1
+                  }
+                },
+                {
+                  "alt": "T",
+                  "clickable": true,
+                  "height": {
+                    "type": "fit"
+                  },
+                  "id": "rail_sessions",
+                  "kind": "icon",
+                  "style": "rail.item",
+                  "text": "◇",
+                  "width": {
+                    "type": "fill",
+                    "weight": 1
+                  }
+                },
+                {
+                  "alt": "S",
+                  "clickable": true,
+                  "height": {
+                    "type": "fit"
+                  },
+                  "id": "rail_search",
+                  "kind": "icon",
+                  "style": "rail.item",
+                  "text": "⌕",
+                  "width": {
+                    "type": "fill",
+                    "weight": 1
+                  }
+                },
+                {
+                  "alt": "G",
+                  "clickable": true,
+                  "height": {
+                    "type": "fit"
+                  },
+                  "id": "rail_git",
+                  "kind": "icon",
+                  "style": "rail.item",
+                  "text": "⑂",
+                  "width": {
+                    "type": "fill",
+                    "weight": 1
+                  }
+                }
+              ],
+              "gap": 1,
+              "height": {
+                "type": "fill",
+                "weight": 1
+              },
+              "id": "rail",
+              "kind": "column",
+              "padding": [
+                1,
+                0
+              ],
+              "style": "rail",
+              "width": {
+                "n": 3,
+                "type": "units"
+              }
+            },
+            {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "height": {
+                        "type": "fit"
+                      },
+                      "id": "files_label",
+                      "kind": "text",
+                      "style": "label",
+                      "text": "FILES",
+                      "width": {
+                        "type": "fit"
+                      }
+                    },
+                    {
+                      "height": {
+                        "type": "fill",
+                        "weight": 1
+                      },
+                      "id": "files_list",
+                      "kind": "list",
+                      "width": {
+                        "type": "fill",
+                        "weight": 1
+                      }
+                    }
+                  ],
+                  "gap": 1,
+                  "height": {
+                    "type": "fill",
+                    "weight": 1
+                  },
+                  "id": "files_view",
+                  "kind": "column",
+                  "width": {
+                    "type": "fill",
+                    "weight": 1
+                  }
+                }
+              ],
+              "clickable": true,
+              "height": {
+                "type": "fill",
+                "weight": 1
+              },
+              "id": "sidebar",
+              "kind": "card",
+              "padding": [
+                1,
+                2
+              ],
+              "style": "panel",
+              "width": {
+                "n": 28,
+                "type": "units"
+              }
+            },
+            {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "height": {
+                        "type": "fit"
+                      },
+                      "id": "code_title",
+                      "kind": "text",
+                      "style": "title",
+                      "text": "main.rs",
+                      "width": {
+                        "type": "fit"
+                      }
+                    },
+                    {
+                      "height": {
+                        "type": "fill",
+                        "weight": 1
+                      },
+                      "id": "code_header_space",
+                      "kind": "spacer",
+                      "width": {
+                        "type": "fill",
+                        "weight": 1
+                      }
+                    },
+                    {
+                      "height": {
+                        "type": "fit"
+                      },
+                      "id": "code_lang",
+                      "kind": "text",
+                      "style": "subtitle",
+                      "text": "Rust",
+                      "width": {
+                        "type": "fit"
+                      }
+                    }
+                  ],
+                  "gap": 1,
+                  "height": {
+                    "n": 1,
+                    "type": "units"
+                  },
+                  "id": "code_header",
+                  "kind": "row",
+                  "width": {
+                    "type": "fill",
+                    "weight": 1
+                  }
+                },
+                {
+                  "clickable": true,
+                  "current_line": true,
+                  "gutter": true,
+                  "height": {
+                    "type": "fill",
+                    "weight": 1
+                  },
+                  "id": "code",
+                  "kind": "surface",
+                  "tab_width": 4,
+                  "width": {
+                    "type": "fill",
+                    "weight": 1
+                  }
+                }
+              ],
+              "gap": 1,
+              "height": {
+                "type": "fill",
+                "weight": 1
+              },
+              "id": "main",
+              "kind": "card",
+              "padding": [
+                0,
+                1
+              ],
+              "style": "panel",
+              "width": {
+                "type": "fill",
+                "weight": 1
+              }
+            },
+            {
+              "children": [
+                {
+                  "height": {
+                    "type": "fit"
+                  },
+                  "id": "agent_header",
+                  "kind": "text",
+                  "style": "title",
+                  "text": "Project chat",
+                  "width": {
+                    "type": "fit"
+                  }
+                },
+                {
+                  "children": [
+                    {
+                      "clickable": true,
+                      "height": {
+                        "type": "fit"
+                      },
+                      "id": "tab_chat",
+                      "kind": "text",
+                      "style": "tab.active",
+                      "text": " Chat ",
+                      "width": {
+                        "type": "fit"
+                      }
+                    },
+                    {
+                      "clickable": true,
+                      "height": {
+                        "type": "fit"
+                      },
+                      "id": "tab_threads",
+                      "kind": "text",
+                      "style": "tab",
+                      "text": " Threads ",
+                      "width": {
+                        "type": "fit"
+                      }
+                    },
+                    {
+                      "clickable": true,
+                      "height": {
+                        "type": "fit"
+                      },
+                      "id": "tab_library",
+                      "kind": "text",
+                      "style": "tab",
+                      "text": " Library ",
+                      "width": {
+                        "type": "fit"
+                      }
+                    },
+                    {
+                      "clickable": true,
+                      "height": {
+                        "type": "fit"
+                      },
+                      "id": "tab_memory",
+                      "kind": "text",
+                      "style": "tab",
+                      "text": " Memory ",
+                      "width": {
+                        "type": "fit"
+                      }
+                    }
+                  ],
+                  "gap": 1,
+                  "height": {
+                    "n": 1,
+                    "type": "units"
+                  },
+                  "id": "agent_tabs",
+                  "kind": "row",
+                  "width": {
+                    "type": "fill",
+                    "weight": 1
+                  }
+                },
+                {
+                  "children": [
+                    {
+                      "height": {
+                        "type": "fit"
+                      },
+                      "id": "plan_label",
+                      "kind": "text",
+                      "style": "label",
+                      "text": "PLAN",
+                      "width": {
+                        "type": "fit"
+                      }
+                    },
+                    {
+                      "height": {
+                        "type": "fit"
+                      },
+                      "id": "plan_empty",
+                      "kind": "text",
+                      "style": "empty",
+                      "text": "No plan yet.",
+                      "width": {
+                        "type": "fit"
+                      }
+                    },
+                    {
+                      "height": {
+                        "type": "fit"
+                      },
+                      "id": "chat_label",
+                      "kind": "text",
+                      "style": "label",
+                      "text": "CONVERSATION",
+                      "width": {
+                        "type": "fit"
+                      }
+                    },
+                    {
+                      "height": {
+                        "type": "fit"
+                      },
+                      "id": "chat_empty",
+                      "kind": "text",
+                      "style": "empty",
+                      "text": "Ask a question to start.",
+                      "width": {
+                        "type": "fit"
+                      }
+                    }
+                  ],
+                  "gap": 1,
+                  "height": {
+                    "type": "fill",
+                    "weight": 1
+                  },
+                  "id": "chat_view",
+                  "kind": "column",
+                  "width": {
+                    "type": "fill",
+                    "weight": 1
+                  }
+                },
+                {
+                  "height": {
+                    "type": "fill",
+                    "weight": 1
+                  },
+                  "id": "agent_space",
+                  "kind": "spacer",
+                  "width": {
+                    "type": "fill",
+                    "weight": 1
+                  }
+                },
+                {
+                  "height": {
+                    "type": "fit"
+                  },
+                  "id": "agent_input",
+                  "kind": "text",
+                  "style": "input",
+                  "text": " Ask about this project…",
+                  "width": {
+                    "type": "fill",
+                    "weight": 1
+                  }
+                }
+              ],
+              "clickable": true,
+              "gap": 1,
+              "height": {
+                "type": "fill",
+                "weight": 1
+              },
+              "id": "agent",
+              "kind": "card",
+              "padding": [
+                1,
+                2
+              ],
+              "style": "panel",
+              "width": {
+                "n": 44,
+                "type": "units"
+              }
+            }
+          ],
+          "gap": 1,
+          "height": {
+            "type": "fill",
+            "weight": 1
+          },
+          "id": "body",
+          "kind": "row",
+          "padding": [
+            0,
+            1
+          ],
+          "width": {
+            "type": "fill",
+            "weight": 1
+          }
+        }
+      ],
+      "height": {
+        "type": "fill",
+        "weight": 1
+      },
+      "id": "root",
+      "kind": "column",
+      "style": "app",
+      "width": {
+        "type": "fill",
+        "weight": 1
+      }
+    },
+    "type": "ui"
+  },
+  {
+    "list": {
+      "items": [
+        {
+          "alt": "+",
+          "glyph": "▸",
+          "id": "docs",
+          "kind": "dir",
+          "text": "docs"
+        },
+        {
+          "alt": "-",
+          "glyph": "▾",
+          "id": "src",
+          "kind": "dir",
+          "open": true,
+          "text": "src"
+        },
+        {
+          "alt": "+",
+          "depth": 1,
+          "glyph": "▸",
+          "id": "src/ui",
+          "kind": "dir",
+          "text": "ui"
+        },
+        {
+          "alt": " ",
+          "depth": 1,
+          "glyph": "·",
+          "id": "src/lib.rs",
+          "kind": "entry",
+          "text": "lib.rs"
+        },
+        {
+          "alt": " ",
+          "depth": 1,
+          "glyph": "·",
+          "id": "src/main.rs",
+          "kind": "entry",
+          "text": "main.rs"
+        },
+        {
+          "alt": " ",
+          "glyph": "·",
+          "id": "notes.txt",
+          "kind": "entry",
+          "text": "notes.txt"
+        },
+        {
+          "alt": " ",
+          "glyph": "·",
+          "id": "README.md",
+          "kind": "entry",
+          "text": "README.md"
+        }
+      ],
+      "offset": 0,
+      "selected": 4,
+      "total": 7
+    },
+    "node": "files_list",
+    "type": "list"
+  },
+  {
+    "node": "code",
+    "type": "surface",
+    "view": {
+      "cursors": [
+        {
+          "col": 0,
+          "kind": "primary",
+          "line": 0
+        }
+      ],
+      "doc": 3,
+      "line_count": 2,
+      "lines": [
+        {
+          "spans": [
+            {
+              "text": "fn main() {}"
+            }
+          ]
+        },
+        {
+          "spans": [
+            {
+              "text": ""
+            }
+          ]
+        }
+      ],
+      "mode": "insert",
+      "modified": false,
+      "path": "<root>/src/main.rs",
+      "selections": [],
+      "seq": 1,
+      "top_line": 0,
+      "version": 0
+    }
+  },
+  {
+    "frame": 1,
+    "type": "flush"
+  }
+]

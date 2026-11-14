@@ -8,6 +8,8 @@ use spur_core::{Actor, ClientId, Context, Subscription};
 use spur_keymap::Keymap;
 use spur_rpc::{Caps, ClientKind, Node, ServerMsg, Size, SurfaceView};
 
+use crate::ux::state::UiState;
+
 /// Frames a client may have in flight without acking.
 pub const MAX_UNACKED: u64 = 2;
 /// Most surface rows drawn for one client, whatever size it claims.
@@ -50,6 +52,8 @@ pub struct Client {
     pub scope: Context,
     pub sub: Option<Subscription>,
     pub last_ui: Option<Node>,
+    /// UI state, for a frontend of a session with a pack.
+    pub ui: Option<UiState>,
     /// The last surface sent, in full: the base the client builds the next one on.
     pub last_view: Option<SurfaceView>,
     /// Number of the last surface sent.
@@ -110,6 +114,7 @@ impl Client {
             scope: Context::new(),
             sub: None,
             last_ui: None,
+            ui: None,
             last_view: None,
             surface_seq: 0,
             sent: 0,
@@ -171,6 +176,11 @@ impl Client {
             None => self.size.rows,
         };
         rows.min(MAX_ROWS) as usize
+    }
+
+    /// Rows a list is windowed to before the client reports its size.
+    pub fn rows_hint(&self) -> u32 {
+        self.size.rows.min(MAX_ROWS)
     }
 
     /// Refreshes the client's context keys from its active view.

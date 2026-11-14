@@ -1,10 +1,10 @@
 //! A session: one thread that owns the editor state and serves every attached client.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::io::{Read, Write};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender};
 use std::sync::{Arc, Mutex};
@@ -14,8 +14,8 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 use spur_core::editor::{DocId, Editor, ViewId, register_editor_commands};
 use spur_core::{
-    Actor, ClientId, CommandError, CommandId, Core, DEFAULT_QUEUE, Delivery, EventName, Filter,
-    Invocation, Source, events,
+    Actor, ClientId, CommandError, CommandId, Context, Core, DEFAULT_QUEUE, Delivery, EventName,
+    Filter, Invocation, Scoped, Source, Subscription, events,
 };
 use spur_keymap::{Keymap, Layer};
 use spur_rpc::{
@@ -24,7 +24,12 @@ use spur_rpc::{
 };
 
 use crate::client::{Client, SendFail, Shutter};
-use crate::frame::{self, bare_ui};
+use crate::frame::{self, SURFACE, bare_ui};
+use crate::ux::commands::{UI_COMMANDS, ui_id};
+use crate::ux::files::{Files, parent_of};
+use crate::ux::pack::{Pack, PackError, PackSource};
+use crate::ux::state::{self, ScopeInput, UiState};
+use crate::ux::{Ux, eval};
 
 /// Lines kept between the cursor and the edge of the surface.
 pub const SCROLL_MARGIN: usize = 3;
@@ -37,6 +42,16 @@ const MAX_RESULT: usize = MAX_FRAME - 4096;
 /// Server-time samples kept for [`Session::stats`].
 const MAX_SAMPLES: usize = 100_000;
 
+/// Where a session logs: pack errors, failed `ui.*` commands and caught panics.
+#[derive(Clone)]
+pub struct LogSink(pub Arc<dyn Fn(&str) + Send + Sync>);
+
+impl fmt::Debug for LogSink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("LogSink")
+    }
+}
+
 /// How to start a session.
 #[derive(Clone, Debug, Default)]
 pub struct SessionConfig {
@@ -46,6 +61,14 @@ pub struct SessionConfig {
     pub open: Vec<PathBuf>,
     /// Keymap layers, bottom first: (name, TOML in the `spur-keymap` layer format).
     pub keymap: Vec<(String, String)>,
+    /// The UX pack. Without one the session draws a single editor surface.
+    pub pack: Option<PackSource>,
+    /// Theme for the whole session, instead of the pack's default.
+    pub theme: Option<String>,
+    /// The workspace folder; empty means the current folder.
+    pub root: PathBuf,
+    /// Where the session logs.
+    pub log: Option<LogSink>,
     /// Runs on the core before the session starts (tests register commands here).
     #[doc(hidden)]
     pub setup: Option<fn(&mut Core<Editor>)>,
@@ -72,6 +95,10 @@ pub enum SessionError {
     Register(String),
     /// The session thread could not start.
     Thread(String),
+    /// The UX pack did not load: every problem found.
+    Pack(Vec<PackError>),
+    /// The pack has no theme of this name.
+    Theme(String),
 }
 
 impl fmt::Display for SessionError {
@@ -81,6 +108,14 @@ impl fmt::Display for SessionError {
             Self::Open { path, message } => write!(f, "{}: {message}", path.display()),
             Self::Register(m) => write!(f, "cannot register commands: {m}"),
             Self::Thread(m) => write!(f, "cannot start the session thread: {m}"),
+            Self::Pack(errors) => {
+                f.write_str("the UX pack did not load:")?;
+                for e in errors {
+                    write!(f, "\n  {e}")?;
+                }
+                Ok(())
+            }
+            Self::Theme(name) => write!(f, "the UX pack has no theme {name:?}"),
         }
     }
 }
@@ -144,9 +179,18 @@ impl Session {
     ///
     /// # Errors
     ///
-    /// A [`SessionError`] if a layer does not parse, a file cannot be opened, or the
-    /// thread cannot start.
-    pub fn spawn(cfg: SessionConfig) -> Result<Self, SessionError> {
+    /// A [`SessionError`] if a layer or the pack does not load, a file cannot be
+    /// opened, or the thread cannot start.
+    pub fn spawn(mut cfg: SessionConfig) -> Result<Self, SessionError> {
+        let root = if cfg.root.as_os_str().is_empty() {
+            std::env::current_dir()
+        } else {
+            std::path::absolute(&cfg.root)
+        };
+        cfg.root = root.map_err(|e| SessionError::Open {
+            path: cfg.root.clone(),
+            message: e.to_string(),
+        })?;
         let samples = Arc::new(Mutex::new(Vec::new()));
         let state = State::new(cfg, samples.clone())?;
         let (tx, rx) = mpsc::channel();
@@ -366,6 +410,11 @@ pub(crate) struct State {
     samples: Arc<Mutex<Vec<Duration>>>,
     /// A client was removed since this was last cleared.
     removed: bool,
+    /// The UX, when the session has a pack.
+    pub(crate) ux: Option<Ux>,
+    /// `buffer.saved` events, to read a saved file's folder again.
+    saved: Option<Subscription>,
+    log: Option<LogSink>,
 }
 
 impl State {
@@ -386,6 +435,18 @@ impl State {
         if let Some(setup) = cfg.setup {
             setup(&mut core);
         }
+        let ux = match &cfg.pack {
+            Some(src) => Some(load_ux(&core, src, &cfg)?),
+            None => None,
+        };
+        let saved = if ux.is_some() {
+            core.bus_mut()
+                .subscribe(Filter::new([events::BUFFER_SAVED]), DEFAULT_QUEUE, None)
+                .ok()
+                .map(|(_, sub)| sub)
+        } else {
+            None
+        };
         let anchor = core.state.focus;
         let mut home = core.state.views[&anchor].doc;
         for (i, path) in cfg.open.iter().enumerate() {
@@ -410,7 +471,67 @@ impl State {
             home,
             samples,
             removed: false,
+            ux,
+            saved,
+            log: cfg.log,
         })
+    }
+
+    /// Writes a line to the session log, if there is one.
+    pub(crate) fn log(&self, line: &str) {
+        if let Some(l) = &self.log {
+            (l.0)(line);
+        }
+    }
+
+    /// The surface node id: the pack's, or the bare tree's.
+    pub(crate) fn surface_id(&self) -> &str {
+        self.ux
+            .as_ref()
+            .map_or(SURFACE, |u| u.pack.surface.as_str())
+    }
+
+    /// Writes the client's context keys: the view keys, then the UI keys.
+    pub(crate) fn refresh_client(&mut self, conn: u64) {
+        let Some(c) = self.clients.get_mut(&conn) else {
+            return;
+        };
+        c.refresh_scope(&self.core.state);
+        let (Some(ux), Some(ui)) = (self.ux.as_ref(), c.ui.as_ref()) else {
+            return;
+        };
+        let x = ScopeInput {
+            ed: &self.core.state,
+            view: c.active,
+            cols: c.size.cols,
+            rows: c.size.rows,
+            pack: &ux.pack,
+            workspace: &ux.workspace,
+            pack_error: ux.pack_error.as_deref(),
+            global: self.core.context(),
+        };
+        state::refresh(&mut c.scope, ui, &x);
+    }
+
+    /// Reads the folder of each saved file again, so a new file shows in the tree.
+    fn drain_saved(&mut self) {
+        let (Some(sub), Some(ux)) = (&self.saved, self.ux.as_mut()) else {
+            return;
+        };
+        let before = ux.files.generation;
+        while let Some(d) = sub.try_recv() {
+            if let Delivery::Event(e) = d
+                && let Some(path) = e.payload.get("path").and_then(Value::as_str)
+                && let Some(rel) = ux.files.rel(Path::new(path))
+            {
+                ux.files.reread(parent_of(&rel));
+            }
+        }
+        if ux.files.generation != before {
+            for c in self.clients.values_mut().filter(|c| c.ui.is_some()) {
+                c.dirty = true;
+            }
+        }
     }
 
     fn run(mut self, rx: &Receiver<In>) {
@@ -487,6 +608,7 @@ impl State {
     fn guarded(&mut self, conn: Option<u64>, f: impl FnOnce(&mut Self)) {
         if catch_unwind(AssertUnwindSafe(|| f(self))).is_err() {
             self.core.state.focus = self.anchor;
+            self.log("caught a panic while handling a client message");
             if let Some(conn) = conn {
                 self.error(conn, PANIC_MESSAGE.into());
                 self.mark_peers(conn, None);
@@ -572,8 +694,22 @@ impl State {
         for layer in &self.layers {
             keymap.push_layer(layer.clone());
         }
+        let frontend = kind == ClientKind::Frontend;
+        if frontend && let Some(ux) = &self.ux {
+            keymap.push_layer(ux.pack.keys.clone());
+        }
         let mut client = Client::new(id, kind, name, caps, size, view, keymap, out);
         client.shutter = shutter;
+        if frontend && let Some(ux) = self.ux.as_mut() {
+            let reveal = self
+                .core
+                .state
+                .docs
+                .get(&self.home)
+                .and_then(|d| d.path.as_deref())
+                .and_then(|p| ux.files.rel(p));
+            client.ui = Some(UiState::new(&ux.pack, &mut ux.files, reveal.as_deref()));
+        }
         client.batch.push(ServerMsg::Welcome {
             protocol: PROTOCOL_VERSION,
             server: env!("CARGO_PKG_VERSION").into(),
@@ -658,8 +794,8 @@ impl State {
                 line,
                 col,
                 lines,
-                item: _,
-            } => self.mouse(conn, &node, action, line, col, lines),
+                item,
+            } => self.mouse(conn, &node, action, (line, col, lines), item.as_deref()),
             ClientMsg::Resize { size } => self.resize(conn, size),
             ClientMsg::Layout { surfaces } => self.layout(conn, &surfaces),
             ClientMsg::Command { req, id, args } => self.command(conn, req, &id, args),
@@ -677,6 +813,12 @@ impl State {
             ClientMsg::Refresh => {
                 if let Some(c) = self.clients.get_mut(&conn) {
                     c.last_view = None;
+                    c.last_ui = None;
+                    if let Some(ui) = c.ui.as_mut() {
+                        ui.sent_theme = None;
+                        ui.sent_ui = None;
+                        ui.sent_lists.clear();
+                    }
                     c.dirty = true;
                 }
             }
@@ -686,7 +828,7 @@ impl State {
     }
 
     /// Sends what is queued for the client, then removes it.
-    fn drop_client(&mut self, conn: u64) {
+    pub(crate) fn drop_client(&mut self, conn: u64) {
         if let Some(c) = self.clients.get_mut(&conn)
             && let Err(SendFail::Full) = c.send_batch()
             && let Some(s) = &c.shutter
@@ -764,6 +906,24 @@ impl State {
         conn: u64,
         mut inv: Invocation,
     ) -> Option<Result<Value, CommandError>> {
+        // `ui.*` runs outside the bookkeeping below: it may call `run_as` itself
+        // (activating a file runs `editor.open`), and that view change must stand.
+        if let Some(id) = ui_id(&inv) {
+            self.clients.get(&conn)?;
+            let id = id.to_string();
+            let args = inv.args.clone();
+            let res = catch_unwind(AssertUnwindSafe(|| self.ui_command(conn, &id, &args)));
+            if let Ok(r) = res {
+                if let Err(e) = &r {
+                    self.log(&format!("{id}: {}", e.message));
+                }
+                return Some(r);
+            }
+            self.core.state.focus = self.anchor;
+            self.log(&format!("caught a panic in {id}"));
+            self.error(conn, PANIC_MESSAGE.into());
+            return None;
+        }
         let client = self.clients.get(&conn)?;
         let (id, view, rows) = (client.id, client.active, client.rows());
         inv.actor = client.actor.clone();
@@ -822,6 +982,26 @@ impl State {
 
     /// Delivers events, renders dirty frontends, answers pings. True if a pong went out.
     fn render_all(&mut self) -> bool {
+        self.drain_saved();
+        for c in self.clients.values_mut() {
+            if c.draws() && !c.dirty && shows_stale(&self.core.state, c) {
+                // Text changed under the client by someone else (a tool editing by id).
+                c.dirty = true;
+            }
+        }
+        if self.ux.is_some() {
+            let dirty: Vec<u64> = self
+                .clients
+                .iter()
+                .filter(|(_, c)| c.dirty && c.ui.is_some())
+                .map(|(k, _)| *k)
+                .collect();
+            // The scope is evaluated next, so a frame never shows focus on a hidden
+            // region.
+            for conn in dirty {
+                self.check_focus(conn);
+            }
+        }
         let peers: Vec<(u64, ViewId)> = self
             .clients
             .values()
@@ -830,28 +1010,20 @@ impl State {
             .collect();
         let mut ponged = false;
         let mut broken = Vec::new();
+        let ed = &self.core.state;
+        let ctx = self.core.context();
         for (conn, c) in &mut self.clients {
             drain_events(c);
-            if c.draws() && !c.dirty && shows_stale(&self.core.state, c) {
-                // Text changed under the client by someone else (a tool editing by id).
-                c.dirty = true;
-            }
             if c.draws() && c.dirty && c.can_send() {
                 let others: Vec<(u64, ViewId)> =
                     peers.iter().copied().filter(|(p, _)| p != conn).collect();
-                let ed = &self.core.state;
-                let built = catch_unwind(AssertUnwindSafe(|| {
-                    let view = frame::surface(ed, c.active, c.rows(), &others);
-                    // A new tree may have new surfaces: start them from a full frame.
-                    let ui = bare_ui();
-                    let new_ui = c.last_ui.as_ref() != Some(&ui);
-                    let base = if new_ui { None } else { c.last_view.as_ref() };
-                    let wire = (base != Some(&view)).then(|| frame::delta(base, &view));
-                    (view, new_ui.then_some(ui), wire)
+                let ux = &mut self.ux;
+                let built = catch_unwind(AssertUnwindSafe(|| match ux {
+                    Some(ux) if c.ui.is_some() => render_ux(c, ux, ed, ctx, &others),
+                    _ => render_bare(c, ed, &others),
                 }));
-                match built {
-                    Ok((view, ui, wire)) => render(c, view, ui, wire),
-                    Err(_) => broken.push(*conn),
+                if built.is_err() {
+                    broken.push(*conn);
                 }
             }
             let waiting_frame = c.draws() && c.dirty;
@@ -860,6 +1032,7 @@ impl State {
             }
         }
         for conn in broken {
+            self.log("caught a panic while drawing");
             if let Some(c) = self.clients.get_mut(&conn) {
                 c.batch.push(ServerMsg::Bye {
                     reason: "internal error while drawing".into(),
@@ -927,19 +1100,134 @@ fn drain_events(c: &mut Client) {
     }
 }
 
-/// Queues what changed for a dirty client (a new tree, the surface as sent), then a
-/// flush if anything did.
-fn render(c: &mut Client, view: SurfaceView, ui: Option<Node>, wire: Option<SurfaceView>) {
-    c.dirty = false;
-    let changed = ui.is_some() || wire.is_some();
-    if let Some(ui) = ui {
-        c.batch.push(ServerMsg::Ui {
+/// Loads the session's pack and checks its theme.
+fn load_ux(core: &Core<Editor>, src: &PackSource, cfg: &SessionConfig) -> Result<Ux, SessionError> {
+    let mut known: BTreeSet<String> = core.commands().iter().map(|m| m.id.to_string()).collect();
+    known.extend(UI_COMMANDS.iter().map(|s| (*s).to_owned()));
+    let pack = Pack::from_source(src, &|id| known.contains(id)).map_err(SessionError::Pack)?;
+    if pack.theme_named(cfg.theme.as_deref()).is_none() {
+        let name = cfg.theme.clone().unwrap_or_else(|| pack.theme.clone());
+        return Err(SessionError::Theme(name));
+    }
+    let workspace = cfg.root.file_name().map_or_else(
+        || cfg.root.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    );
+    Ok(Ux {
+        pack,
+        theme: cfg.theme.clone(),
+        files: Files::new(cfg.root.clone()),
+        workspace,
+        pack_error: None,
+        generation: 1,
+    })
+}
+
+/// True if `id` is `n` or one of its descendants.
+fn has_node(n: &Node, id: &str) -> bool {
+    n.id == id || n.children.iter().any(|c| has_node(c, id))
+}
+
+/// Renders a client of a session without a pack: one surface filling its area.
+fn render_bare(c: &mut Client, ed: &Editor, others: &[(u64, ViewId)]) {
+    let view = frame::surface(ed, c.active, c.rows(), others);
+    let ui = bare_ui();
+    let new_ui = c.last_ui.as_ref() != Some(&ui);
+    // A new tree may have new surfaces: start them from a full frame.
+    let base = if new_ui { None } else { c.last_view.as_ref() };
+    let wire = (base != Some(&view)).then(|| frame::delta(base, &view));
+    let mut msgs = Vec::new();
+    if new_ui {
+        msgs.push(ServerMsg::Ui {
             root: ui.clone(),
-            focus: Some(frame::SURFACE.into()),
+            focus: Some(SURFACE.into()),
         });
         c.last_ui = Some(ui);
     }
-    if let Some(mut wire) = wire {
+    finish(c, msgs, SURFACE, Some((view, wire)));
+}
+
+/// Renders a client with UI state: theme, tree, lists and surface, each when changed.
+fn render_ux(c: &mut Client, ux: &mut Ux, ed: &Editor, ctx: &Context, others: &[(u64, ViewId)]) {
+    let built = eval::tree(&ux.pack, &Scoped(&[ctx, &c.scope]));
+    let (rows, hint) = (c.rows(), c.rows_hint());
+    let Some(ui) = c.ui.as_mut() else {
+        return;
+    };
+    let mut msgs = Vec::new();
+    if ui.sent_theme != Some(ux.generation) {
+        if let Some((name, theme)) = ux.theme() {
+            msgs.push(ServerMsg::Theme {
+                name: name.to_owned(),
+                dark: theme.dark,
+                tokens: eval::theme_tokens(theme),
+            });
+        }
+        ui.sent_theme = Some(ux.generation);
+    }
+    let surface_id = ux.pack.surface.as_str();
+    let focus = ux
+        .pack
+        .regions
+        .get(&ui.focus)
+        .map_or_else(|| surface_id.to_owned(), |r| r.node.clone());
+    let surface_was_shown = ui
+        .sent_ui
+        .as_ref()
+        .is_some_and(|(n, _)| has_node(n, surface_id));
+    let surface_shown = has_node(&built.root, surface_id);
+    let tree = (built.root, focus);
+    if ui.sent_ui.as_ref() != Some(&tree) {
+        msgs.push(ServerMsg::Ui {
+            root: tree.0.clone(),
+            focus: Some(tree.1.clone()),
+        });
+        ui.sent_ui = Some(tree);
+    }
+    // A list that left the tree is sent again in full when it comes back.
+    ui.sent_lists.retain(|k, _| built.lists.contains(k));
+    for id in &built.lists {
+        let height = ui.list_rows.get(id).copied().unwrap_or(hint);
+        let Some(t) = ui.trees.get_mut(id) else {
+            continue;
+        };
+        let window = t.window(&mut ux.files, height, &ux.pack);
+        if ui.sent_lists.get(id) != Some(&window) {
+            msgs.push(ServerMsg::List {
+                node: id.clone(),
+                list: window.clone(),
+            });
+            ui.sent_lists.insert(id.clone(), window);
+        }
+    }
+    ui.shown_lists = built.lists;
+    let surface = surface_shown.then(|| {
+        let view = frame::surface(ed, c.active, rows, others);
+        // A surface new in the tree starts from a full frame.
+        let base = if surface_was_shown {
+            c.last_view.as_ref()
+        } else {
+            None
+        };
+        let wire = (base != Some(&view)).then(|| frame::delta(base, &view));
+        (view, wire)
+    });
+    finish(c, msgs, surface_id, surface);
+}
+
+/// Queues `msgs`, then the surface as sent if it changed, then a flush if anything was
+/// queued.
+fn finish(
+    c: &mut Client,
+    msgs: Vec<ServerMsg>,
+    node: &str,
+    surface: Option<(SurfaceView, Option<SurfaceView>)>,
+) {
+    c.dirty = false;
+    let mut changed = !msgs.is_empty();
+    c.batch.extend(msgs);
+    if let Some((view, Some(mut wire))) = surface {
+        changed = true;
         c.surface_seq += 1;
         wire.base = (!wire.rows.is_empty()).then_some(c.surface_seq - 1);
         wire.seq = c.surface_seq;
@@ -947,7 +1235,7 @@ fn render(c: &mut Client, view: SurfaceView, ui: Option<Node>, wire: Option<Surf
         // `last_view`: every surface queued is delivered in order, or the client is
         // dropped (a writer that cannot encode a message closes the connection).
         c.batch.push(ServerMsg::Surface {
-            node: frame::SURFACE.into(),
+            node: node.into(),
             view: wire,
         });
         c.last_view = Some(view);

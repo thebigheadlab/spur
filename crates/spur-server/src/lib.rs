@@ -14,7 +14,7 @@ mod lang;
 mod session;
 mod ux;
 
-pub use session::{Ended, Session, SessionConfig, SessionError};
+pub use session::{Ended, LogSink, Session, SessionConfig, SessionError};
 pub use ux::pack::{Pack, PackError, PackSource};
 
 /// Name of this crate, used in diagnostics.

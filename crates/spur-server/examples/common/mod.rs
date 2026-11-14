@@ -8,7 +8,7 @@ use std::time::Duration;
 use spur_rpc::{Caps, ClientEnd, ClientKind, ClientMsg, ServerMsg, Size, SurfaceView};
 use spur_server::Session;
 
-/// Insert-mode typing, arrows, Home, Enter, Backspace, undo and redo.
+/// Insert-mode typing, arrows, Home, Enter, Backspace, save, undo and redo.
 pub const KEYS: &str = r#"
 [mode.insert]
 fallback = "editor.insert_text"
@@ -47,6 +47,11 @@ command = "editor.insert_newline"
 mode = "insert"
 keys = "<BS>"
 command = "editor.delete_backward"
+
+[[bind]]
+mode = "insert"
+keys = "<C-s>"
+command = "buffer.save"
 
 [[bind]]
 mode = "insert"
@@ -106,6 +111,23 @@ impl Client {
         let ping = ClientMsg::Ping { id: self.ping };
         self.end.send_batch(vec![key, ping]).expect("send");
         self.wait();
+    }
+
+    /// Reports node sizes, as a client does after laying out, and waits for the frame.
+    #[allow(dead_code, reason = "each example uses part of this module")]
+    pub fn layout(&mut self, sizes: &[(&str, u32, u32)]) {
+        let surfaces = sizes
+            .iter()
+            .map(|&(node, rows, cols)| spur_rpc::SurfaceSize {
+                node: node.into(),
+                rows,
+                cols,
+            })
+            .collect();
+        self.end
+            .send(ClientMsg::Layout { surfaces })
+            .expect("send");
+        self.sync();
     }
 
     /// Waits until the server has sent everything due to this client.

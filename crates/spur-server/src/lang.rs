@@ -22,7 +22,6 @@ pub const IDS: &[&str] = &[
 ];
 
 /// The language id of a file, by its extension; `text` when unknown or absent.
-#[allow(dead_code)] // used by the UI model (next phase)
 pub fn of_path(path: Option<&Path>) -> &'static str {
     let ext = path
         .and_then(Path::extension)

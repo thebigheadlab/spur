@@ -90,6 +90,7 @@ fn session(name: &str, text: &str) -> Session {
         open: vec![temp_file(name, text)],
         keymap: vec![("test".into(), KEYS.into())],
         setup: Some(setup),
+        ..Default::default()
     })
     .unwrap()
 }
