@@ -1,45 +1,45 @@
- spur / demo                                                                                                                                           main.rs
-                                   main.rs                                                                   Rust
-  ≡    FILES                                                                                                         Project chat
-                                     1 fn main() {}
-  ◇    ▸ docs                        2                                                                                Chat   Threads   Library   Memory
-       ▾ src
-  ⌕      ▸ ui                                                                                                        PLAN
-         · lib.rs
-  ⑂      · main.rs                                                                                                   No plan yet.
-       · notes.txt
-       · README.md                                                                                                   CONVERSATION
-
-                                                                                                                     Ask a question to start.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                                                                                                                      Ask about this project…
-
+  ◆ spur / demo                                                                         CODE   ctrl+s  save   ctrl+k e  files   ctrl+k a  agent   ctrl+q  quit
+     ╭──────────────────────────╮ ╭───────────────────────────────────────────────────────────────────────────────╮ ╭─────────────────────────────────────────╮
+  ≡  │ FILES                    │ │  main.rs                                                                Rust  │ │  PLAN                                   │
+     │                          │ │                                                                               │ │                                         │
+  ◇  │ ▸ docs                   │ │   1 fn main() {}                                                              │ │  No plan yet                            │
+     │ ▾ src                    │ │   2                                                                           │ │  Steps show here as an agent works.     │
+  ⊙  │   ▸ ui                   │ │                                                                               │ ╰─────────────────────────────────────────╯
+     │   · lib.rs               │ │                                                                               │ ╭─────────────────────────────────────────╮
+  ±  │   · main.rs              │ │                                                                               │ │  Chat   Threads   Library   Memory      │
+     │ · notes.txt              │ │                                                                               │ │                                         │
+     │ · README.md              │ │                                                                               │ │  No messages yet                        │
+     │                          │ │                                                                               │ │  Ask a question to start.               │
+     │                          │ │                                                                               │ │                                         │
+     │                          │ │                                                                               │ │                                         │
+     │                          │ │                                                                               │ │                                         │
+     │                          │ │                                                                               │ │                                         │
+     │                          │ │                                                                               │ │                                         │
+     │                          │ │                                                                               │ │                                         │
+     │                          │ │                                                                               │ │                                         │
+     │                          │ │                                                                               │ │                                         │
+     │                          │ │                                                                               │ │                                         │
+     │                          │ │                                                                               │ │                                         │
+     │                          │ │                                                                               │ │                                         │
+     │                          │ │                                                                               │ │                                         │
+     │                          │ │                                                                               │ │                                         │
+     │                          │ │                                                                               │ │                                         │
+     │                          │ │                                                                               │ │                                         │
+     │                          │ │                                                                               │ │                                         │
+     │                          │ │                                                                               │ │                                         │
+     │                          │ │                                                                               │ │                                         │
+     │                          │ │                                                                               │ │                                         │
+     │                          │ │                                                                               │ │                                         │
+     │                          │ │                                                                               │ │                                         │
+     │                          │ │                                                                               │ │                                         │
+     │                          │ │                                                                               │ │                                         │
+     │                          │ │                                                                               │ │                                         │
+     │                          │ │                                                                               │ │                                         │
+     │                          │ │                                                                               │ │                                         │
+     │                          │ │                                                                               │ │                                         │
+     │                          │ │                                                                               │ │                                         │
+     │                          │ │                                                                               │ │                                         │
+     │                          │ │                                                                               │ │                                         │
+     │                          │ │                                                                               │ │   › Ask about this project...           │
+     │                          │ │                                                                               │ │                                         │
+     ╰──────────────────────────╯ ╰───────────────────────────────────────────────────────────────────────────────╯ ╰─────────────────────────────────────────╯

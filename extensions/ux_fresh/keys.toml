@@ -149,6 +149,9 @@ when = "cond.agent_shown"
 command = "ui.set"
 args = { key = "ui.agent_open", value = false }
 
+# Agent column. Shows and focuses it; again while focused returns to the code.
+# Hiding it is <C-A-b>, above.
+
 [[bind]]
 mode = "insert sidebar agent"
 keys = "<C-k>a"
@@ -160,16 +163,9 @@ run = [
 [[bind]]
 mode = "insert sidebar agent"
 keys = "<C-k>a"
-when = "cond.agent_fits && !ui.agent_open"
-command = "ui.set"
-args = { key = "ui.agent_open", value = true }
-
-[[bind]]
-mode = "insert sidebar agent"
-keys = "<C-k>a"
-when = "cond.agent_shown"
-command = "ui.set"
-args = { key = "ui.agent_open", value = false }
+when = "ui.focus == agent"
+command = "ui.focus"
+args = { region = "editor" }
 
 
 # Sidebar: files. Shows and focuses it; again while focused returns to the code.

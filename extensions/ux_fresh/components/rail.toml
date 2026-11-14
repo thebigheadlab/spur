@@ -1,11 +1,11 @@
-# The icon rail. Clicking an icon shows that view and focuses the sidebar;
-# clicking the active icon closes the sidebar. Later on_click entries win when
-# their when holds, as in keys.toml.
+# The icon rail: four icons on the app background, no outline. The icon of the view
+# that is showing is lit; the sidebar card's title names it. Clicking an icon shows
+# that view and focuses the sidebar; clicking the lit icon closes the sidebar.
+# Later on_click entries win when their when holds, as in keys.toml.
 
 [node.rail]
 kind = "column"
 width = 3
-style = "rail"
 padding = [1, 0]
 gap = 1
 children = ["rail_files", "rail_sessions", "rail_search", "rail_git"]

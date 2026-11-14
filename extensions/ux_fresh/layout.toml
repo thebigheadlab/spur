@@ -1,4 +1,6 @@
-# The shell: top bar over a row of rail | sidebar | code | agent column (layout C).
+# The shell: top bar over a row of rail | sidebar | code | agent column.
+# Each panel is a card with a rounded outline (pack.toml [borders]). The card that
+# has focus draws its outline in the accent colour; the others stay dim.
 
 [node.root]
 kind = "column"
@@ -10,11 +12,3 @@ kind = "row"
 padding = [0, 1]
 gap = 1
 children = ["rail", "sidebar", "main", "agent"]
-
-[node.sidebar]
-kind = "card"
-width = 28
-style = "panel"
-padding = [1, 2]
-when = "cond.sidebar_shown"
-children = ["files_view", "sessions_view", "search_view", "git_view"]

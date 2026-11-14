@@ -326,8 +326,14 @@ fn the_first_frame_is_theme_ui_list_surface_flush() {
         }
         assert_eq!(c.theme.as_deref(), Some("graphite"));
         assert_eq!(c.focus(), "code");
-        assert_eq!(c.node("code_title").text.as_deref(), Some("main.rs"));
-        assert_eq!(c.node("code_lang").text.as_deref(), Some("Rust"));
+        assert_eq!(
+            c.node("code_title").text.as_deref().map(str::trim),
+            Some("main.rs")
+        );
+        assert_eq!(
+            c.node("code_lang").text.as_deref().map(str::trim),
+            Some("Rust")
+        );
         assert_eq!(c.node("workspace").text.as_deref(), Some("demo"));
         if cols >= 100 {
             // The first open file is revealed and selected.
@@ -427,9 +433,9 @@ fn narrow_terminals_show_columns_on_focus() {
     let mut c = Client::attach(&s, 80, 24);
     assert!(!c.shows("sidebar"));
     for (keys, view) in [
-        ("<C-S-e>", "files_view"),
-        ("<A-2>", "sessions_view"),
-        ("<C-k>f", "search_view"),
+        ("<C-S-e>", "files_list"),
+        ("<A-2>", "sessions_empty"),
+        ("<C-k>f", "search_empty"),
     ] {
         c.keys(keys);
         assert_eq!(c.focus(), "sidebar", "{keys}");
@@ -440,7 +446,7 @@ fn narrow_terminals_show_columns_on_focus() {
     }
     c.press("rail_git", None);
     assert_eq!(c.focus(), "sidebar");
-    assert!(c.shows("git_view"));
+    assert!(c.shows("git_empty"));
     c.keys("<Esc>");
     assert!(!c.shows("sidebar"));
     c.keys("<C-A-b>");
@@ -555,7 +561,10 @@ fn the_files_tree_moves_expands_and_opens() {
     c.keys("<Down>");
     c.keys("<CR>");
     assert_eq!(c.focus(), "code");
-    assert_eq!(c.node("code_title").text.as_deref(), Some("main.rs"));
+    assert_eq!(
+        c.node("code_title").text.as_deref().map(str::trim),
+        Some("main.rs")
+    );
     let current: Vec<&str> = c
         .files()
         .items
@@ -596,12 +605,18 @@ fn clicks_open_items_by_id_and_scrolling_keeps_the_selection() {
     c.press("files_list", Some(&id));
     assert_eq!(c.focus(), "code");
     let name = id.rsplit('/').next().unwrap().to_owned();
-    assert_eq!(c.node("code_title").text.as_deref(), Some(name.as_str()));
+    assert_eq!(
+        c.node("code_title").text.as_deref().map(str::trim),
+        Some(name.as_str())
+    );
     assert_eq!(c.selected(), id);
     // An unknown id is ignored, but the press still focuses the sidebar.
     c.press("files_list", Some("nope.rs"));
     assert_eq!(c.selected(), id);
-    assert_eq!(c.node("code_title").text.as_deref(), Some(name.as_str()));
+    assert_eq!(
+        c.node("code_title").text.as_deref().map(str::trim),
+        Some(name.as_str())
+    );
     assert_eq!(c.focus(), "sidebar");
     // A click on a folder toggles it.
     c.press("files_list", Some("docs"));
@@ -627,7 +642,10 @@ fn a_failed_command_shows_until_the_next_key() {
     let s = session_in(&root, &[]);
     let mut c = Client::attach(&s, 160, 30);
     assert_eq!(c.notice(), None);
-    assert_eq!(c.node("code_title").text.as_deref(), Some("untitled"));
+    assert_eq!(
+        c.node("code_title").text.as_deref().map(str::trim),
+        Some("untitled")
+    );
     c.keys("a");
     c.keys("<C-s>");
     let notice = c.notice().expect("a notice");
@@ -717,7 +735,7 @@ fn ui_commands_check_their_args_and_callers() {
         "ok null"
     );
     c.sync();
-    assert!(c.shows("sessions_view"), "files + 5 wraps to sessions");
+    assert!(c.shows("sessions_empty"), "files + 5 wraps to sessions");
     assert_eq!(
         code(c.command("ui.focus", json!({ "region": "agent" }))),
         "ok null"
@@ -883,7 +901,10 @@ fn a_symlink_to_a_folder_is_listed_but_not_opened() {
     let item = c.files().items.iter().find(|i| i.id == "link").unwrap();
     assert_eq!(item.kind, ItemKind::Entry);
     c.press("files_list", Some("link"));
-    assert_eq!(c.node("code_title").text.as_deref(), Some("notes.txt"));
+    assert_eq!(
+        c.node("code_title").text.as_deref().map(str::trim),
+        Some("notes.txt")
+    );
     assert_eq!(c.notice(), None);
 }
 
@@ -993,15 +1014,23 @@ fn the_pack_reloads_when_its_files_change() {
     assert!(!c.shows("sidebar"), "kept ui.sidebar_open = false");
 
     // A broken edit keeps the old pack and shows the error, also to a new client.
-    edit(&pack.join("layout.toml"), "width = 28", "width = \"wide\"");
+    edit(
+        &pack.join("components/sidebar.toml"),
+        "width = 28",
+        "width = \"wide\"",
+    );
     until(&mut c, "the error notice", |c| c.notice().is_some());
     let notice = c.notice().unwrap();
-    assert!(notice.starts_with("layout.toml:"), "{notice}");
+    assert!(notice.starts_with("components/sidebar.toml:"), "{notice}");
     let late = Client::attach(&s, 160, 30);
     assert_eq!(late.notice(), Some(notice));
     assert_eq!(late.app_bg.as_deref(), Some("#121215"));
     // Fixing it clears the notice; removing the key removes it.
-    edit(&pack.join("layout.toml"), "width = \"wide\"", "width = 28");
+    edit(
+        &pack.join("components/sidebar.toml"),
+        "width = \"wide\"",
+        "width = 28",
+    );
     edit(&pack.join("pack.toml"), "\n\"ui.extra\" = true", "");
     until(&mut c, "the key to go", |c| {
         matches!(

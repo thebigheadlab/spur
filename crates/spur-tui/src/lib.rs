@@ -601,16 +601,16 @@ mod shell_tests {
             Rect {
                 x: 34,
                 y: 1,
-                w: 80,
+                w: 81,
                 h: 44
             }
         );
         assert_eq!(
             rect(&app, "agent"),
             Rect {
-                x: 115,
+                x: 116,
                 y: 1,
-                w: 44,
+                w: 43,
                 h: 44
             }
         );

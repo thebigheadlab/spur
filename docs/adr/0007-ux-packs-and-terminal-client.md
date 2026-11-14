@@ -28,7 +28,7 @@ This reverses the first version of this ADR, which painted styles as tone areas 
 
 The server evaluates the pack per client into a plain node tree (`when`, active styles, templates and icons already resolved) and sends it with the theme's token map. Clients never evaluate clauses or templates. Loading checks the whole pack and reports every error as `file:line: path: message`: ids, cycles, regions, styles and borders against the theme and `[borders]`, command ids against the registered commands, every context key a clause or template reads, glyph widths, and every message id the server uses.
 
-Units are terminal cells for every client in protocol v0, including the sizes a client sends (`hello.size`, `resize`, `layout`). A pixel client divides its window by its cell size before sending and multiplies what it receives; a later protocol version may add pixel sizes. The pack's width rules (`client.cols >= 100` for the sidebar, `>= 144` for the agent column) are worked out from the cell layout and the 64-cell minimum for the code.
+Units are terminal cells for every client in protocol v0, including the sizes a client sends (`hello.size`, `resize`, `layout`). A pixel client divides its window by its cell size before sending and multiplies what it receives; a later protocol version may add pixel sizes. The pack's width rules (`client.cols >= 100` for the sidebar, `>= 144` for the agent column) are worked out from the cell layout and the 64-cell minimum for the code. Below 144 columns a focused agent column takes the sidebar's place; the code can then drop below 64 cells (about 47 at 100 columns), but only while the agent column has focus.
 
 Trust: a pack can bind and click any registered command, like a keymap. Packs are trusted like the editor's own settings; untrusted packs are out of scope until extensions get capabilities.
 
@@ -122,6 +122,10 @@ The `no_look` test covers the core crates and `spur-tui`: no hex colours, no key
   - The pack repeats itself: one "show sidebar view" pattern is written out for 4 views, 3 key forms and the rail's clicks. Before packs exist outside the repo, bindings should take a list of keys and/or named `[actions]` that keys and `on_click` share.
   - Conditions cannot read each other, so `keys.toml`'s width conditions repeat the numbers in the `*_shown` conditions.
   - `style` / `style_active` allow one alternate state; a second (hover, disabled) should become an ordered `styles = [{ when, style }]` list. `format = 0` must match exactly and every table is closed, so a compatibility rule is needed before the format is published.
+  - Key hints in the pack are typed by hand; a test checks each against a fixed table and `keys.toml`. Filling them from the keymap needs named actions with a primary key first (see above).
+  - The four themes repeat one `[tokens]` table (the loader checks the names match; a test checks every token is used); a shared token file would remove the copies.
+  - Cut text (a long line, a long workspace name) has no overflow mark; it needs a pack icon and token and a decision on sideways scrolling.
+  - Painting a row style replaces text attributes, so a bold open-file row loses its bold under the selection.
   - What was last sent to a client is split between `Client` (surface) and `UiState` (theme, tree, lists); each list's window is rebuilt every frame; the Files tree has one global generation; the theme's tokens are built per client.
   - `UiState.trees` and the `ui.list.*` commands assume the Files tree; a list module comes with the second list source.
   - The terminal client mixes the protocol mirror (applying `ui`, `list`, `surface`, acks, `layout`) with terminal I/O; the desktop client should start from a transport-neutral model, which may later move into `spur-rpc`.

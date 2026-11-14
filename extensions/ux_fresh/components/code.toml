@@ -1,22 +1,23 @@
-# The code column: a header line over the code surface.
+# The code card: a title row (unsaved dot, file name, language) over the code. The
+# dot comes first so it is still there when a narrow card cuts the row.
+# The file name and the language are shown here and nowhere else.
 
 [node.main]
 kind = "card"
-style = "panel"
+style = "card"
+border = "round"
+border_style = "edge"
+border_style_active = "edge.focus"
+active = "ui.focus == editor"
 padding = [0, 1]
 gap = 1
-children = ["code_header", "code"]
+children = ["code_head", "code"]
 
-[node.code_header]
+[node.code_head]
 kind = "row"
 height = 1
 gap = 1
-children = ["code_title", "code_modified", "code_header_space", "code_lang"]
-
-[node.code_title]
-kind = "text"
-text = "{doc.name}"
-style = "title"
+children = ["code_modified", "code_title", "code_head_space", "code_lang"]
 
 [node.code_modified]
 kind = "icon"
@@ -24,12 +25,17 @@ icon = "modified"
 style = "modified"
 when = "buffer.modified"
 
-[node.code_header_space]
+[node.code_title]
+kind = "text"
+text = " {doc.name} "
+style = "title"
+
+[node.code_head_space]
 kind = "spacer"
 
 [node.code_lang]
 kind = "text"
-text = "{doc.language}"
+text = "{doc.language} "
 style = "subtitle"
 
 [node.code]

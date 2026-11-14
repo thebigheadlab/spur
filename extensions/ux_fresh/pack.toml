@@ -1,4 +1,4 @@
-# ux_fresh: Spur's default look. Every colour, glyph, label and key lives in this folder.
+# ux_fresh: Spur's default look, hairline rounded cards. Every colour, glyph, label and key lives in this folder.
 id = "ux_fresh"            # keymap layer name is "ux:ux_fresh"
 name = "Fresh"
 format = 0                 # pack format version
@@ -16,15 +16,16 @@ theme = "graphite"         # themes/graphite.toml
 "ui.agent_tab" = ["chat", "threads", "library", "memory"]
 
 [conditions]               # named when clauses, readable as cond.<name>
-# The sidebar shows when open and the code column keeps >= 64 cells (100 cols),
-# or whenever it has focus.
-sidebar_shown = "ui.sidebar_open && (client.cols >= 100 || ui.focus == sidebar)"
+# The sidebar shows when open and the code column keeps >= 64 cells: from 100 cols,
+# but below 144 cols not while the agent column has focus (the two do not fit beside
+# the code together). It always shows while it has focus itself.
+sidebar_shown = "ui.sidebar_open && ((client.cols >= 100 && (client.cols >= 144 || ui.focus != agent)) || ui.focus == sidebar)"
 # The agent column shows when open and there is room beside an open sidebar
 # (144 cols), or whenever it has focus.
 agent_shown = "ui.agent_open && (client.cols >= 144 || ui.focus == agent)"
-# The widths alone, for keys.toml (conditions cannot read each other, so the
-# numbers above repeat here; keep them in step).
-sidebar_fits = "client.cols >= 100"
+# Whether each fits where focus is now, for keys.toml (conditions cannot read each
+# other, so the numbers above repeat here; keep them in step).
+sidebar_fits = "client.cols >= 100 && (client.cols >= 144 || ui.focus != agent)"
 agent_fits = "client.cols >= 144"
 
 [regions]                  # focusable regions: name -> node and key mode
@@ -35,12 +36,17 @@ agent = { node = "agent", mode = "agent" }
 [icons]                    # one cell wide each; ascii is the fallback
 files = { glyph = "≡", ascii = "F" }
 sessions = { glyph = "◇", ascii = "T" }
-search = { glyph = "⌕", ascii = "S" }
-git = { glyph = "⑂", ascii = "G" }
+search = { glyph = "⊙", ascii = "S" }
+git = { glyph = "±", ascii = "G" }
 folder = { glyph = "▸", ascii = "+" }
 folder_open = { glyph = "▾", ascii = "-" }
 file = { glyph = "·", ascii = " " }
 modified = { glyph = "●", ascii = "*" }
+brand = { glyph = "◆", ascii = "*" }
+prompt = { glyph = "›", ascii = ">" }
+
+[borders]                  # six one-cell glyphs: corners (tl tr bl br), horizontal, vertical
+round = { glyphs = "╭╮╰╯─│", ascii = "++++-|" }
 
 [languages]                # language id -> label shown in the code header
 c = "C"

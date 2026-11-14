@@ -7,6 +7,16 @@
         "bg": "#111215",
         "fg": "#a4a7b0"
       },
+      "brand": {
+        "bold": true,
+        "fg": "#ecedf0"
+      },
+      "brand.mark": {
+        "fg": "#8b93ff"
+      },
+      "card": {
+        "bg": "#141518"
+      },
       "cursor.peer": {
         "bg": "#f0b37e",
         "fg": "#111215"
@@ -15,26 +25,45 @@
         "bg": "#8b93ff",
         "fg": "#111215"
       },
+      "edge": {
+        "fg": "#3a3d45"
+      },
+      "edge.focus": {
+        "fg": "#8b93ff"
+      },
       "empty": {
-        "fg": "#6c707a"
+        "fg": "#888c95"
       },
-      "gutter": {
-        "fg": "#474a52"
-      },
-      "gutter.current": {
+      "empty.title": {
         "fg": "#a4a7b0"
       },
-      "input": {
-        "bg": "#202227",
+      "field": {
+        "bg": "#202227"
+      },
+      "focus": {
+        "bg": "#262a4a",
+        "bold": true,
+        "fg": "#8b93ff"
+      },
+      "gutter": {
         "fg": "#6c707a"
+      },
+      "gutter.current": {
+        "fg": "#ecedf0"
+      },
+      "hint": {
+        "fg": "#888c95"
+      },
+      "input": {
+        "fg": "#888c95"
+      },
+      "key": {
+        "bg": "#202227",
+        "fg": "#a4a7b0"
       },
       "label": {
         "bold": true,
-        "fg": "#6c707a"
-      },
-      "label.focused": {
-        "bold": true,
-        "fg": "#8b93ff"
+        "fg": "#888c95"
       },
       "line.current": {
         "bg": "#202227"
@@ -49,18 +78,17 @@
         "fg": "#6c707a"
       },
       "list.more": {
-        "fg": "#6c707a",
+        "fg": "#888c95",
         "italic": true
       },
       "list.row": {
         "fg": "#a4a7b0"
       },
       "list.row.current": {
-        "fg": "#a4a7b0"
+        "bg": "#202227",
+        "fg": "#ecedf0"
       },
-      "list.row.selected": {
-        "bg": "#202227"
-      },
+      "list.row.selected": {},
       "list.row.selected.focused": {
         "bg": "#262a4a",
         "fg": "#ecedf0"
@@ -69,26 +97,30 @@
         "fg": "#f0b37e"
       },
       "notice": {
+        "fg": "#ecedf0"
+      },
+      "notice.mark": {
         "fg": "#f0b37e"
       },
-      "panel": {
-        "bg": "#17181c"
+      "path": {
+        "fg": "#888c95"
       },
-      "rail": {
-        "bg": "#17181c"
+      "prompt": {
+        "bold": true,
+        "fg": "#a4a7b0"
       },
       "rail.item": {
-        "fg": "#6c707a"
+        "fg": "#888c95"
       },
       "rail.item.active": {
         "bg": "#202227",
-        "fg": "#8b93ff"
+        "fg": "#ecedf0"
       },
       "selection": {
         "bg": "#262a4a"
       },
       "subtitle": {
-        "fg": "#6c707a"
+        "fg": "#888c95"
       },
       "syntax.comment": {
         "fg": "#6c707a",
@@ -113,7 +145,7 @@
         "fg": "#e6c98f"
       },
       "tab": {
-        "fg": "#6c707a"
+        "fg": "#888c95"
       },
       "tab.active": {
         "bg": "#202227",
@@ -121,25 +153,8 @@
         "fg": "#ecedf0"
       },
       "title": {
-        "bold": true,
-        "fg": "#ecedf0"
-      },
-      "title.focused": {
-        "bold": true,
-        "fg": "#8b93ff"
-      },
-      "topbar": {
-        "bg": "#111215"
-      },
-      "topbar.brand": {
-        "bold": true,
-        "fg": "#ecedf0"
-      },
-      "topbar.path": {
-        "fg": "#6c707a"
-      },
-      "topbar.tab": {
         "bg": "#202227",
+        "bold": true,
         "fg": "#ecedf0"
       }
     },
@@ -152,12 +167,25 @@
         {
           "children": [
             {
+              "alt": "*",
+              "height": {
+                "type": "fit"
+              },
+              "id": "brand_mark",
+              "kind": "icon",
+              "style": "brand.mark",
+              "text": "◆",
+              "width": {
+                "type": "fit"
+              }
+            },
+            {
               "height": {
                 "type": "fit"
               },
               "id": "brand",
               "kind": "text",
-              "style": "topbar.brand",
+              "style": "brand",
               "text": "spur",
               "width": {
                 "type": "fit"
@@ -169,7 +197,7 @@
               },
               "id": "brand_sep",
               "kind": "text",
-              "style": "topbar.path",
+              "style": "path",
               "text": "/",
               "width": {
                 "type": "fit"
@@ -181,32 +209,159 @@
               },
               "id": "workspace",
               "kind": "text",
-              "style": "topbar.path",
+              "style": "path",
               "text": "demo",
               "width": {
-                "type": "fit"
-              }
-            },
-            {
-              "height": {
-                "type": "fill",
-                "weight": 1
-              },
-              "id": "topbar_space",
-              "kind": "spacer",
-              "width": {
                 "type": "fill",
                 "weight": 1
               }
             },
             {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "height": {
+                        "type": "fit"
+                      },
+                      "id": "at_code",
+                      "kind": "text",
+                      "style": "focus",
+                      "text": " CODE ",
+                      "width": {
+                        "type": "fit"
+                      }
+                    },
+                    {
+                      "children": [
+                        {
+                          "height": {
+                            "type": "fit"
+                          },
+                          "id": "k_save",
+                          "kind": "text",
+                          "style": "key",
+                          "text": " ctrl+s ",
+                          "width": {
+                            "type": "fit"
+                          }
+                        },
+                        {
+                          "height": {
+                            "type": "fit"
+                          },
+                          "id": "h_save",
+                          "kind": "text",
+                          "style": "hint",
+                          "text": "save ",
+                          "width": {
+                            "type": "fit"
+                          }
+                        }
+                      ],
+                      "gap": 1,
+                      "height": {
+                        "type": "fill",
+                        "weight": 1
+                      },
+                      "id": "keys_save",
+                      "kind": "row",
+                      "width": {
+                        "type": "fit"
+                      }
+                    },
+                    {
+                      "height": {
+                        "type": "fit"
+                      },
+                      "id": "k_files",
+                      "kind": "text",
+                      "style": "key",
+                      "text": " ctrl+k e ",
+                      "width": {
+                        "type": "fit"
+                      }
+                    },
+                    {
+                      "height": {
+                        "type": "fit"
+                      },
+                      "id": "h_files",
+                      "kind": "text",
+                      "style": "hint",
+                      "text": "files ",
+                      "width": {
+                        "type": "fit"
+                      }
+                    },
+                    {
+                      "height": {
+                        "type": "fit"
+                      },
+                      "id": "k_agent",
+                      "kind": "text",
+                      "style": "key",
+                      "text": " ctrl+k a ",
+                      "width": {
+                        "type": "fit"
+                      }
+                    },
+                    {
+                      "height": {
+                        "type": "fit"
+                      },
+                      "id": "h_agent",
+                      "kind": "text",
+                      "style": "hint",
+                      "text": "agent ",
+                      "width": {
+                        "type": "fit"
+                      }
+                    }
+                  ],
+                  "gap": 1,
+                  "height": {
+                    "type": "fill",
+                    "weight": 1
+                  },
+                  "id": "keys_code",
+                  "kind": "row",
+                  "width": {
+                    "type": "fit"
+                  }
+                },
+                {
+                  "height": {
+                    "type": "fit"
+                  },
+                  "id": "k_quit",
+                  "kind": "text",
+                  "style": "key",
+                  "text": " ctrl+q ",
+                  "width": {
+                    "type": "fit"
+                  }
+                },
+                {
+                  "height": {
+                    "type": "fit"
+                  },
+                  "id": "h_quit",
+                  "kind": "text",
+                  "style": "hint",
+                  "text": "quit",
+                  "width": {
+                    "type": "fit"
+                  }
+                }
+              ],
+              "gap": 1,
               "height": {
-                "type": "fit"
+                "type": "fill",
+                "weight": 1
               },
-              "id": "doc_tab",
-              "kind": "text",
-              "style": "topbar.tab",
-              "text": " main.rs ",
+              "id": "keys",
+              "kind": "row",
               "width": {
                 "type": "fit"
               }
@@ -221,9 +376,8 @@
           "kind": "row",
           "padding": [
             0,
-            1
+            2
           ],
-          "style": "topbar",
           "width": {
             "type": "fill",
             "weight": 1
@@ -272,7 +426,7 @@
                   "id": "rail_search",
                   "kind": "icon",
                   "style": "rail.item",
-                  "text": "⌕",
+                  "text": "⊙",
                   "width": {
                     "type": "fill",
                     "weight": 1
@@ -287,7 +441,7 @@
                   "id": "rail_git",
                   "kind": "icon",
                   "style": "rail.item",
-                  "text": "⑂",
+                  "text": "±",
                   "width": {
                     "type": "fill",
                     "weight": 1
@@ -305,13 +459,15 @@
                 1,
                 0
               ],
-              "style": "rail",
               "width": {
                 "n": 3,
                 "type": "units"
               }
             },
             {
+              "border": "╭╮╰╯─│",
+              "border_alt": "++++-|",
+              "border_style": "edge",
               "children": [
                 {
                   "children": [
@@ -319,34 +475,33 @@
                       "height": {
                         "type": "fit"
                       },
-                      "id": "files_label",
+                      "id": "title_files",
                       "kind": "text",
                       "style": "label",
                       "text": "FILES",
                       "width": {
                         "type": "fit"
                       }
-                    },
-                    {
-                      "height": {
-                        "type": "fill",
-                        "weight": 1
-                      },
-                      "id": "files_list",
-                      "kind": "list",
-                      "width": {
-                        "type": "fill",
-                        "weight": 1
-                      }
                     }
                   ],
-                  "gap": 1,
+                  "height": {
+                    "n": 1,
+                    "type": "units"
+                  },
+                  "id": "sidebar_title",
+                  "kind": "row",
+                  "width": {
+                    "type": "fill",
+                    "weight": 1
+                  }
+                },
+                {
                   "height": {
                     "type": "fill",
                     "weight": 1
                   },
-                  "id": "files_view",
-                  "kind": "column",
+                  "id": "files_list",
+                  "kind": "list",
                   "width": {
                     "type": "fill",
                     "weight": 1
@@ -354,6 +509,7 @@
                 }
               ],
               "clickable": true,
+              "gap": 1,
               "height": {
                 "type": "fill",
                 "weight": 1
@@ -361,16 +517,19 @@
               "id": "sidebar",
               "kind": "card",
               "padding": [
-                1,
-                2
+                0,
+                1
               ],
-              "style": "panel",
+              "style": "card",
               "width": {
                 "n": 28,
                 "type": "units"
               }
             },
             {
+              "border": "╭╮╰╯─│",
+              "border_alt": "++++-|",
+              "border_style": "edge.focus",
               "children": [
                 {
                   "children": [
@@ -381,7 +540,7 @@
                       "id": "code_title",
                       "kind": "text",
                       "style": "title",
-                      "text": "main.rs",
+                      "text": " main.rs ",
                       "width": {
                         "type": "fit"
                       }
@@ -391,7 +550,7 @@
                         "type": "fill",
                         "weight": 1
                       },
-                      "id": "code_header_space",
+                      "id": "code_head_space",
                       "kind": "spacer",
                       "width": {
                         "type": "fill",
@@ -405,7 +564,7 @@
                       "id": "code_lang",
                       "kind": "text",
                       "style": "subtitle",
-                      "text": "Rust",
+                      "text": "Rust ",
                       "width": {
                         "type": "fit"
                       }
@@ -416,7 +575,7 @@
                     "n": 1,
                     "type": "units"
                   },
-                  "id": "code_header",
+                  "id": "code_head",
                   "kind": "row",
                   "width": {
                     "type": "fill",
@@ -451,7 +610,7 @@
                 0,
                 1
               ],
-              "style": "panel",
+              "style": "card",
               "width": {
                 "type": "fill",
                 "weight": 1
@@ -460,85 +619,9 @@
             {
               "children": [
                 {
-                  "height": {
-                    "type": "fit"
-                  },
-                  "id": "agent_header",
-                  "kind": "text",
-                  "style": "title",
-                  "text": "Project chat",
-                  "width": {
-                    "type": "fit"
-                  }
-                },
-                {
-                  "children": [
-                    {
-                      "clickable": true,
-                      "height": {
-                        "type": "fit"
-                      },
-                      "id": "tab_chat",
-                      "kind": "text",
-                      "style": "tab.active",
-                      "text": " Chat ",
-                      "width": {
-                        "type": "fit"
-                      }
-                    },
-                    {
-                      "clickable": true,
-                      "height": {
-                        "type": "fit"
-                      },
-                      "id": "tab_threads",
-                      "kind": "text",
-                      "style": "tab",
-                      "text": " Threads ",
-                      "width": {
-                        "type": "fit"
-                      }
-                    },
-                    {
-                      "clickable": true,
-                      "height": {
-                        "type": "fit"
-                      },
-                      "id": "tab_library",
-                      "kind": "text",
-                      "style": "tab",
-                      "text": " Library ",
-                      "width": {
-                        "type": "fit"
-                      }
-                    },
-                    {
-                      "clickable": true,
-                      "height": {
-                        "type": "fit"
-                      },
-                      "id": "tab_memory",
-                      "kind": "text",
-                      "style": "tab",
-                      "text": " Memory ",
-                      "width": {
-                        "type": "fit"
-                      }
-                    }
-                  ],
-                  "gap": 1,
-                  "height": {
-                    "n": 1,
-                    "type": "units"
-                  },
-                  "id": "agent_tabs",
-                  "kind": "row",
-                  "width": {
-                    "type": "fill",
-                    "weight": 1
-                  }
-                },
-                {
+                  "border": "╭╮╰╯─│",
+                  "border_alt": "++++-|",
+                  "border_style": "edge",
                   "children": [
                     {
                       "height": {
@@ -553,74 +636,230 @@
                       }
                     },
                     {
+                      "children": [
+                        {
+                          "height": {
+                            "type": "fit"
+                          },
+                          "id": "plan_empty_title",
+                          "kind": "text",
+                          "style": "empty.title",
+                          "text": "No plan yet",
+                          "width": {
+                            "type": "fit"
+                          }
+                        },
+                        {
+                          "height": {
+                            "type": "fit"
+                          },
+                          "id": "plan_empty_text",
+                          "kind": "text",
+                          "style": "empty",
+                          "text": "Steps show here as an agent works.",
+                          "width": {
+                            "type": "fit"
+                          }
+                        }
+                      ],
                       "height": {
                         "type": "fit"
                       },
                       "id": "plan_empty",
-                      "kind": "text",
-                      "style": "empty",
-                      "text": "No plan yet.",
+                      "kind": "column",
                       "width": {
-                        "type": "fit"
-                      }
-                    },
-                    {
-                      "height": {
-                        "type": "fit"
-                      },
-                      "id": "chat_label",
-                      "kind": "text",
-                      "style": "label",
-                      "text": "CONVERSATION",
-                      "width": {
-                        "type": "fit"
-                      }
-                    },
-                    {
-                      "height": {
-                        "type": "fit"
-                      },
-                      "id": "chat_empty",
-                      "kind": "text",
-                      "style": "empty",
-                      "text": "Ask a question to start.",
-                      "width": {
-                        "type": "fit"
+                        "type": "fill",
+                        "weight": 1
                       }
                     }
                   ],
                   "gap": 1,
                   "height": {
-                    "type": "fill",
-                    "weight": 1
-                  },
-                  "id": "chat_view",
-                  "kind": "column",
-                  "width": {
-                    "type": "fill",
-                    "weight": 1
-                  }
-                },
-                {
-                  "height": {
-                    "type": "fill",
-                    "weight": 1
-                  },
-                  "id": "agent_space",
-                  "kind": "spacer",
-                  "width": {
-                    "type": "fill",
-                    "weight": 1
-                  }
-                },
-                {
-                  "height": {
                     "type": "fit"
                   },
-                  "id": "agent_input",
-                  "kind": "text",
-                  "style": "input",
-                  "text": " Ask about this project…",
+                  "id": "plan",
+                  "kind": "card",
+                  "padding": [
+                    0,
+                    2
+                  ],
+                  "style": "card",
+                  "width": {
+                    "type": "fill",
+                    "weight": 1
+                  }
+                },
+                {
+                  "border": "╭╮╰╯─│",
+                  "border_alt": "++++-|",
+                  "border_style": "edge",
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "clickable": true,
+                          "height": {
+                            "type": "fit"
+                          },
+                          "id": "tab_chat",
+                          "kind": "text",
+                          "style": "tab.active",
+                          "text": " Chat ",
+                          "width": {
+                            "type": "fit"
+                          }
+                        },
+                        {
+                          "clickable": true,
+                          "height": {
+                            "type": "fit"
+                          },
+                          "id": "tab_threads",
+                          "kind": "text",
+                          "style": "tab",
+                          "text": " Threads ",
+                          "width": {
+                            "type": "fit"
+                          }
+                        },
+                        {
+                          "clickable": true,
+                          "height": {
+                            "type": "fit"
+                          },
+                          "id": "tab_library",
+                          "kind": "text",
+                          "style": "tab",
+                          "text": " Library ",
+                          "width": {
+                            "type": "fit"
+                          }
+                        },
+                        {
+                          "clickable": true,
+                          "height": {
+                            "type": "fit"
+                          },
+                          "id": "tab_memory",
+                          "kind": "text",
+                          "style": "tab",
+                          "text": " Memory ",
+                          "width": {
+                            "type": "fit"
+                          }
+                        }
+                      ],
+                      "gap": 1,
+                      "height": {
+                        "n": 1,
+                        "type": "units"
+                      },
+                      "id": "agent_tabs",
+                      "kind": "row",
+                      "width": {
+                        "type": "fill",
+                        "weight": 1
+                      }
+                    },
+                    {
+                      "children": [
+                        {
+                          "height": {
+                            "type": "fit"
+                          },
+                          "id": "chat_empty_title",
+                          "kind": "text",
+                          "style": "empty.title",
+                          "text": "No messages yet",
+                          "width": {
+                            "type": "fit"
+                          }
+                        },
+                        {
+                          "height": {
+                            "type": "fit"
+                          },
+                          "id": "chat_empty_text",
+                          "kind": "text",
+                          "style": "empty",
+                          "text": "Ask a question to start.",
+                          "width": {
+                            "type": "fit"
+                          }
+                        }
+                      ],
+                      "height": {
+                        "type": "fill",
+                        "weight": 1
+                      },
+                      "id": "chat_view",
+                      "kind": "column",
+                      "padding": [
+                        1,
+                        1
+                      ],
+                      "width": {
+                        "type": "fill",
+                        "weight": 1
+                      }
+                    },
+                    {
+                      "children": [
+                        {
+                          "alt": ">",
+                          "height": {
+                            "type": "fit"
+                          },
+                          "id": "ask_prompt",
+                          "kind": "icon",
+                          "style": "prompt",
+                          "text": "›",
+                          "width": {
+                            "type": "fit"
+                          }
+                        },
+                        {
+                          "height": {
+                            "type": "fit"
+                          },
+                          "id": "ask_text",
+                          "kind": "text",
+                          "style": "input",
+                          "text": "Ask about this project...",
+                          "width": {
+                            "type": "fit"
+                          }
+                        }
+                      ],
+                      "gap": 1,
+                      "height": {
+                        "n": 3,
+                        "type": "units"
+                      },
+                      "id": "ask",
+                      "kind": "row",
+                      "padding": [
+                        1,
+                        2
+                      ],
+                      "style": "field",
+                      "width": {
+                        "type": "fill",
+                        "weight": 1
+                      }
+                    }
+                  ],
+                  "height": {
+                    "type": "fill",
+                    "weight": 1
+                  },
+                  "id": "chat",
+                  "kind": "card",
+                  "padding": [
+                    0,
+                    1
+                  ],
+                  "style": "card",
                   "width": {
                     "type": "fill",
                     "weight": 1
@@ -628,20 +867,14 @@
                 }
               ],
               "clickable": true,
-              "gap": 1,
               "height": {
                 "type": "fill",
                 "weight": 1
               },
               "id": "agent",
-              "kind": "card",
-              "padding": [
-                1,
-                2
-              ],
-              "style": "panel",
+              "kind": "column",
               "width": {
-                "n": 44,
+                "n": 43,
                 "type": "units"
               }
             }

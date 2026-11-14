@@ -66,13 +66,13 @@ fn check_uses_the_default_commands() {
 
 #[test]
 fn errors_name_file_line_and_field() {
-    let e = broken("layout.toml", |t| {
+    let e = broken("components/sidebar.toml", |t| {
         t.replace("width = 28", "width = \"wide\"")
     });
     assert_eq!(
         e,
         [
-            "layout.toml:16: node.sidebar.width: expected a number, \"fill\", \"fit\" or { fill = N }"
+            "components/sidebar.toml:8: node.sidebar.width: expected a number, \"fill\", \"fit\" or { fill = N }"
         ]
     );
     let e = broken("layout.toml", |t| {
@@ -80,7 +80,7 @@ fn errors_name_file_line_and_field() {
     });
     has(
         &e,
-        "layout.toml:9: node.body.kidn: unknown key for this kind",
+        "layout.toml:11: node.body.kidn: unknown key for this kind",
     );
     let e = broken("pack.toml", |t| format!("colour = 1\n{t}"));
     has(&e, "pack.toml:");
@@ -182,9 +182,10 @@ fn structure_is_checked() {
     let e = broken("components/topbar.toml", |t| {
         format!("{t}\n[node.body]\nkind = \"row\"\n")
     });
-    assert_eq!(
-        e,
-        ["layout.toml:8: node.body: already defined in components/topbar.toml:38"]
+    assert_eq!(e.len(), 1, "{e:?}");
+    has(
+        &e,
+        "layout.toml:10: node.body: already defined in components/topbar.toml:",
     );
     let e = broken("components/code.toml", |t| {
         t.replace(
@@ -277,7 +278,7 @@ fn pack_tables_are_checked() {
 #[test]
 fn themes_are_checked() {
     let e = broken("themes/paper.toml", |t| {
-        t.replace("\"gutter\" = { fg = \"t4\" }\n", "")
+        t.replace("\"gutter\" = { fg = \"t3\" }\n", "")
     });
     has(&e, "themes/paper.toml: tokens.gutter: missing");
     let e = broken("themes/sand.toml", |t| {
@@ -317,102 +318,137 @@ fn templates_render() {
     assert!(Template::parse("{}").is_err());
 }
 
-/// `ux_fresh` with a round border on the sidebar card, lit while it has focus.
-fn bordered(border: &str) -> Vec<(String, String)> {
-    let mut files = fresh();
-    for (p, t) in &mut files {
-        if p == "pack.toml" {
-            *t = format!("{t}\n[borders]\nround = {border}\n");
+fn sidebar(pack: &Pack, ctx: &spur_core::Context) -> spur_rpc::Node {
+    fn walk(n: &spur_rpc::Node) -> Option<&spur_rpc::Node> {
+        if n.id == "sidebar" {
+            return Some(n);
         }
-        if p == "layout.toml" {
-            *t = t.replace(
-                "width = 28\nstyle = \"panel\"",
-                "width = 28\nstyle = \"panel\"\nborder = \"round\"\nborder_style = \"app\"\n\
-                 border_style_active = \"panel\"\nactive = \"ui.focus == sidebar\"",
-            );
-        }
+        n.children.iter().find_map(walk)
     }
-    files
+    walk(&super::super::eval::tree(pack, ctx).root)
+        .unwrap()
+        .clone()
 }
 
 #[test]
 fn borders_load_and_reach_the_tree() {
-    let pack = load(&bordered(
-        "{ glyphs = \"\u{256d}\u{256e}\u{2570}\u{256f}\u{2500}\u{2502}\", ascii = \"++++-|\" }",
-    ))
-    .unwrap_or_else(|e| panic!("{e:#?}"));
-    let find = |n: &spur_rpc::Node| -> spur_rpc::Node {
-        fn walk(n: &spur_rpc::Node) -> Option<&spur_rpc::Node> {
-            if n.id == "sidebar" {
-                return Some(n);
-            }
-            n.children.iter().find_map(walk)
-        }
-        walk(n).unwrap().clone()
-    };
+    let pack = load(&fresh()).unwrap_or_else(|e| panic!("{e:#?}"));
     let mut ctx = spur_core::Context::new();
     ctx.set("cond.sidebar_shown", true).unwrap();
-    let side = find(&super::super::eval::tree(&pack, &ctx).root);
-    assert_eq!(
-        side.border.as_deref(),
-        Some("\u{256d}\u{256e}\u{2570}\u{256f}\u{2500}\u{2502}")
-    );
-    assert_eq!(side.border_alt.as_deref(), Some("++++-|"));
-    assert_eq!(side.border_style.as_deref(), Some("app"));
+    let side = sidebar(&pack, &ctx);
+    let round = &pack.borders["round"];
+    assert_eq!(side.border.as_ref(), Some(&round.glyphs));
+    assert_eq!(side.border_alt.as_ref(), Some(&round.ascii));
+    assert_eq!(side.border_style.as_deref(), Some("edge"));
     assert_eq!(
         side.style.as_deref(),
-        Some("panel"),
+        Some("card"),
         "style stays without style_active"
     );
     ctx.set("ui.focus", "sidebar").unwrap();
-    let side = find(&super::super::eval::tree(&pack, &ctx).root);
-    assert_eq!(side.border_style.as_deref(), Some("panel"));
-    assert_eq!(side.style.as_deref(), Some("panel"));
+    let side = sidebar(&pack, &ctx);
+    assert_eq!(side.border_style.as_deref(), Some("edge.focus"));
+    assert_eq!(side.style.as_deref(), Some("card"));
 }
 
 #[test]
 fn borders_are_checked() {
-    let errors = |files: Vec<(String, String)>| -> Vec<String> {
-        load(&files)
-            .map(|_| panic!("the broken pack loaded"))
-            .unwrap_err()
-            .iter()
-            .map(ToString::to_string)
-            .collect()
-    };
-    let e = errors(bordered("{ glyphs = \"+-\", ascii = \"++++-\" }"));
+    let border = "round = { glyphs = \"\u{256d}\u{256e}\u{2570}\u{256f}\u{2500}\u{2502}\", ascii = \"++++-|\" }";
+    let e = broken("pack.toml", |t| {
+        t.replace(border, "round = { glyphs = \"+-\", ascii = \"++++-\" }")
+    });
     has(&e, "borders.round.glyphs: must be six one-cell glyphs");
     has(&e, "borders.round.ascii: must be six printable ASCII chars");
-    let e = errors(bordered(
-        "{ glyphs = \"\u{6771}\u{256e}\u{2570}\u{256f}\u{2500}\u{2502}\", ascii = \"++++-|\" }",
-    ));
+    let e = broken("pack.toml", |t| {
+        t.replace(border, &border.replace('\u{256d}', "\u{6771}"))
+    });
     has(&e, "borders.round.glyphs: must be six one-cell glyphs");
-    let mut files = bordered("{ glyphs = \"++++-|\", ascii = \"++++-|\" }");
-    for (p, t) in &mut files {
-        if p == "layout.toml" {
-            *t = t.replace("border = \"round\"", "border = \"double\"");
-        }
-    }
-    has(
-        &errors(files),
-        "node.sidebar.border: no border \"double\" in pack.toml",
-    );
-    let e = broken("layout.toml", |t| {
-        t.replace("width = 28\n", "width = 28\nborder_style = \"app\"\n")
+    let e = broken("components/sidebar.toml", |t| {
+        t.replacen("border = \"round\"", "border = \"double\"", 1)
+    });
+    has(&e, "node.sidebar.border: no border \"double\" in pack.toml");
+    let e = broken("components/sidebar.toml", |t| {
+        t.replacen("border = \"round\"\n", "", 1)
     });
     has(
         &e,
         "node.sidebar.border: missing (border_style needs a border)",
     );
-    let e = broken("layout.toml", |t| {
-        t.replace(
-            "width = 28\n",
-            "width = 28\nactive = \"ui.focus == sidebar\"\n",
-        )
+    let e = broken("components/sidebar.toml", |t| {
+        t.replacen("border_style_active = \"edge.focus\"\n", "", 1)
     });
     has(&e, "active goes with style_active or border_style_active");
     let e = broken("components/topbar.toml", |t| {
         t.replacen("kind = \"text\"", "kind = \"text\"\nborder = \"round\"", 1)
     });
     has(&e, "unknown key for this kind");
+}
+
+/// Key hints are typed by hand (ADR 0007 debt): each one must be in this table,
+/// and each key it names must be bound in `keys.toml`.
+const HINTS: &[(&str, &[&str])] = &[
+    ("ctrl+s", &["<C-s>"]),
+    ("ctrl+k e", &["<C-k>e"]),
+    ("ctrl+k a", &["<C-k>a"]),
+    ("ctrl+q", &["<C-q>"]),
+    ("up/down", &["<Up>", "<Down>"]),
+    ("left/right", &["<Left>", "<Right>"]),
+    ("enter", &["<CR>"]),
+    ("esc", &["<Esc>"]),
+];
+
+#[test]
+fn key_hints_name_bound_keys() {
+    let pack = load(&fresh()).unwrap();
+    let mut seen = 0;
+    for (id, n) in &pack.nodes {
+        if n.style.as_deref() != Some("key") {
+            continue;
+        }
+        let text = n
+            .text
+            .as_ref()
+            .map(|t| t.render(|_| None))
+            .unwrap_or_default();
+        let hint = text.trim();
+        let Some((_, keys)) = HINTS.iter().find(|(h, _)| *h == hint) else {
+            panic!("node.{id}: hint {hint:?} is not in HINTS; add it with its keys");
+        };
+        for k in *keys {
+            let want = spur_keymap::parse_keys(k).unwrap();
+            assert!(
+                pack.keys.bindings.iter().any(|b| b.keys == want),
+                "node.{id}: {hint:?} names {k}, which keys.toml does not bind"
+            );
+        }
+        seen += 1;
+    }
+    assert!(seen >= 5, "found only {seen} hints");
+}
+
+#[test]
+fn every_theme_token_is_used() {
+    let pack = load(&fresh()).unwrap();
+    let mut used: BTreeSet<&str> = spur_rpc::tokens::ALL.into_iter().collect();
+    for n in pack.nodes.values() {
+        for s in [
+            &n.style,
+            &n.style_active,
+            &n.border_style,
+            &n.border_style_active,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            used.insert(s);
+        }
+    }
+    for (name, theme) in &pack.themes {
+        for token in theme.tokens.keys() {
+            assert!(
+                used.contains(token.as_str()),
+                "themes/{name}.toml: token {token:?} is not used by any node"
+            );
+        }
+    }
 }

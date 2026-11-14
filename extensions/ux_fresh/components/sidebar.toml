@@ -1,72 +1,99 @@
-# Sidebar views. The sidebar card itself is in layout.toml.
+# The sidebar card. Its first row is the title: the name of the view that is showing,
+# so each rail icon is named when it is picked. The outline takes the accent colour
+# while the sidebar has focus. In the Files list the open file is marked
+# (list.row.current); the selected row shows only while the sidebar has focus.
 
-[node.files_view]
-kind = "column"
+[node.sidebar]
+kind = "card"
+width = 28
+style = "card"
+border = "round"
+border_style = "edge"
+border_style_active = "edge.focus"
+active = "ui.focus == sidebar"
+padding = [0, 1]
 gap = 1
-when = "ui.sidebar == files"
-children = ["files_label", "files_list"]
+when = "cond.sidebar_shown"
+children = ["sidebar_title", "files_list", "sessions_empty", "search_empty", "git_empty"]
 
-[node.files_label]
+[node.sidebar_title]
+kind = "row"
+height = 1
+children = ["title_files", "title_sessions", "title_search", "title_git"]
+
+[node.title_files]
 kind = "text"
 text = "FILES"
 style = "label"
-style_active = "label.focused"
-active = "ui.focus == sidebar"
+when = "ui.sidebar == files"
+
+[node.title_sessions]
+kind = "text"
+text = "SESSIONS"
+style = "label"
+when = "ui.sidebar == sessions"
+
+[node.title_search]
+kind = "text"
+text = "SEARCH"
+style = "label"
+when = "ui.sidebar == search"
+
+[node.title_git]
+kind = "text"
+text = "GIT"
+style = "label"
+when = "ui.sidebar == git"
 
 [node.files_list]
 kind = "list"
 source = "workspace.files"
-
-[node.sessions_view]
-kind = "column"
-gap = 1
-when = "ui.sidebar == sessions"
-children = ["sessions_label", "sessions_empty"]
-
-[node.sessions_label]
-kind = "text"
-text = "SESSIONS"
-style = "label"
-style_active = "label.focused"
-active = "ui.focus == sidebar"
+when = "ui.sidebar == files"
 
 [node.sessions_empty]
-kind = "text"
-text = "No sessions yet."
-style = "empty"
-
-[node.search_view]
 kind = "column"
-gap = 1
-when = "ui.sidebar == search"
-children = ["search_label", "search_empty"]
+padding = [0, 1]
+when = "ui.sidebar == sessions"
+children = ["sessions_empty_title", "sessions_empty_text"]
 
-[node.search_label]
+[node.sessions_empty_title]
 kind = "text"
-text = "SEARCH"
-style = "label"
-style_active = "label.focused"
-active = "ui.focus == sidebar"
+text = "No sessions yet"
+style = "empty.title"
+
+[node.sessions_empty_text]
+kind = "text"
+text = "Agent sessions list here."
+style = "empty"
 
 [node.search_empty]
+kind = "column"
+padding = [0, 1]
+when = "ui.sidebar == search"
+children = ["search_empty_title", "search_empty_text"]
+
+[node.search_empty_title]
 kind = "text"
-text = "Search is coming soon."
+text = "Search is coming soon"
+style = "empty.title"
+
+[node.search_empty_text]
+kind = "text"
+text = "Find in files, later."
 style = "empty"
 
-[node.git_view]
-kind = "column"
-gap = 1
-when = "ui.sidebar == git"
-children = ["git_label", "git_empty"]
-
-[node.git_label]
-kind = "text"
-text = "GIT"
-style = "label"
-style_active = "label.focused"
-active = "ui.focus == sidebar"
-
 [node.git_empty]
+kind = "column"
+padding = [0, 1]
+when = "ui.sidebar == git"
+children = ["git_empty_title", "git_empty_text"]
+
+[node.git_empty_title]
 kind = "text"
-text = "Git is coming soon."
+text = "Git is coming soon"
+style = "empty.title"
+
+[node.git_empty_text]
+kind = "text"
+text = "Changes and branches."
 style = "empty"

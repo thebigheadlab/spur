@@ -3,17 +3,19 @@ dark = false
 
 [palette]
 bg = "#f3f3f1"
-panel = "#ffffff"
+card = "#ffffff"       # inside a card
+field = "#f3f3f1"      # the ask box (the app background)
 soft = "#efefec"
-line = "#dcdcd7"
+chip = "#e6e6e2"       # pills: key hints, tabs, the file name (a step darker than soft)
+edge = "#b0b1ae"       # card outlines
 t1 = "#1f2024"
 t2 = "#55575e"
+dim = "#686a71"        # quiet text that must still be read (4.5:1 or better)
 t3 = "#8b8d94"
-t4 = "#b8bac0"
 sel = "#e3e5ff"
 accent = "#4c5cf0"
+accent_text = "#4350c7" # accent as text: the accent, darkened to read on sel
 need = "#c96a1c"
-ok = "#1f9d5c"
 kw = "#8b3fc4"
 fn = "#2459c7"
 ty = "#a0620a"
@@ -23,41 +25,51 @@ str = "#3f7f2f"
 comment = "#8b8d94"
 
 [tokens]
-# Surfaces and text
+# Surfaces and outlines
 "app" = { fg = "t2", bg = "bg" }
-"panel" = { bg = "panel" }
-"topbar" = { bg = "bg" }
-"topbar.brand" = { fg = "t1", bold = true }
-"topbar.path" = { fg = "t3" }
-"topbar.tab" = { fg = "t1", bg = "soft" }
-"rail" = { bg = "panel" }
-"rail.item" = { fg = "t3" }
-"rail.item.active" = { fg = "accent", bg = "soft" }
-"label" = { fg = "t3", bold = true }
-"label.focused" = { fg = "accent", bold = true }
-"title" = { fg = "t1", bold = true }
-"title.focused" = { fg = "accent", bold = true }
-"subtitle" = { fg = "t3" }
+"card" = { bg = "card" }
+"edge" = { fg = "edge" }
+"edge.focus" = { fg = "accent" }
+
+# Top bar
+"brand.mark" = { fg = "accent" }
+"brand" = { fg = "t1", bold = true }
+"path" = { fg = "dim" }
+"notice.mark" = { fg = "need" }
+"notice" = { fg = "t1" }
+"focus" = { fg = "accent_text", bg = "sel", bold = true }
+"key" = { fg = "t2", bg = "chip" }
+"hint" = { fg = "dim" }
+
+# Rail, titles and text
+"rail.item" = { fg = "dim" }
+"rail.item.active" = { fg = "t1", bg = "chip" }
+"label" = { fg = "dim", bold = true }
+"title" = { fg = "t1", bg = "chip", bold = true }
+"subtitle" = { fg = "dim" }
 "modified" = { fg = "need" }
-"notice" = { fg = "need" }
-"tab" = { fg = "t3" }
-"tab.active" = { fg = "t1", bg = "soft", bold = true }
-"empty" = { fg = "t3" }
-"input" = { fg = "t3", bg = "soft" }
+"tab" = { fg = "dim" }
+"tab.active" = { fg = "t1", bg = "chip", bold = true }
+"empty" = { fg = "dim" }
+"empty.title" = { fg = "t2" }
+"field" = { bg = "field" }
+"prompt" = { fg = "t2", bold = true }
+"input" = { fg = "dim" }
 
 # Fixed tokens (named by the protocol)
-"gutter" = { fg = "t4" }
-"gutter.current" = { fg = "t2" }
+"gutter" = { fg = "t3" }
+"gutter.current" = { fg = "t1" }
 "line.current" = { bg = "soft" }
 "selection" = { bg = "sel" }
 "cursor.secondary" = { fg = "bg", bg = "accent" }
 "cursor.peer" = { fg = "bg", bg = "need" }
 "list.row" = { fg = "t2" }
-"list.row.selected" = { bg = "soft" }
+"list.row.selected" = {}
+"list.row.current" = { fg = "t1", bg = "soft" }
 "list.row.selected.focused" = { fg = "t1", bg = "sel" }
 "list.dir" = { fg = "t1" }
 "list.icon" = { fg = "t3" }
-"list.more" = { fg = "t3", italic = true }
+"list.more" = { fg = "dim", italic = true }
 "list.error" = { fg = "need" }
 "syntax.keyword" = { fg = "kw" }
 "syntax.type" = { fg = "ty" }

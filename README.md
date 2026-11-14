@@ -59,13 +59,14 @@ cargo run --release -- path/to/project  # open a folder (an untitled document)
 cargo run --release -- --theme paper    # another bundled theme: graphite, paper, midnight, sand
 ```
 
-`spur [--ux DIR] [--theme NAME] [--] [PATH...]`. The shell has a top bar, an icon rail with a switchable sidebar (Files works now), the code in the middle and the agent column on the right. Columns hide themselves as the terminal narrows so the code keeps at least 64 cells.
+`spur [--ux DIR] [--theme NAME] [--] [PATH...]`. The shell has a top bar, an icon rail with a switchable sidebar (Files works now), the code in the middle and the agent column on the right. Columns hide themselves as the terminal narrows so the code keeps at least 64 cells; a column you move focus to always shows. The panel with focus has an accent outline and its name in the top bar, which also shows the keys for it.
 
 | Keys | Action |
 |---|---|
 | ctrl+s, ctrl+z, ctrl+shift+z or ctrl+y | Save, undo, redo |
 | ctrl+b | Show or hide the sidebar |
-| ctrl+alt+b (or ctrl+k a) | Show or hide the agent column |
+| ctrl+alt+b | Show or hide the agent column |
+| ctrl+k a | Go to the agent column (again: back to the code) |
 | ctrl+shift+e / j / f / g | Sidebar: Files, Sessions, Search, Git |
 | alt+1..4, or ctrl+k then e / j / f / g | The same, for terminals that cannot send ctrl+shift |
 | Up, Down, PageUp, PageDown, Right, Left, Enter | Move in the Files tree, expand, collapse, open |

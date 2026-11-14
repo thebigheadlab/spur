@@ -7,6 +7,16 @@
         "bg": "#111215",
         "fg": "#a4a7b0"
       },
+      "brand": {
+        "bold": true,
+        "fg": "#ecedf0"
+      },
+      "brand.mark": {
+        "fg": "#8b93ff"
+      },
+      "card": {
+        "bg": "#141518"
+      },
       "cursor.peer": {
         "bg": "#f0b37e",
         "fg": "#111215"
@@ -15,26 +25,45 @@
         "bg": "#8b93ff",
         "fg": "#111215"
       },
+      "edge": {
+        "fg": "#3a3d45"
+      },
+      "edge.focus": {
+        "fg": "#8b93ff"
+      },
       "empty": {
-        "fg": "#6c707a"
+        "fg": "#888c95"
       },
-      "gutter": {
-        "fg": "#474a52"
-      },
-      "gutter.current": {
+      "empty.title": {
         "fg": "#a4a7b0"
       },
-      "input": {
-        "bg": "#202227",
+      "field": {
+        "bg": "#202227"
+      },
+      "focus": {
+        "bg": "#262a4a",
+        "bold": true,
+        "fg": "#8b93ff"
+      },
+      "gutter": {
         "fg": "#6c707a"
+      },
+      "gutter.current": {
+        "fg": "#ecedf0"
+      },
+      "hint": {
+        "fg": "#888c95"
+      },
+      "input": {
+        "fg": "#888c95"
+      },
+      "key": {
+        "bg": "#202227",
+        "fg": "#a4a7b0"
       },
       "label": {
         "bold": true,
-        "fg": "#6c707a"
-      },
-      "label.focused": {
-        "bold": true,
-        "fg": "#8b93ff"
+        "fg": "#888c95"
       },
       "line.current": {
         "bg": "#202227"
@@ -49,18 +78,17 @@
         "fg": "#6c707a"
       },
       "list.more": {
-        "fg": "#6c707a",
+        "fg": "#888c95",
         "italic": true
       },
       "list.row": {
         "fg": "#a4a7b0"
       },
       "list.row.current": {
-        "fg": "#a4a7b0"
+        "bg": "#202227",
+        "fg": "#ecedf0"
       },
-      "list.row.selected": {
-        "bg": "#202227"
-      },
+      "list.row.selected": {},
       "list.row.selected.focused": {
         "bg": "#262a4a",
         "fg": "#ecedf0"
@@ -69,26 +97,30 @@
         "fg": "#f0b37e"
       },
       "notice": {
+        "fg": "#ecedf0"
+      },
+      "notice.mark": {
         "fg": "#f0b37e"
       },
-      "panel": {
-        "bg": "#17181c"
+      "path": {
+        "fg": "#888c95"
       },
-      "rail": {
-        "bg": "#17181c"
+      "prompt": {
+        "bold": true,
+        "fg": "#a4a7b0"
       },
       "rail.item": {
-        "fg": "#6c707a"
+        "fg": "#888c95"
       },
       "rail.item.active": {
         "bg": "#202227",
-        "fg": "#8b93ff"
+        "fg": "#ecedf0"
       },
       "selection": {
         "bg": "#262a4a"
       },
       "subtitle": {
-        "fg": "#6c707a"
+        "fg": "#888c95"
       },
       "syntax.comment": {
         "fg": "#6c707a",
@@ -113,7 +145,7 @@
         "fg": "#e6c98f"
       },
       "tab": {
-        "fg": "#6c707a"
+        "fg": "#888c95"
       },
       "tab.active": {
         "bg": "#202227",
@@ -121,25 +153,8 @@
         "fg": "#ecedf0"
       },
       "title": {
-        "bold": true,
-        "fg": "#ecedf0"
-      },
-      "title.focused": {
-        "bold": true,
-        "fg": "#8b93ff"
-      },
-      "topbar": {
-        "bg": "#111215"
-      },
-      "topbar.brand": {
-        "bold": true,
-        "fg": "#ecedf0"
-      },
-      "topbar.path": {
-        "fg": "#6c707a"
-      },
-      "topbar.tab": {
         "bg": "#202227",
+        "bold": true,
         "fg": "#ecedf0"
       }
     },
@@ -152,25 +167,14 @@
         {
           "children": [
             {
+              "alt": "*",
               "height": {
                 "type": "fit"
               },
-              "id": "brand",
-              "kind": "text",
-              "style": "topbar.brand",
-              "text": "spur",
-              "width": {
-                "type": "fit"
-              }
-            },
-            {
-              "height": {
-                "type": "fit"
-              },
-              "id": "brand_sep",
-              "kind": "text",
-              "style": "topbar.path",
-              "text": "/",
+              "id": "brand_mark",
+              "kind": "icon",
+              "style": "brand.mark",
+              "text": "◆",
               "width": {
                 "type": "fit"
               }
@@ -181,32 +185,121 @@
               },
               "id": "workspace",
               "kind": "text",
-              "style": "topbar.path",
+              "style": "path",
               "text": "demo",
               "width": {
-                "type": "fit"
-              }
-            },
-            {
-              "height": {
-                "type": "fill",
-                "weight": 1
-              },
-              "id": "topbar_space",
-              "kind": "spacer",
-              "width": {
                 "type": "fill",
                 "weight": 1
               }
             },
             {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "height": {
+                        "type": "fit"
+                      },
+                      "id": "at_code",
+                      "kind": "text",
+                      "style": "focus",
+                      "text": " CODE ",
+                      "width": {
+                        "type": "fit"
+                      }
+                    },
+                    {
+                      "height": {
+                        "type": "fit"
+                      },
+                      "id": "k_files",
+                      "kind": "text",
+                      "style": "key",
+                      "text": " ctrl+k e ",
+                      "width": {
+                        "type": "fit"
+                      }
+                    },
+                    {
+                      "height": {
+                        "type": "fit"
+                      },
+                      "id": "h_files",
+                      "kind": "text",
+                      "style": "hint",
+                      "text": "files ",
+                      "width": {
+                        "type": "fit"
+                      }
+                    },
+                    {
+                      "height": {
+                        "type": "fit"
+                      },
+                      "id": "k_agent",
+                      "kind": "text",
+                      "style": "key",
+                      "text": " ctrl+k a ",
+                      "width": {
+                        "type": "fit"
+                      }
+                    },
+                    {
+                      "height": {
+                        "type": "fit"
+                      },
+                      "id": "h_agent",
+                      "kind": "text",
+                      "style": "hint",
+                      "text": "agent ",
+                      "width": {
+                        "type": "fit"
+                      }
+                    }
+                  ],
+                  "gap": 1,
+                  "height": {
+                    "type": "fill",
+                    "weight": 1
+                  },
+                  "id": "keys_code",
+                  "kind": "row",
+                  "width": {
+                    "type": "fit"
+                  }
+                },
+                {
+                  "height": {
+                    "type": "fit"
+                  },
+                  "id": "k_quit",
+                  "kind": "text",
+                  "style": "key",
+                  "text": " ctrl+q ",
+                  "width": {
+                    "type": "fit"
+                  }
+                },
+                {
+                  "height": {
+                    "type": "fit"
+                  },
+                  "id": "h_quit",
+                  "kind": "text",
+                  "style": "hint",
+                  "text": "quit",
+                  "width": {
+                    "type": "fit"
+                  }
+                }
+              ],
+              "gap": 1,
               "height": {
-                "type": "fit"
+                "type": "fill",
+                "weight": 1
               },
-              "id": "doc_tab",
-              "kind": "text",
-              "style": "topbar.tab",
-              "text": " main.rs ",
+              "id": "keys",
+              "kind": "row",
               "width": {
                 "type": "fit"
               }
@@ -221,9 +314,8 @@
           "kind": "row",
           "padding": [
             0,
-            1
+            2
           ],
-          "style": "topbar",
           "width": {
             "type": "fill",
             "weight": 1
@@ -272,7 +364,7 @@
                   "id": "rail_search",
                   "kind": "icon",
                   "style": "rail.item",
-                  "text": "⌕",
+                  "text": "⊙",
                   "width": {
                     "type": "fill",
                     "weight": 1
@@ -287,7 +379,7 @@
                   "id": "rail_git",
                   "kind": "icon",
                   "style": "rail.item",
-                  "text": "⑂",
+                  "text": "±",
                   "width": {
                     "type": "fill",
                     "weight": 1
@@ -305,13 +397,15 @@
                 1,
                 0
               ],
-              "style": "rail",
               "width": {
                 "n": 3,
                 "type": "units"
               }
             },
             {
+              "border": "╭╮╰╯─│",
+              "border_alt": "++++-|",
+              "border_style": "edge.focus",
               "children": [
                 {
                   "children": [
@@ -322,7 +416,7 @@
                       "id": "code_title",
                       "kind": "text",
                       "style": "title",
-                      "text": "main.rs",
+                      "text": " main.rs ",
                       "width": {
                         "type": "fit"
                       }
@@ -332,7 +426,7 @@
                         "type": "fill",
                         "weight": 1
                       },
-                      "id": "code_header_space",
+                      "id": "code_head_space",
                       "kind": "spacer",
                       "width": {
                         "type": "fill",
@@ -346,7 +440,7 @@
                       "id": "code_lang",
                       "kind": "text",
                       "style": "subtitle",
-                      "text": "Rust",
+                      "text": "Rust ",
                       "width": {
                         "type": "fit"
                       }
@@ -357,7 +451,7 @@
                     "n": 1,
                     "type": "units"
                   },
-                  "id": "code_header",
+                  "id": "code_head",
                   "kind": "row",
                   "width": {
                     "type": "fill",
@@ -392,7 +486,7 @@
                 0,
                 1
               ],
-              "style": "panel",
+              "style": "card",
               "width": {
                 "type": "fill",
                 "weight": 1
