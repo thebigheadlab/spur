@@ -6,6 +6,8 @@
 //! nodes keep their `children` whatever their kind, so an unknown container still
 //! shows what is inside it.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -77,14 +79,15 @@ pub enum MouseAction {
     Unknown,
 }
 
-/// The space a client's layout gave one surface node.
+/// The space a client's layout gave one surface or list node (the name predates
+/// lists).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SurfaceSize {
-    /// The surface node's id.
+    /// The surface or list node's id.
     pub node: String,
-    /// Text rows.
+    /// Text rows (for a list: visible items).
     pub rows: u32,
-    /// Text columns.
+    /// Text columns (for a surface: without the gutter).
     pub cols: u32,
 }
 
@@ -134,15 +137,19 @@ pub enum ClientMsg {
         /// For `scroll`: lines, positive is down.
         #[serde(default)]
         lines: i32,
+        /// For `press` on a list: the [`Item::id`] under the pointer.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        item: Option<String>,
     },
     /// The client's area changed.
     Resize {
         /// New size.
         size: Size,
     },
-    /// The space the client's layout gave each surface.
+    /// The space the client's layout gave each surface and list node. Sent after any
+    /// draw in which that set of nodes, or one of their sizes, changed.
     Layout {
-        /// One entry per surface node.
+        /// One entry per surface and list node.
         surfaces: Vec<SurfaceSize>,
     },
     /// Runs a command as this client; answered by `result`.
@@ -250,6 +257,25 @@ pub enum ServerMsg {
         #[serde(default)]
         focus: Option<String>,
     },
+    /// The theme: every style name the server may send, resolved to a token. Sent
+    /// before the first `ui` and again when the theme changes.
+    Theme {
+        /// Theme name (its file name in the pack).
+        name: String,
+        /// A dark theme.
+        #[serde(default)]
+        dark: bool,
+        /// Style name to token. A name not in the map changes nothing.
+        tokens: BTreeMap<String, Token>,
+    },
+    /// The visible window of one list node; sent when it changed, and again when the
+    /// node reappears in the tree.
+    List {
+        /// The list node's id.
+        node: String,
+        /// Its window.
+        list: ListView,
+    },
     /// What one surface shows; sent only when it changed.
     Surface {
         /// The surface node's id.
@@ -349,6 +375,15 @@ pub enum NodeKind {
     Surface,
     /// Empty space.
     Spacer,
+    /// A column a pixel client may draw as a rounded panel.
+    Card,
+    /// One line of text ([`Node::text`]).
+    Text,
+    /// One icon glyph ([`Node::text`], ASCII fallback in [`Node::alt`]), drawn
+    /// centred in its rectangle.
+    Icon,
+    /// A scrolling list; its rows arrive in `list` messages.
+    List,
     /// A kind this version does not know; laid out as a `column` of its children.
     #[serde(other)]
     Unknown,
@@ -357,6 +392,7 @@ pub enum NodeKind {
 /// A UI node. The server has already decided everything; a client lays it out and
 /// draws it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(clippy::struct_excessive_bools)] // independent flags, as on the wire
 pub struct Node {
     /// Stable id.
     pub id: String,
@@ -369,6 +405,205 @@ pub struct Node {
     /// Child nodes, for containers.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<Node>,
+    /// Style name, looked up in the theme's tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<String>,
+    /// `text`: the text; `icon`: the glyph.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// `icon`: an ASCII fallback for terminals that cannot show the glyph.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alt: Option<String>,
+    /// Containers: `[vertical, horizontal]` padding in layout units.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub padding: Option<[u32; 2]>,
+    /// Containers: units between visible children.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub gap: u32,
+    /// The client sends presses on this node (`mouse` with its id).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clickable: bool,
+    /// Surface: draw line numbers.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub gutter: bool,
+    /// Surface: mark the primary cursor's line.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub current_line: bool,
+    /// Surface: tab stop; 0 means 4.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub tab_width: u32,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)] // serde passes a reference
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
+impl Node {
+    /// A node with `fill` sizes and every optional field empty.
+    pub fn new(id: impl Into<String>, kind: NodeKind) -> Self {
+        Self {
+            id: id.into(),
+            kind,
+            width: Dim::FILL,
+            height: Dim::FILL,
+            children: Vec::new(),
+            style: None,
+            text: None,
+            alt: None,
+            padding: None,
+            gap: 0,
+            clickable: false,
+            gutter: false,
+            current_line: false,
+            tab_width: 0,
+        }
+    }
+}
+
+/// How a style looks. Unset fields keep what is under the styled area (a keyword on
+/// the current-line band keeps the band).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+#[allow(clippy::struct_excessive_bools)] // independent text attributes, as on the wire
+pub struct Token {
+    /// Text colour, `#rrggbb`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fg: Option<String>,
+    /// Background colour, `#rrggbb`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bg: Option<String>,
+    /// Bold.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub bold: bool,
+    /// Italic.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub italic: bool,
+    /// Underlined.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub underline: bool,
+    /// Dimmed.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub dim: bool,
+}
+
+/// What a list row is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ItemKind {
+    /// An ordinary row (a file).
+    #[default]
+    Entry,
+    /// A row with children (a folder); see [`Item::open`].
+    Dir,
+    /// "N more" in place of rows that were not read.
+    More,
+    /// A row that could not be read.
+    Error,
+    /// A kind this version does not know; drawn as an entry.
+    #[serde(other)]
+    Unknown,
+}
+
+/// One list row.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Item {
+    /// Stable id, sent back in `mouse.item`.
+    pub id: String,
+    /// The text.
+    pub text: String,
+    /// Icon glyph.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub glyph: Option<String>,
+    /// ASCII fallback for the glyph.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alt: Option<String>,
+    /// Indent level; a cell client indents 2 cells per level.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub depth: u32,
+    /// What the row is.
+    #[serde(default)]
+    pub kind: ItemKind,
+    /// `dir`: expanded.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub open: bool,
+}
+
+/// The visible window of a list.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListView {
+    /// Index of `items[0]` in the whole list.
+    pub offset: u32,
+    /// Items in the whole list.
+    pub total: u32,
+    /// Index of the selected item in the whole list.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected: Option<u32>,
+    /// The visible items, in order.
+    pub items: Vec<Item>,
+}
+
+/// Fixed style names the protocol itself uses; every theme should define them.
+pub mod tokens {
+    /// Line numbers.
+    pub const GUTTER: &str = "gutter";
+    /// The primary cursor line's number.
+    pub const GUTTER_CURRENT: &str = "gutter.current";
+    /// The primary cursor line's band.
+    pub const LINE_CURRENT: &str = "line.current";
+    /// Selected text.
+    pub const SELECTION: &str = "selection";
+    /// This client's other cursors.
+    pub const CURSOR_SECONDARY: &str = "cursor.secondary";
+    /// Other clients' cursors.
+    pub const CURSOR_PEER: &str = "cursor.peer";
+    /// A list row.
+    pub const LIST_ROW: &str = "list.row";
+    /// The selected row of a list outside the focused node.
+    pub const LIST_ROW_SELECTED: &str = "list.row.selected";
+    /// The selected row of a list inside the focused node.
+    pub const LIST_ROW_SELECTED_FOCUSED: &str = "list.row.selected.focused";
+    /// A `dir` row's text.
+    pub const LIST_DIR: &str = "list.dir";
+    /// A row's icon.
+    pub const LIST_ICON: &str = "list.icon";
+    /// A `more` row.
+    pub const LIST_MORE: &str = "list.more";
+    /// An `error` row.
+    pub const LIST_ERROR: &str = "list.error";
+    /// Highlight names a surface's spans may carry.
+    pub const SYNTAX: [&str; 7] = [
+        "syntax.keyword",
+        "syntax.type",
+        "syntax.function",
+        "syntax.string",
+        "syntax.number",
+        "syntax.comment",
+        "syntax.punctuation",
+    ];
+    /// Every fixed name.
+    pub const ALL: [&str; 20] = [
+        GUTTER,
+        GUTTER_CURRENT,
+        LINE_CURRENT,
+        SELECTION,
+        CURSOR_SECONDARY,
+        CURSOR_PEER,
+        LIST_ROW,
+        LIST_ROW_SELECTED,
+        LIST_ROW_SELECTED_FOCUSED,
+        LIST_DIR,
+        LIST_ICON,
+        LIST_MORE,
+        LIST_ERROR,
+        SYNTAX[0],
+        SYNTAX[1],
+        SYNTAX[2],
+        SYNTAX[3],
+        SYNTAX[4],
+        SYNTAX[5],
+        SYNTAX[6],
+    ];
 }
 
 /// A position in a document: line and char column, both from 0.
@@ -577,13 +812,7 @@ mod tests {
     }
 
     fn surface() -> Node {
-        Node {
-            id: "editor".into(),
-            kind: NodeKind::Surface,
-            width: Dim::FILL,
-            height: Dim::FILL,
-            children: vec![],
-        }
+        Node::new("editor", NodeKind::Surface)
     }
 
     #[test]
@@ -613,6 +842,15 @@ mod tests {
                 line: 3,
                 col: 1,
                 lines: 0,
+                item: None,
+            },
+            ClientMsg::Mouse {
+                node: "files".into(),
+                action: MouseAction::Press,
+                line: 0,
+                col: 0,
+                lines: 0,
+                item: Some("src/main.rs".into()),
             },
             ClientMsg::Resize {
                 size: Size { cols: 80, rows: 24 },
@@ -663,11 +901,9 @@ mod tests {
         );
         let ui = ServerMsg::Ui {
             root: Node {
-                id: "root".into(),
-                kind: NodeKind::Column,
-                width: Dim::FILL,
                 height: Dim::Units { n: 3 },
                 children: vec![surface()],
+                ..Node::new("root", NodeKind::Column)
             },
             focus: Some("editor".into()),
         };
@@ -742,6 +978,97 @@ mod tests {
         ] {
             round_trip(&msg);
         }
+    }
+
+    #[test]
+    fn look_messages_have_stable_json() {
+        let text = Node {
+            text: Some("spur".into()),
+            style: Some("topbar.brand".into()),
+            width: Dim::Fit,
+            height: Dim::Fit,
+            ..Node::new("brand", NodeKind::Text)
+        };
+        let json = serde_json::to_string(&text).unwrap();
+        assert_eq!(
+            json,
+            r#"{"id":"brand","kind":"text","width":{"type":"fit"},"height":{"type":"fit"},"style":"topbar.brand","text":"spur"}"#
+        );
+        let card = Node {
+            padding: Some([1, 2]),
+            gap: 1,
+            clickable: true,
+            children: vec![Node {
+                gutter: true,
+                current_line: true,
+                tab_width: 4,
+                ..surface()
+            }],
+            ..Node::new("main", NodeKind::Card)
+        };
+        round_trip(&ServerMsg::Ui {
+            root: card,
+            focus: Some("main".into()),
+        });
+        let theme = ServerMsg::Theme {
+            name: "graphite".into(),
+            dark: true,
+            tokens: BTreeMap::from([(
+                "app".to_string(),
+                Token {
+                    fg: Some("#a4a7b0".into()),
+                    bg: Some("#111215".into()),
+                    bold: true,
+                    ..Token::default()
+                },
+            )]),
+        };
+        assert_eq!(
+            round_trip(&theme),
+            r##"{"type":"theme","name":"graphite","dark":true,"tokens":{"app":{"fg":"#a4a7b0","bg":"#111215","bold":true}}}"##
+        );
+        let list = ServerMsg::List {
+            node: "files_list".into(),
+            list: ListView {
+                offset: 0,
+                total: 2,
+                selected: Some(1),
+                items: vec![
+                    Item {
+                        id: "src".into(),
+                        text: "src".into(),
+                        glyph: Some("v".into()),
+                        kind: ItemKind::Dir,
+                        open: true,
+                        ..Item::default()
+                    },
+                    Item {
+                        id: "src/main.rs".into(),
+                        text: "main.rs".into(),
+                        depth: 1,
+                        ..Item::default()
+                    },
+                ],
+            },
+        };
+        let json = round_trip(&list);
+        assert!(
+            json.contains(r#"{"id":"src/main.rs","text":"main.rs","depth":1,"kind":"entry"}"#),
+            "{json}"
+        );
+    }
+
+    #[test]
+    fn old_receivers_skip_look_additions() {
+        // A slice 1 style node with only the base fields still decodes.
+        let n: Node = serde_json::from_str(
+            r#"{"id":"editor","kind":"surface","width":{"type":"fill","weight":1},"height":{"type":"fill","weight":1}}"#,
+        )
+        .unwrap();
+        assert_eq!(n, surface());
+        let i: Item = serde_json::from_str(r#"{"id":"x","text":"x","kind":"symlink"}"#).unwrap();
+        assert_eq!(i.kind, ItemKind::Unknown);
+        assert_eq!(tokens::ALL.len(), 20);
     }
 
     fn line(t: &str) -> Line {

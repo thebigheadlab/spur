@@ -658,6 +658,7 @@ impl State {
                 line,
                 col,
                 lines,
+                item: _,
             } => self.mouse(conn, &node, action, line, col, lines),
             ClientMsg::Resize { size } => self.resize(conn, size),
             ClientMsg::Layout { surfaces } => self.layout(conn, &surfaces),

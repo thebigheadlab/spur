@@ -138,6 +138,14 @@ impl When {
         self.root.eval(cx)
     }
 
+    /// The context keys the clause reads, in source order, without duplicates. Values
+    /// are not keys: `ui.focus == sidebar` reads only `ui.focus`.
+    pub fn keys(&self) -> Vec<&str> {
+        let mut out = Vec::new();
+        self.root.keys(&mut out);
+        out
+    }
+
     /// `None` if the clause holds; else the failing sub-clause and the key's actual
     /// value, for `describe-key` and keymap tracing.
     pub fn explain(&self, cx: &impl ContextLookup) -> Option<String> {
@@ -188,6 +196,33 @@ fn contains(hay: Option<&CtxValue>, needle: &str) -> bool {
 }
 
 impl Node {
+    fn keys<'a>(&'a self, out: &mut Vec<&'a str>) {
+        let mut push = |k: &'a str| {
+            if !out.contains(&k) {
+                out.push(k);
+            }
+        };
+        match &self.kind {
+            Kind::Const(_) => {}
+            Kind::Truthy(k)
+            | Kind::Eq { key: k, .. }
+            | Kind::Ord { key: k, .. }
+            | Kind::Match { key: k, .. } => push(k),
+            Kind::In { needle, key, .. } => {
+                if let Operand::Key(n) = needle {
+                    push(n);
+                }
+                push(key);
+            }
+            Kind::Not(n) => n.keys(out),
+            Kind::And(ns) | Kind::Or(ns) => {
+                for n in ns {
+                    n.keys(out);
+                }
+            }
+        }
+    }
+
     fn eval(&self, cx: &impl ContextLookup) -> bool {
         match &self.kind {
             Kind::Const(b) => *b,
@@ -642,6 +677,26 @@ mod tests {
         When::parse(src)
             .unwrap_or_else(|e| panic!("{src}: {e}"))
             .eval(&cx())
+    }
+
+    #[test]
+    fn keys_lists_what_a_clause_reads() {
+        let w = When::parse(
+            "ui.sidebar_open && (client.cols >= 100 || ui.focus == sidebar) && !ui.sidebar_open && x in ext.enabled && 'y' in ext.enabled && buffer.path =~ /rs$/",
+        )
+        .unwrap();
+        assert_eq!(
+            w.keys(),
+            [
+                "ui.sidebar_open",
+                "client.cols",
+                "ui.focus",
+                "x",
+                "ext.enabled",
+                "buffer.path"
+            ]
+        );
+        assert!(When::parse("true").unwrap().keys().is_empty());
     }
 
     #[test]

@@ -592,6 +592,7 @@ fn mouse_presses_move_and_scrolls_scroll() {
         line: 4,
         col: 2,
         lines: 0,
+        item: None,
     });
     a.sync();
     assert_eq!(a.cursor(CursorKind::Primary), Some((4, 2, None)));
@@ -601,6 +602,7 @@ fn mouse_presses_move_and_scrolls_scroll() {
         line: 0,
         col: 0,
         lines: 20,
+        item: None,
     });
     a.sync();
     let v = a.view.as_ref().unwrap();

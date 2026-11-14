@@ -159,8 +159,9 @@ impl CommandId {
     }
 }
 
-/// Core command and event namespaces. Extensions may not use them.
-pub const CORE_NAMESPACES: &[&str] = &["core", "editor", "view", "buffer", "bus", "command"];
+/// Core command and event namespaces. Extensions may not use them. `ui` belongs to
+/// the editor server's per-client UI commands (UX packs).
+pub const CORE_NAMESPACES: &[&str] = &["core", "editor", "view", "buffer", "bus", "command", "ui"];
 
 /// Event families only core (or, later, a capability holder) may publish.
 pub const RESERVED_EVENT_FAMILIES: &[&str] = &[

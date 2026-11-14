@@ -13,3 +13,5 @@ workspace = true
 
 [dependencies]
 spur-rpc.workspace = true
+crossterm = { version = "0.29", default-features = false, features = ["events", "bracketed-paste", "windows"] }
+unicode-width = "0.2"
