@@ -44,8 +44,11 @@ fn horizontal(n: &Node) -> bool {
     n.kind == NodeKind::Row
 }
 
+/// Padding on each side, plus one cell for a border.
 fn padding(n: &Node) -> (u32, u32) {
-    n.padding.map_or((0, 0), |[v, h]| (v, h))
+    let (v, h) = n.padding.map_or((0, 0), |[v, h]| (v, h));
+    let b = u32::from(n.border.is_some());
+    (v.saturating_add(b), h.saturating_add(b))
 }
 
 /// The content size of a node: (width, height).

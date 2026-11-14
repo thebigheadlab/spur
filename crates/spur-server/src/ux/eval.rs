@@ -36,11 +36,25 @@ fn node(pack: &Pack, id: &str, look: &impl ContextLookup, lists: &mut Vec<String
     n.width = spec.width;
     n.height = spec.height;
     let active = spec.active.as_ref().is_some_and(|w| w.eval(look));
-    n.style = if active {
+    n.style = if active && spec.style_active.is_some() {
         spec.style_active.clone()
     } else {
         spec.style.clone()
     };
+    n.border_style = if active && spec.border_style_active.is_some() {
+        spec.border_style_active.clone()
+    } else {
+        spec.border_style.clone()
+    };
+    if let Some(b) = spec.border.as_deref().and_then(|b| pack.borders.get(b)) {
+        if pack.ascii_icons {
+            n.border = Some(b.ascii.clone());
+        } else {
+            n.border = Some(b.glyphs.clone());
+            n.border_alt = Some(b.ascii.clone());
+        }
+    }
+    n.repeat = spec.repeat;
     n.padding = spec.padding;
     n.gap = spec.gap;
     n.clickable = !spec.on_click.is_empty() || pack.regions.values().any(|r| r.node == id);

@@ -434,6 +434,23 @@ pub struct Node {
     /// Surface: tab stop; 0 means 4.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub tab_width: u32,
+    /// Containers: a one-cell line around the node, as six one-cell glyphs: top
+    /// left, top right, bottom left, bottom right, horizontal, vertical. The line
+    /// takes one cell on each side, inside the node's rectangle; padding is inside
+    /// the line. A client draws nothing if the string is not six one-cell glyphs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border: Option<String>,
+    /// Containers: the line's six glyphs in ASCII, for terminals that cannot show
+    /// [`Node::border`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border_alt: Option<String>,
+    /// Containers: style name for the line's glyphs (text colour and attributes;
+    /// the node's own style stays under them).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border_style: Option<String>,
+    /// Text: repeat the text to fill the node's width.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub repeat: bool,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)] // serde passes a reference
@@ -459,6 +476,10 @@ impl Node {
             gutter: false,
             current_line: false,
             tab_width: 0,
+            border: None,
+            border_alt: None,
+            border_style: None,
+            repeat: false,
         }
     }
 }

@@ -316,3 +316,103 @@ fn templates_render() {
     assert!(Template::parse("x}").is_err());
     assert!(Template::parse("{}").is_err());
 }
+
+/// `ux_fresh` with a round border on the sidebar card, lit while it has focus.
+fn bordered(border: &str) -> Vec<(String, String)> {
+    let mut files = fresh();
+    for (p, t) in &mut files {
+        if p == "pack.toml" {
+            *t = format!("{t}\n[borders]\nround = {border}\n");
+        }
+        if p == "layout.toml" {
+            *t = t.replace(
+                "width = 28\nstyle = \"panel\"",
+                "width = 28\nstyle = \"panel\"\nborder = \"round\"\nborder_style = \"app\"\n\
+                 border_style_active = \"panel\"\nactive = \"ui.focus == sidebar\"",
+            );
+        }
+    }
+    files
+}
+
+#[test]
+fn borders_load_and_reach_the_tree() {
+    let pack = load(&bordered(
+        "{ glyphs = \"\u{256d}\u{256e}\u{2570}\u{256f}\u{2500}\u{2502}\", ascii = \"++++-|\" }",
+    ))
+    .unwrap_or_else(|e| panic!("{e:#?}"));
+    let find = |n: &spur_rpc::Node| -> spur_rpc::Node {
+        fn walk(n: &spur_rpc::Node) -> Option<&spur_rpc::Node> {
+            if n.id == "sidebar" {
+                return Some(n);
+            }
+            n.children.iter().find_map(walk)
+        }
+        walk(n).unwrap().clone()
+    };
+    let mut ctx = spur_core::Context::new();
+    ctx.set("cond.sidebar_shown", true).unwrap();
+    let side = find(&super::super::eval::tree(&pack, &ctx).root);
+    assert_eq!(
+        side.border.as_deref(),
+        Some("\u{256d}\u{256e}\u{2570}\u{256f}\u{2500}\u{2502}")
+    );
+    assert_eq!(side.border_alt.as_deref(), Some("++++-|"));
+    assert_eq!(side.border_style.as_deref(), Some("app"));
+    assert_eq!(
+        side.style.as_deref(),
+        Some("panel"),
+        "style stays without style_active"
+    );
+    ctx.set("ui.focus", "sidebar").unwrap();
+    let side = find(&super::super::eval::tree(&pack, &ctx).root);
+    assert_eq!(side.border_style.as_deref(), Some("panel"));
+    assert_eq!(side.style.as_deref(), Some("panel"));
+}
+
+#[test]
+fn borders_are_checked() {
+    let errors = |files: Vec<(String, String)>| -> Vec<String> {
+        load(&files)
+            .map(|_| panic!("the broken pack loaded"))
+            .unwrap_err()
+            .iter()
+            .map(ToString::to_string)
+            .collect()
+    };
+    let e = errors(bordered("{ glyphs = \"+-\", ascii = \"++++-\" }"));
+    has(&e, "borders.round.glyphs: must be six one-cell glyphs");
+    has(&e, "borders.round.ascii: must be six printable ASCII chars");
+    let e = errors(bordered(
+        "{ glyphs = \"\u{6771}\u{256e}\u{2570}\u{256f}\u{2500}\u{2502}\", ascii = \"++++-|\" }",
+    ));
+    has(&e, "borders.round.glyphs: must be six one-cell glyphs");
+    let mut files = bordered("{ glyphs = \"++++-|\", ascii = \"++++-|\" }");
+    for (p, t) in &mut files {
+        if p == "layout.toml" {
+            *t = t.replace("border = \"round\"", "border = \"double\"");
+        }
+    }
+    has(
+        &errors(files),
+        "node.sidebar.border: no border \"double\" in pack.toml",
+    );
+    let e = broken("layout.toml", |t| {
+        t.replace("width = 28\n", "width = 28\nborder_style = \"app\"\n")
+    });
+    has(
+        &e,
+        "node.sidebar.border: missing (border_style needs a border)",
+    );
+    let e = broken("layout.toml", |t| {
+        t.replace(
+            "width = 28\n",
+            "width = 28\nactive = \"ui.focus == sidebar\"\n",
+        )
+    });
+    has(&e, "active goes with style_active or border_style_active");
+    let e = broken("components/topbar.toml", |t| {
+        t.replacen("kind = \"text\"", "kind = \"text\"\nborder = \"round\"", 1)
+    });
+    has(&e, "unknown key for this kind");
+}

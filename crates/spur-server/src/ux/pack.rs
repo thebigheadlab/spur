@@ -15,7 +15,7 @@ use spur_keymap::{Layer, Step};
 use spur_rpc::{Dim, NodeKind, Token, tokens};
 use toml::Spanned;
 use toml::de::{DeTable, DeValue, ValueDeserializer};
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::lang;
 
@@ -208,6 +208,16 @@ pub struct Icon {
     pub ascii: String,
 }
 
+/// A border: six one-cell glyphs (top left, top right, bottom left, bottom right,
+/// horizontal, vertical) and the same six in ASCII.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Border {
+    /// The glyphs.
+    pub glyphs: String,
+    /// Six printable ASCII chars.
+    pub ascii: String,
+}
+
 /// One `on_click` entry: steps run when `when` holds; the last holding entry wins.
 #[derive(Clone, Debug)]
 pub struct ClickEntry {
@@ -252,6 +262,14 @@ pub struct NodeSpec {
     pub gutter: bool,
     /// Surface: current-line band.
     pub current_line: bool,
+    /// Containers: border name (`[borders]` in pack.toml).
+    pub border: Option<String>,
+    /// Containers: border glyph style.
+    pub border_style: Option<String>,
+    /// Border glyph style while `active` holds.
+    pub border_style_active: Option<String>,
+    /// Text: repeat to fill the width.
+    pub repeat: bool,
 }
 
 /// A theme with its tokens resolved to `#rrggbb`.
@@ -298,6 +316,8 @@ pub struct Pack {
     pub(crate) regions: BTreeMap<String, Region>,
     /// Icons by name.
     pub(crate) icons: BTreeMap<String, Icon>,
+    /// Borders by name.
+    pub(crate) borders: BTreeMap<String, Border>,
     /// Language labels.
     pub(crate) languages: BTreeMap<String, String>,
     /// Message templates.
@@ -546,6 +566,13 @@ struct IconToml {
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
+struct BorderToml {
+    glyphs: String,
+    ascii: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(clippy::struct_excessive_bools)]
 struct TokenToml {
     fg: Option<String>,
@@ -668,6 +695,7 @@ impl<'k> Loader<'k> {
             conditions: Vec::new(),
             regions: BTreeMap::new(),
             icons: BTreeMap::new(),
+            borders: BTreeMap::new(),
             languages: BTreeMap::new(),
             messages: BTreeMap::new(),
             tab_width: 4,
@@ -918,6 +946,44 @@ impl<'k> Loader<'k> {
                             Icon {
                                 glyph: i.glyph,
                                 ascii: i.ascii,
+                            },
+                        );
+                    }
+                }
+                "borders" => {
+                    let Some(t) = self.table(&src, v, key) else {
+                        continue;
+                    };
+                    for (k, v) in entries(t) {
+                        let path = format!("borders.{k}");
+                        let Some(b) = self.de::<BorderToml>(&src, v, &path) else {
+                            continue;
+                        };
+                        let cells = b.glyphs.chars().count() == 6
+                            && b.glyphs
+                                .chars()
+                                .all(|c| !c.is_control() && c.width() == Some(1));
+                        if !cells {
+                            self.push(src.err(
+                                Some(v.span()),
+                                &format!("{path}.glyphs"),
+                                "must be six one-cell glyphs (top left, top right, bottom left, bottom right, horizontal, vertical)",
+                            ));
+                        }
+                        let ascii = b.ascii.chars().count() == 6
+                            && b.ascii.chars().all(|c| (' '..='~').contains(&c));
+                        if !ascii {
+                            self.push(src.err(
+                                Some(v.span()),
+                                &format!("{path}.ascii"),
+                                "must be six printable ASCII chars",
+                            ));
+                        }
+                        pack.borders.insert(
+                            k.to_owned(),
+                            Border {
+                                glyphs: b.glyphs,
+                                ascii: b.ascii,
                             },
                         );
                     }
@@ -1280,14 +1346,23 @@ impl<'k> Loader<'k> {
             source: None,
             gutter: false,
             current_line: false,
+            border: None,
+            border_style: None,
+            border_style_active: None,
+            repeat: false,
         };
         let mut reads = Vec::new();
         for (k, v) in &f {
             let path = format!("{npath}.{k}");
             let allowed = match *k {
                 "kind" | "width" | "height" | "when" | "style" | "style_active" | "active" => true,
-                "children" | "padding" | "gap" => container,
-                "text" => kind == NodeKind::Text,
+                "children"
+                | "padding"
+                | "gap"
+                | "border"
+                | "border_style"
+                | "border_style_active" => container,
+                "text" | "repeat" => kind == NodeKind::Text,
                 "icon" => kind == NodeKind::Icon,
                 "source" => kind == NodeKind::List,
                 "gutter" | "current_line" => kind == NodeKind::Surface,
@@ -1339,6 +1414,10 @@ impl<'k> Loader<'k> {
                 }
                 "style" => spec.style = self.string(src, v, &path),
                 "style_active" => spec.style_active = self.string(src, v, &path),
+                "border" => spec.border = self.string(src, v, &path),
+                "border_style" => spec.border_style = self.string(src, v, &path),
+                "border_style_active" => spec.border_style_active = self.string(src, v, &path),
+                "repeat" => spec.repeat = self.de(src, v, &path).unwrap_or(false),
                 "children" => spec.children = self.de(src, v, &path).unwrap_or_default(),
                 "padding" => spec.padding = self.de(src, v, &path),
                 "gap" => spec.gap = self.de(src, v, &path).unwrap_or(0),
@@ -1360,11 +1439,21 @@ impl<'k> Loader<'k> {
                 _ => {}
             }
         }
-        if spec.style_active.is_some() != spec.active.is_some() {
+        let actives = spec.style_active.is_some() || spec.border_style_active.is_some();
+        if actives != spec.active.is_some() {
             self.push(src.err(
                 Some(span.clone()),
                 npath,
-                "style_active and active go together",
+                "active goes with style_active or border_style_active",
+            ));
+        }
+        if (spec.border_style.is_some() || spec.border_style_active.is_some())
+            && spec.border.is_none()
+        {
+            self.push(src.err(
+                Some(span.clone()),
+                &format!("{npath}.border"),
+                "missing (border_style needs a border)",
             ));
         }
         if kind == NodeKind::Text && spec.text.is_none() {
@@ -1582,6 +1671,8 @@ impl<'k> Loader<'k> {
             for (f, s) in [
                 ("style", &n.spec.style),
                 ("style_active", &n.spec.style_active),
+                ("border_style", &n.spec.border_style),
+                ("border_style_active", &n.spec.border_style_active),
             ] {
                 if let Some(s) = s
                     && !pack.themes.is_empty()
@@ -1592,6 +1683,14 @@ impl<'k> Loader<'k> {
                         format!("no token {s:?} in the themes"),
                     ));
                 }
+            }
+            if let Some(b) = &n.spec.border
+                && !pack.borders.contains_key(b)
+            {
+                self.push(e(
+                    format!("node.{id}.border"),
+                    format!("no border {b:?} in pack.toml"),
+                ));
             }
             if let Some(i) = &n.spec.icon
                 && !pack.icons.contains_key(i)

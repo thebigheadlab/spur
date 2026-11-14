@@ -252,12 +252,9 @@ pub fn paint(screen: &mut Screen, w: u32, h: u32) -> Frame {
         if let Some(s) = n.style.as_deref().and_then(|s| screen.palette.get(s)) {
             frame.grid.paint(r.x, r.y, r.w, r.h, s);
         }
+        paint_border(&mut frame.grid, r, n, &screen.palette, screen.ascii);
         match n.kind {
-            NodeKind::Text => {
-                if let Some(t) = &n.text {
-                    frame.grid.text(r.x, r.y, r.x + r.w, t, None);
-                }
-            }
+            NodeKind::Text => paint_text_node(&mut frame.grid, r, n),
             NodeKind::Icon => {
                 let t = if screen.ascii {
                     n.alt.as_ref().or(n.text.as_ref())
@@ -324,6 +321,62 @@ pub fn paint(screen: &mut Screen, w: u32, h: u32) -> Frame {
     drop(placed);
     screen.root = Some(root);
     frame
+}
+
+/// Draws a text node, repeated to fill its width if asked; nothing when it has
+/// no room (a zero-height row must not land on the row below).
+fn paint_text_node(g: &mut Grid, r: Rect, n: &Node) {
+    let Some(t) = &n.text else {
+        return;
+    };
+    if r.w == 0 || r.h == 0 {
+        return;
+    }
+    if n.repeat {
+        let one = crate::clean::width(t).max(1);
+        let copies = r.w.div_ceil(one) as usize;
+        g.text(r.x, r.y, r.x + r.w, &t.repeat(copies), None);
+    } else {
+        g.text(r.x, r.y, r.x + r.w, t, None);
+    }
+}
+
+/// The border's six glyphs, if they are six one-cell pieces.
+fn border_glyphs(n: &Node, ascii: bool) -> Option<Vec<Piece>> {
+    let g = if ascii {
+        n.border_alt.as_ref().or(n.border.as_ref())
+    } else {
+        n.border.as_ref()
+    }?;
+    let pieces: Vec<Piece> = g.chars().map(cell).collect::<Option<_>>()?;
+    (pieces.len() == 6 && pieces.iter().all(|p| p.width == 1)).then_some(pieces)
+}
+
+/// Draws a node's border on the edge cells of `r`, over its style.
+fn paint_border(g: &mut Grid, r: Rect, n: &Node, pal: &Palette, ascii: bool) {
+    if r.w < 2 || r.h < 2 {
+        return;
+    }
+    let Some(p) = border_glyphs(n, ascii) else {
+        return;
+    };
+    let style = fg_only(n.border_style.as_deref().and_then(|s| pal.get(s)));
+    let (right, bottom) = (r.x + r.w - 1, r.y + r.h - 1);
+    let mut put = |x: u32, y: u32, i: usize| {
+        g.pieces(x, y, x + 1, std::slice::from_ref(&p[i]), style);
+    };
+    put(r.x, r.y, 0);
+    put(right, r.y, 1);
+    put(r.x, bottom, 2);
+    put(right, bottom, 3);
+    for x in r.x + 1..right {
+        put(x, r.y, 4);
+        put(x, bottom, 4);
+    }
+    for y in r.y + 1..bottom {
+        put(r.x, y, 5);
+        put(right, y, 5);
+    }
 }
 
 fn collect_focused<'a>(
@@ -581,5 +634,89 @@ mod tests {
         assert_eq!(col_at("a\tb", 2, 4), 1, "inside the tab");
         assert_eq!(col_at("a\tb", 4, 4), 2);
         assert_eq!(col_at("ab", 9, 4), 2, "past the end");
+    }
+
+    fn text(id: &str, t: &str) -> Node {
+        Node {
+            text: Some(t.into()),
+            width: spur_rpc::Dim::Fit,
+            height: spur_rpc::Dim::Fit,
+            ..Node::new(id, NodeKind::Text)
+        }
+    }
+
+    fn draw(root: Node, w: u32, h: u32, ascii: bool) -> Vec<String> {
+        let mut screen = Screen {
+            root: Some(root),
+            ascii,
+            ..Screen::default()
+        };
+        paint(&mut screen, w, h).grid.lines()
+    }
+
+    fn boxed(children: Vec<Node>) -> Node {
+        Node {
+            border: Some("\u{256d}\u{256e}\u{2570}\u{256f}\u{2500}\u{2502}".into()),
+            border_alt: Some("++++-|".into()),
+            children,
+            ..Node::new("card", NodeKind::Card)
+        }
+    }
+
+    #[test]
+    fn a_border_draws_around_the_node_and_insets_its_children() {
+        let lines = draw(boxed(vec![text("t", "hi")]), 6, 3, false);
+        assert_eq!(
+            lines,
+            [
+                "\u{256d}\u{2500}\u{2500}\u{2500}\u{2500}\u{256e}",
+                "\u{2502}hi  \u{2502}",
+                "\u{2570}\u{2500}\u{2500}\u{2500}\u{2500}\u{256f}"
+            ]
+        );
+        assert_eq!(
+            draw(boxed(vec![text("t", "hi")]), 5, 3, true),
+            ["+---+", "|hi |", "+---+"]
+        );
+    }
+
+    #[test]
+    fn a_bad_border_draws_nothing() {
+        let mut n = boxed(vec![]);
+        n.border = Some("+-".into());
+        n.border_alt = None;
+        assert_eq!(draw(n, 4, 2, false), ["", ""]);
+        let mut wide = boxed(vec![]);
+        wide.border = Some("\u{6771}\u{6771}\u{6771}\u{6771}\u{6771}\u{6771}".into());
+        assert_eq!(draw(wide, 4, 2, false), ["", ""]);
+    }
+
+    #[test]
+    fn repeat_fills_the_width() {
+        let rule = Node {
+            repeat: true,
+            width: spur_rpc::Dim::FILL,
+            ..text("rule", "-=")
+        };
+        let root = Node {
+            children: vec![rule],
+            ..Node::new("root", NodeKind::Column)
+        };
+        assert_eq!(draw(root, 5, 1, false)[0], "-=-=-");
+    }
+
+    #[test]
+    fn text_with_no_height_draws_nothing() {
+        let root = Node {
+            children: vec![
+                text("seen", "y"),
+                Node {
+                    height: spur_rpc::Dim::Units { n: 0 },
+                    ..text("gone", "x")
+                },
+            ],
+            ..Node::new("root", NodeKind::Column)
+        };
+        assert_eq!(draw(root, 2, 2, false), ["y", ""]);
     }
 }

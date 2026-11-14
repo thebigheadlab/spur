@@ -14,11 +14,19 @@ Terms: a *pack* is a folder of TOML files (or the same files embedded in the bin
 
 ### The pack is data, evaluated on the server
 
-A pack is a closed set of files: `pack.toml` (identity, root, default theme, state keys and their allowed values, named conditions, regions, icons, languages, messages), `settings.toml`, `layout.toml`, `components/*.toml`, `keys.toml` (a `spur-keymap` layer, unchanged) and `themes/*.toml`. Every table is closed (an unknown key is an error), and any other `.toml` file is an error, so typos and misplaced files are noticed. Nodes are flat tables keyed by id with a `children` list, not nested tables, so components can live in separate files and errors carry a line.
+A pack is a closed set of files: `pack.toml` (identity, root, default theme, state keys and their allowed values, named conditions, regions, icons, borders, languages, messages), `settings.toml`, `layout.toml`, `components/*.toml`, `keys.toml` (a `spur-keymap` layer, unchanged) and `themes/*.toml`. Every table is closed (an unknown key is an error), and any other `.toml` file is an error, so typos and misplaced files are noticed. Nodes are flat tables keyed by id with a `children` list, not nested tables, so components can live in separate files and errors carry a line.
 
 Nodes may carry `when` (shown only while the clause holds), `active` (switches `style` to `style_active`), text templates (`{doc.name}`), icons, sizes in cells (`fit`, `fill`, a number, or a weight), and `on_click` actions shaped like key bindings (a command or a `run` list, each with an optional `when`; the last matching one runs). `when` uses the ADR 0005 language over the context. `[conditions]` names clauses that other clauses read as `cond.<name>`, so the width rules for the columns are written once.
 
-The server evaluates the pack per client into a plain node tree (`when`, active styles, templates and icons already resolved) and sends it with the theme's token map. Clients never evaluate clauses or templates. Loading checks the whole pack and reports every error as `file:line: path: message`: ids, cycles, regions, styles against the theme, command ids against the registered commands, every context key a clause or template reads, glyph widths, and every message id the server uses.
+### Borders and repeated text
+
+Containers may carry `border`, the name of an entry in `pack.toml`'s `[borders]` table, plus `border_style` and `border_style_active` (switched by the same `active` clause as `style_active`). A border entry is six one-cell glyphs (top left, top right, bottom left, bottom right, horizontal, vertical) and the same six in ASCII, so the glyphs stay in the pack like icons do. The line takes one cell on each side inside the node's rectangle; padding is inside the line. The client draws the glyphs in the border style's text colour over the node's own style, and the ASCII set in ASCII mode. There is nothing on the border row: titles and tabs are children inside the card, which costs one row per card. Slots on the border row (titles or hints set into the line) are left out until there is a written case: they would be a second list of children with their own placement and clipping.
+
+Text nodes may set `repeat = true` to fill their width with copies of the text, for rules and edges that must not stop at a fixed length.
+
+This reverses the first version of this ADR, which painted styles as tone areas only. A card look needs lines in a terminal, and drawing them from one node keeps the tree small (a card drawn from one-row text nodes cost about ten times the nodes). Every client implements `border`; a pixel client may draw it as a rounded outline of the same colour.
+
+The server evaluates the pack per client into a plain node tree (`when`, active styles, templates and icons already resolved) and sends it with the theme's token map. Clients never evaluate clauses or templates. Loading checks the whole pack and reports every error as `file:line: path: message`: ids, cycles, regions, styles and borders against the theme and `[borders]`, command ids against the registered commands, every context key a clause or template reads, glyph widths, and every message id the server uses.
 
 Units are terminal cells for every client in protocol v0, including the sizes a client sends (`hello.size`, `resize`, `layout`). A pixel client divides its window by its cell size before sending and multiplies what it receives; a later protocol version may add pixel sizes. The pack's width rules (`client.cols >= 100` for the sidebar, `>= 144` for the agent column) are worked out from the cell layout and the 64-cell minimum for the code.
 
@@ -42,7 +50,7 @@ Lists travel in their own `list` message carrying only the visible window, sent 
 
 Protocol v0 is unreleased, so it changes in place:
 
-- Nodes gain `style`, `padding`, `gap`, `clickable`, `alt` (an ASCII fallback for an icon glyph), surface options (`gutter`, `current_line`, `tab_width`), and the kinds `card`, `text`, `icon` and `list`.
+- Nodes gain `style`, `padding`, `gap`, `clickable`, `alt` (an ASCII fallback for an icon glyph), `border`, `border_alt` and `border_style` (six glyphs, their ASCII set and the line's style), `repeat` (text), surface options (`gutter`, `current_line`, `tab_width`), and the kinds `card`, `text`, `icon` and `list`.
 - Server messages: `theme {tokens}` (sent before the first `ui` and after any change) and `list {node, view}`.
 - `mouse` gains `item` (a list row's id); `layout` reports list nodes as well as surfaces.
 - The `ui` message's `focus` is the focused region's node id. The client shows the terminal cursor only when focus is on a surface, and draws the selected row with the focused token only inside the focused region.
@@ -66,7 +74,7 @@ The owner chose simple colours now. `highlight.rs` is one generic tokeniser conf
 
 ### The terminal client
 
-`spur-tui` depends only on `spur-rpc`, `crossterm` and `unicode-width`; it never links the server, core or keymap. It lays out the tree in cells (one pass per container along its main axis; fixed and `fit` sizes first, `fill` shares the rest by weight), paints styles as tone areas without box lines, and writes only the cells that changed, inside synchronised-output markers, in one write. Every string from the server is cleaned before it reaches the grid, so file names and text cannot inject escape sequences. Without true colour, theme colours map to distinct xterm-256 entries so tones do not merge. Keys become `spur-keymap` notation; where the terminal supports the kitty keyboard protocol, ctrl+shift keys arrive distinct. Mouse presses and the wheel only (no motion tracking).
+`spur-tui` depends only on `spur-rpc`, `crossterm` and `unicode-width`; it never links the server, core or keymap. It lays out the tree in cells (one pass per container along its main axis; fixed and `fit` sizes first, `fill` shares the rest by weight), paints styles as tone areas and borders as one-cell lines, and writes only the cells that changed, inside synchronised-output markers, in one write. Every string from the server is cleaned before it reaches the grid, so file names and text cannot inject escape sequences. Without true colour, theme colours map to distinct xterm-256 entries so tones do not merge. Keys become `spur-keymap` notation; where the terminal supports the kitty keyboard protocol, ctrl+shift keys arrive distinct. Mouse presses and the wheel only (no motion tracking).
 
 A reader thread and a forwarder thread feed one channel; the main thread drains everything queued, so a burst becomes one `key` message and one draw. The client never blocks on sending: a server that leaves its queue full is treated as gone, so a stop signal is always handled. A press resolves against what was drawn (the item ids and lines of that frame), not against messages that arrived since. A drop guard and the launcher's panic hook (on the client thread only) restore the terminal.
 
