@@ -2,6 +2,7 @@
 //! keeps what a terminal client would (theme, tree, focus, lists, surface).
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -1453,4 +1454,108 @@ fn paste_goes_to_the_palette_query_on_one_line() {
     assert_eq!(c.query(), "src main");
     c.keys("<Esc>");
     assert_eq!(c.text(), "one\ntwo\n", "nothing reached the document");
+}
+
+/// The shell actions' keys and palette rows in every focus, width and open state,
+/// against a recorded table (`SPUR_BLESS=1` rewrites it).
+#[test]
+fn shell_actions_match_the_recorded_matrix() {
+    let root = workspace("action-matrix");
+    let s = session_in(&root, &["notes.txt"]);
+    let mut c = Client::attach(&s, 160, 45);
+    c.send(ClientMsg::Subscribe {
+        filters: vec!["ui.changed".into()],
+    });
+    c.sync();
+    let keys = [
+        "<C-b>", "<C-A-b>", "<C-k>a", "<C-S-e>", "<A-1>", "<C-k>e", "<C-S-j>", "<A-2>", "<C-k>j",
+        "<C-S-f>", "<A-3>", "<C-k>f", "<C-S-g>", "<A-4>", "<C-k>g",
+    ];
+    let rows = [
+        "toggle_sidebar",
+        "toggle_agent",
+        "agent_show",
+        "sidebar_files",
+        "sidebar_sessions",
+        "sidebar_search",
+        "sidebar_git",
+    ];
+    let mut state: BTreeMap<String, String> = BTreeMap::new();
+    let track = |state: &mut BTreeMap<String, String>, msgs: &[ServerMsg]| {
+        for m in msgs {
+            if let ServerMsg::Event { name, payload, .. } = m
+                && name == "ui.changed"
+                && let Some(k) = payload["key"].as_str()
+            {
+                state.insert(k.to_owned(), payload["value"].to_string());
+            }
+        }
+    };
+    let show = |state: &BTreeMap<String, String>, focus: &str| {
+        format!(
+            "focus={focus} sidebar={} sidebar_open={} agent_open={}",
+            state["ui.sidebar"], state["ui.sidebar_open"], state["ui.agent_open"]
+        )
+    };
+    let mut out = String::new();
+    for cols in [80, 120, 160] {
+        c.resize(cols, 45);
+        for focus in ["editor", "sidebar", "agent"] {
+            for sb in [false, true] {
+                for ag in [false, true] {
+                    for view in ["files", "git"] {
+                        let probes = keys
+                            .iter()
+                            .map(|k| (true, *k))
+                            .chain(rows.iter().map(|r| (false, *r)));
+                        for (is_key, what) in probes {
+                            for (k, v) in [
+                                ("ui.sidebar", json!(view)),
+                                ("ui.sidebar_open", json!(sb)),
+                                ("ui.agent_open", json!(ag)),
+                            ] {
+                                c.command("ui.set", json!({ "key": k, "value": v }));
+                            }
+                            c.command("ui.focus", json!({ "region": focus }));
+                            c.sync();
+                            let log = std::mem::take(&mut c.log);
+                            track(&mut state, &log);
+                            let before = show(&state, c.focus());
+                            let mut ran = "";
+                            let msgs = if is_key {
+                                c.keys(what)
+                            } else {
+                                c.keys("<C-Space>>");
+                                let mut m = c.press("palette_list", Some(&format!("a:{what}")));
+                                if !c.overlays.is_empty() {
+                                    m.extend(c.keys("<Esc>"));
+                                    ran = " (not listed)";
+                                }
+                                m
+                            };
+                            track(&mut state, &msgs);
+                            let kind = if is_key { "key" } else { "row" };
+                            let _ = writeln!(
+                                out,
+                                "{cols} {before} | {kind} {what} -> {}{ran}",
+                                show(&state, c.focus())
+                            );
+                            c.log.clear();
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/action_matrix.txt");
+    if std::env::var_os("SPUR_BLESS").is_some() {
+        std::fs::write(&path, &out).unwrap();
+        return;
+    }
+    let want = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("{}: {e} (run with SPUR_BLESS=1)", path.display()));
+    for (i, (g, w)) in out.lines().zip(want.lines()).enumerate() {
+        assert_eq!(g, w, "line {}", i + 1);
+    }
+    assert_eq!(out.lines().count(), want.lines().count());
 }
