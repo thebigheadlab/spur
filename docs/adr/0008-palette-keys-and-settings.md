@@ -121,6 +121,10 @@ For a legacy client, hints skip keys that cannot arrive as themselves, per `spur
 
 The terminal client reads ctrl+7 as ctrl+/ without full keys (both are byte 0x1F). `ux_fresh` lists the full key first and backups after it (ctrl+shift+e, then alt+1, then ctrl+k e; ctrl+shift+z, then ctrl+y), so a legacy terminal's hint names a backup.
 
+### A calmer top bar
+
+The top bar's key chips (save, go to, files, agent, quit, and each panel's keys) read as crowded. The owner picked, from three options, a "command pill": the focused panel's name, at most two keys of its own (Files: enter open, esc code), and one soft pill styled like the palette's field, `› Go to file or action  ctrl+space`, which shrinks to `› ctrl+space` below 120 columns and opens the palette when clicked. Every other key is listed in the palette with its action. Pack-only: `topbar.toml` and the theme tokens `key`, `hint.sep`, `pill`, `pill.mark` and `pill.key`.
+
 ### Deviations from the plan
 
 - The one-time "some shortcuts need a newer terminal" notice is not built: the top bar hides key hints while a notice shows, and the hints already name keys that work.

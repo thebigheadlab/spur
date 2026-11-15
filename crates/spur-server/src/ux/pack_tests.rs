@@ -176,9 +176,12 @@ fn references_are_checked() {
     });
     has(&e, "actions.palette_close: unknown mode \"palete\"");
     let e = broken("components/topbar.toml", |t| {
-        t.replace("{key:save}", "{key:sav}")
+        t.replacen("{key:list_open}", "{key:lst_open}", 1)
     });
-    has(&e, "node.k_save.text: no action \"sav\" for {key:sav}");
+    has(
+        &e,
+        "node.k_files_open.text: no action \"lst_open\" for {key:lst_open}",
+    );
     let e = broken("pack.toml", |t| {
         t.replace("on_dismiss = \"palette_close\"", "on_dismiss = \"close\"")
     });
@@ -505,7 +508,7 @@ fn key_hints_come_from_actions() {
         }
         seen += 1;
     }
-    assert!(seen >= 8, "found only {seen} hints");
+    assert!(seen >= 7, "found only {seen} hints");
 }
 
 #[test]

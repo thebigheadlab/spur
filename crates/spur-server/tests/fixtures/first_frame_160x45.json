@@ -54,12 +54,14 @@
       "hint": {
         "fg": "#888c95"
       },
+      "hint.sep": {
+        "fg": "#6c707a"
+      },
       "input": {
         "fg": "#888c95"
       },
       "key": {
-        "bg": "#202227",
-        "fg": "#a4a7b0"
+        "fg": "#ecedf0"
       },
       "label": {
         "bold": true,
@@ -138,6 +140,19 @@
       },
       "path": {
         "fg": "#888c95"
+      },
+      "pill": {
+        "bg": "#202227",
+        "fg": "#888c95"
+      },
+      "pill.key": {
+        "bg": "#202227",
+        "fg": "#ecedf0"
+      },
+      "pill.mark": {
+        "bg": "#202227",
+        "bold": true,
+        "fg": "#8b93ff"
       },
       "prompt": {
         "bold": true,
@@ -265,130 +280,6 @@
                       "width": {
                         "type": "fit"
                       }
-                    },
-                    {
-                      "children": [
-                        {
-                          "height": {
-                            "type": "fit"
-                          },
-                          "id": "k_save",
-                          "kind": "text",
-                          "style": "key",
-                          "text": " ctrl+s ",
-                          "width": {
-                            "type": "fit"
-                          }
-                        },
-                        {
-                          "height": {
-                            "type": "fit"
-                          },
-                          "id": "h_save",
-                          "kind": "text",
-                          "style": "hint",
-                          "text": "save ",
-                          "width": {
-                            "type": "fit"
-                          }
-                        }
-                      ],
-                      "gap": 1,
-                      "height": {
-                        "type": "fill",
-                        "weight": 1
-                      },
-                      "id": "keys_save",
-                      "kind": "row",
-                      "width": {
-                        "type": "fit"
-                      }
-                    },
-                    {
-                      "children": [
-                        {
-                          "height": {
-                            "type": "fit"
-                          },
-                          "id": "k_palette",
-                          "kind": "text",
-                          "style": "key",
-                          "text": " ctrl+space ",
-                          "width": {
-                            "type": "fit"
-                          }
-                        },
-                        {
-                          "height": {
-                            "type": "fit"
-                          },
-                          "id": "h_palette",
-                          "kind": "text",
-                          "style": "hint",
-                          "text": "go to ",
-                          "width": {
-                            "type": "fit"
-                          }
-                        }
-                      ],
-                      "gap": 1,
-                      "height": {
-                        "type": "fill",
-                        "weight": 1
-                      },
-                      "id": "keys_find",
-                      "kind": "row",
-                      "width": {
-                        "type": "fit"
-                      }
-                    },
-                    {
-                      "height": {
-                        "type": "fit"
-                      },
-                      "id": "k_files",
-                      "kind": "text",
-                      "style": "key",
-                      "text": " ctrl+shift+e ",
-                      "width": {
-                        "type": "fit"
-                      }
-                    },
-                    {
-                      "height": {
-                        "type": "fit"
-                      },
-                      "id": "h_files",
-                      "kind": "text",
-                      "style": "hint",
-                      "text": "files ",
-                      "width": {
-                        "type": "fit"
-                      }
-                    },
-                    {
-                      "height": {
-                        "type": "fit"
-                      },
-                      "id": "k_agent",
-                      "kind": "text",
-                      "style": "key",
-                      "text": " ctrl+k a ",
-                      "width": {
-                        "type": "fit"
-                      }
-                    },
-                    {
-                      "height": {
-                        "type": "fit"
-                      },
-                      "id": "h_agent",
-                      "kind": "text",
-                      "style": "hint",
-                      "text": "agent ",
-                      "width": {
-                        "type": "fit"
-                      }
                     }
                   ],
                   "gap": 1,
@@ -403,31 +294,70 @@
                   }
                 },
                 {
+                  "children": [
+                    {
+                      "height": {
+                        "type": "fit"
+                      },
+                      "id": "pill_l",
+                      "kind": "text",
+                      "style": "pill",
+                      "text": " ",
+                      "width": {
+                        "type": "fit"
+                      }
+                    },
+                    {
+                      "alt": ">",
+                      "height": {
+                        "type": "fit"
+                      },
+                      "id": "pill_mark",
+                      "kind": "icon",
+                      "style": "pill.mark",
+                      "text": "›",
+                      "width": {
+                        "type": "fit"
+                      }
+                    },
+                    {
+                      "height": {
+                        "type": "fit"
+                      },
+                      "id": "pill_text",
+                      "kind": "text",
+                      "style": "pill",
+                      "text": " Go to file or action   ",
+                      "width": {
+                        "type": "fit"
+                      }
+                    },
+                    {
+                      "height": {
+                        "type": "fit"
+                      },
+                      "id": "pill_key",
+                      "kind": "text",
+                      "style": "pill.key",
+                      "text": " ctrl+space ",
+                      "width": {
+                        "type": "fit"
+                      }
+                    }
+                  ],
+                  "clickable": true,
                   "height": {
-                    "type": "fit"
+                    "type": "fill",
+                    "weight": 1
                   },
-                  "id": "k_quit",
-                  "kind": "text",
-                  "style": "key",
-                  "text": " ctrl+q ",
-                  "width": {
-                    "type": "fit"
-                  }
-                },
-                {
-                  "height": {
-                    "type": "fit"
-                  },
-                  "id": "h_quit",
-                  "kind": "text",
-                  "style": "hint",
-                  "text": "quit",
+                  "id": "pill",
+                  "kind": "row",
                   "width": {
                     "type": "fit"
                   }
                 }
               ],
-              "gap": 1,
+              "gap": 2,
               "height": {
                 "type": "fill",
                 "weight": 1

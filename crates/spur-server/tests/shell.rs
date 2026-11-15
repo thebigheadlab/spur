@@ -1588,8 +1588,10 @@ fn hints_name_keys_a_legacy_terminal_can_send() {
     let s = session_in(&root, &["notes.txt"]);
     let mut full = Client::attach(&s, 160, 45);
     let mut old = Client::attach_with(&s, 160, 45, KeyEncoding::Legacy);
-    assert_eq!(full.node("k_files").text.as_deref(), Some(" ctrl+shift+e "));
-    assert_eq!(old.node("k_files").text.as_deref(), Some(" alt+1 "));
+    // The top bar's pill names ctrl+space for both.
+    for c in [&full, &old] {
+        assert_eq!(c.node("pill_key").text.as_deref(), Some(" ctrl+space "));
+    }
     // The palette's rows too: the full key, or the first backup that arrives.
     let key = |c: &mut Client, action: &str| {
         c.keys("<C-Space>>");
@@ -1615,6 +1617,10 @@ fn hints_name_keys_a_legacy_terminal_can_send() {
         assert_eq!(key(&mut full, action), full_key, "{action}");
         assert_eq!(key(&mut old, action), legacy, "{action}");
     }
+    // A click on the pill opens the palette.
+    full.press("pill", None);
+    assert_eq!(full.overlays.len(), 1);
+    full.keys("<Esc>");
     // A legacy client's alt+1 still runs the action.
     old.keys("<A-1>");
     assert_eq!(old.focus(), "sidebar");
