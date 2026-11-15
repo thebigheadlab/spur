@@ -1,25 +1,43 @@
-//! Pack actions (named steps with a title, keys and a condition) and how key hints
+//! Pack actions (named steps with a title, ordered cases, keys and a condition),
+//! the one step every action key runs (`ui.action.run {id}`), and how key hints
 //! print.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use spur_core::{ContextLookup, When};
-use spur_keymap::{Action as KeyAction, Binding, Key, KeyCode, Keymap, Mods, Step};
+use serde_json::json;
+use spur_core::{CommandId, ContextLookup, When};
+use spur_keymap::{
+    Action as KeyAction, Binding, Key, KeyCode, Keymap, Layer, Mods, Step, legacy_can_send,
+};
+
+/// The command every action key runs: `ui.action.run {id}`.
+pub const RUN_ACTION: &str = "ui.action.run";
 
 /// A pack action: `[actions.<id>]`.
 #[derive(Clone, Debug)]
 pub struct Action {
     /// Shown in the palette; untitled actions are key-only.
     pub title: Option<String>,
-    /// What runs.
+    /// What runs when no case holds.
     pub steps: Arc<[Step]>,
-    /// When it applies (keys and the palette).
+    /// Ordered cases: the first whose `when` holds runs instead of `steps`.
+    pub cases: Vec<Case>,
+    /// When it applies at all (keys, clicks and the palette).
     pub when: Option<When>,
     /// Key modes its keys are bound in.
     pub modes: Vec<String>,
     /// Its keys, in order; the first that applies is its hint.
     pub keys: Vec<ActionKey>,
+}
+
+/// One case of an action: `[[actions.<id>.case]]`.
+#[derive(Clone, Debug)]
+pub struct Case {
+    /// When it runs.
+    pub when: When,
+    /// What runs.
+    pub steps: Arc<[Step]>,
 }
 
 /// One key of an action.
@@ -31,85 +49,142 @@ pub struct ActionKey {
     pub when: Option<When>,
 }
 
+/// The one step that runs action `id`.
+///
+/// # Panics
+///
+/// Never: the command id is valid.
+pub fn run_step(id: &str) -> Step {
+    Step {
+        command: CommandId::new(RUN_ACTION).expect("a valid command id"),
+        args: Arc::new(json!({ "id": id })),
+    }
+}
+
+/// The action that `steps` run, if they are exactly one `ui.action.run`.
+pub fn run_target(steps: &[Step]) -> Option<&str> {
+    match steps {
+        [s] if s.command.as_str() == RUN_ACTION => s.args.get("id")?.as_str(),
+        _ => None,
+    }
+}
+
 impl Action {
-    /// The bindings its keys make, one per mode and key. The binding's `when` is the
-    /// action's and the key's together.
+    /// What runs now: `None` if the action does not apply, else its first case
+    /// that holds, else its default steps.
+    pub fn steps_for(&self, look: &impl ContextLookup) -> Option<Arc<[Step]>> {
+        if self.when.as_ref().is_some_and(|w| !w.eval(look)) {
+            return None;
+        }
+        Some(
+            self.cases
+                .iter()
+                .find(|c| c.when.eval(look))
+                .map_or_else(|| self.steps.clone(), |c| c.steps.clone()),
+        )
+    }
+
+    /// The label its bindings carry: its title, else its id.
+    fn label(&self, id: &str) -> Arc<str> {
+        self.title.as_deref().unwrap_or(id).into()
+    }
+
+    /// The bindings its keys make, one per mode and key, each running
+    /// `ui.action.run {id}`. The binding's `when` is the action's and the key's
+    /// together, so a key falls through when the action does not apply.
     ///
     /// # Errors
     ///
     /// The two conditions do not combine into one (too deeply nested).
-    pub fn bindings(&self) -> Result<Vec<Binding>, String> {
+    pub fn bindings(&self, id: &str) -> Result<Vec<Binding>, String> {
+        let steps: Arc<[Step]> = Arc::new([run_step(id)]);
         let mut out = Vec::new();
         for k in &self.keys {
-            let when = match (&self.when, &k.when) {
-                (Some(a), Some(b)) => Some(
-                    When::parse(&format!("({a}) && ({b})"))
-                        .map_err(|e| format!("its when and its key's when: {e}"))?,
-                ),
-                (Some(a), None) => Some(a.clone()),
-                (None, b) => b.clone(),
-            };
+            let when = When::both(self.when.as_ref(), k.when.as_ref())
+                .map_err(|e| format!("its when and its key's when: {e}"))?;
             for m in &self.modes {
                 out.push(Binding {
                     mode: m.as_str().into(),
                     keys: k.keys.clone(),
-                    action: KeyAction::Run(self.steps.clone()),
+                    action: KeyAction::Run(steps.clone()),
                     when: when.clone(),
-                    label: self.title.as_deref().map(Into::into),
+                    label: Some(self.label(id)),
                 });
             }
         }
         Ok(out)
     }
 
-    /// Its first key that runs this action in `mode` now and is not masked by
-    /// another layer (the pack's own special cases for the key count as the
-    /// action), with the steps a press of it runs.
+    /// Its first key that, pressed now in `mode`, runs this action (the binding
+    /// chosen for it is `ui.action.run` of this action, from any layer) and can
+    /// arrive from the client (without full keys, every key of the sequence
+    /// must be one a legacy terminal sends).
     fn live_key(
         &self,
+        id: &str,
         keymap: &Keymap,
-        layer: &str,
         mode: &str,
         look: &impl ContextLookup,
-    ) -> Option<(&ActionKey, Arc<[Step]>)> {
-        self.keys.iter().find_map(|k| {
-            let (l, a) = keymap.resolve_key(mode, &k.keys, look)?;
-            match a {
-                KeyAction::Run(s)
-                    if Arc::ptr_eq(s, &self.steps) || **s == *self.steps || l == layer =>
-                {
-                    Some((k, s.clone()))
-                }
-                KeyAction::Run(_) | KeyAction::Unbind => None,
-            }
+        full_keys: bool,
+    ) -> Option<&ActionKey> {
+        self.keys.iter().find(|k| {
+            (full_keys || k.keys.iter().all(legacy_can_send))
+                && matches!(
+                    keymap.resolve_key(mode, &k.keys, look),
+                    Some((_, KeyAction::Run(s))) if run_target(s) == Some(id)
+                )
         })
     }
 
     /// The hint for this action in `mode`: its live key, printed.
     pub fn hint(
         &self,
+        id: &str,
         keymap: &Keymap,
-        layer: &str,
         mode: &str,
         look: &impl ContextLookup,
         display: &KeyDisplay,
+        full_keys: bool,
     ) -> Option<String> {
-        self.live_key(keymap, layer, mode, look)
-            .map(|(k, _)| display.format(&k.keys))
+        self.live_key(id, keymap, mode, look, full_keys)
+            .map(|k| display.format(&k.keys))
     }
+}
 
-    /// The steps a press of its hinted key runs now in `mode` (what the hint
-    /// promises), or its own steps if no key is live.
-    pub fn press(
-        &self,
-        keymap: &Keymap,
-        layer: &str,
-        mode: &str,
-        look: &impl ContextLookup,
-    ) -> Arc<[Step]> {
-        self.live_key(keymap, layer, mode, look)
-            .map_or_else(|| self.steps.clone(), |(_, s)| s)
+/// Gives every binding of `layer` that runs a known action (`ui.action.run {id}`)
+/// the action's `when` beside its own and the action's label, so it falls through
+/// when the action does not apply. Returns one message per binding it could not
+/// wrap (combined condition too deeply nested; a `<char>` capture, which the
+/// action would ignore); those keep their own `when`, and the action still checks
+/// its own when it runs.
+pub fn wrap_bindings<'a>(
+    layer: &mut Layer,
+    action: impl Fn(&str) -> Option<&'a Action>,
+) -> Vec<String> {
+    let mut errors = Vec::new();
+    for b in &mut layer.bindings {
+        let KeyAction::Run(steps) = &b.action else {
+            continue;
+        };
+        let Some(id) = run_target(steps) else {
+            continue;
+        };
+        let Some(a) = action(id) else {
+            continue;
+        };
+        let keys = spur_keymap::format_keys(&b.keys);
+        if b.keys.iter().any(|k| k.code == KeyCode::AnyChar) {
+            errors.push(format!("{keys}: an action key cannot capture <char>"));
+        }
+        match When::both(a.when.as_ref(), b.when.as_ref()) {
+            Ok(w) => b.when = w,
+            Err(e) => errors.push(format!("{keys}: the action's when and its own: {e}")),
+        }
+        if b.label.is_none() {
+            b.label = Some(a.label(id));
+        }
     }
+    errors
 }
 
 /// How hints print parsed keys: `[keys.display]`.
@@ -195,6 +270,106 @@ mod tests {
     use spur_keymap::parse_keys;
 
     use super::*;
+
+    fn action(when: Option<&str>, keys: &[&str]) -> Action {
+        Action {
+            title: Some("Show".into()),
+            steps: Arc::new([]),
+            cases: vec![Case {
+                when: When::parse("ui.focus == agent").unwrap(),
+                steps: Arc::new([run_step("x")]),
+            }],
+            when: when.map(|w| When::parse(w).unwrap()),
+            modes: vec!["insert".into()],
+            keys: keys
+                .iter()
+                .map(|k| ActionKey {
+                    keys: parse_keys(k).unwrap(),
+                    when: None,
+                })
+                .collect(),
+        }
+    }
+
+    fn layer(name: &str, toml: &str) -> Layer {
+        Layer::from_toml(name, spur_core::Source::Core, toml).unwrap()
+    }
+
+    #[test]
+    fn the_first_case_that_holds_runs() {
+        let a = action(Some("ui.on"), &[]);
+        let mut cx = spur_core::Context::new();
+        assert!(a.steps_for(&cx).is_none(), "its when is false");
+        cx.set("ui.on", true).unwrap();
+        assert!(a.steps_for(&cx).unwrap().is_empty(), "the default steps");
+        cx.set("ui.focus", "agent").unwrap();
+        assert_eq!(run_target(&a.steps_for(&cx).unwrap()), Some("x"));
+    }
+
+    #[test]
+    fn hints_name_only_keys_that_run_the_action() {
+        let a = action(None, &["<C-k>a", "<C-a>"]);
+        let mut pack = Layer::new("pack", spur_core::Source::Core);
+        pack.bindings = a.bindings("show").unwrap();
+        // A higher layer takes ctrl+k a for something else: the hint skips it.
+        let over = layer(
+            "user",
+            "[[bind]]\nmode = \"insert\"\nkeys = \"<C-k>a\"\ncommand = \"editor.undo\"\n",
+        );
+        let mut km = Keymap::new();
+        km.push_layer(pack);
+        km.push_layer(over);
+        let cx = spur_core::Context::new();
+        let d = KeyDisplay::default();
+        assert_eq!(
+            a.hint("show", &km, "insert", &cx, &d, true).as_deref(),
+            Some("ctrl+a")
+        );
+        assert_eq!(a.hint("other", &km, "insert", &cx, &d, true), None);
+    }
+
+    #[test]
+    fn legacy_hints_skip_keys_and_chords_that_cannot_arrive() {
+        let a = action(None, &["<C-S-k>a", "<C-S-e>", "<C-k>e"]);
+        let mut pack = Layer::new("pack", spur_core::Source::Core);
+        pack.bindings = a.bindings("show").unwrap();
+        let mut km = Keymap::new();
+        km.push_layer(pack);
+        let cx = spur_core::Context::new();
+        let d = KeyDisplay::default();
+        let hint = |full| a.hint("show", &km, "insert", &cx, &d, full);
+        assert_eq!(hint(true).as_deref(), Some("ctrl+shift+k a"));
+        assert_eq!(hint(false).as_deref(), Some("ctrl+k e"));
+    }
+
+    #[test]
+    fn a_binding_to_an_action_falls_through_when_the_action_does_not_apply() {
+        let a = action(Some("ui.on"), &[]);
+        let mut low = layer(
+            "low",
+            "[[bind]]\nmode = \"insert\"\nkeys = \"<C-a>\"\ncommand = \"editor.undo\"\n",
+        );
+        let mut high = layer(
+            "high",
+            "[[bind]]\nmode = \"insert\"\nkeys = \"<C-a>\"\ncommand = \"ui.action.run\"\nargs = { id = \"show\" }\n",
+        );
+        assert!(wrap_bindings(&mut low, |_| Some(&a)).is_empty());
+        assert!(low.bindings[0].when.is_none(), "not a binding to an action");
+        assert!(wrap_bindings(&mut high, |id| (id == "show").then_some(&a)).is_empty());
+        assert_eq!(high.bindings[0].label.as_deref(), Some("Show"));
+        let mut km = Keymap::new();
+        km.push_layer(low);
+        km.push_layer(high);
+        let keys = parse_keys("<C-a>").unwrap();
+        let mut cx = spur_core::Context::new();
+        let run = |cx: &spur_core::Context| match km.resolve_key("insert", &keys, cx) {
+            Some((_, KeyAction::Run(s))) => s[0].command.to_string(),
+            _ => String::new(),
+        };
+        assert_eq!(run(&cx), "editor.undo");
+        cx.set("ui.on", true).unwrap();
+        assert_eq!(run(&cx), RUN_ACTION);
+    }
 
     #[test]
     fn keys_print_with_the_display_table() {

@@ -57,6 +57,26 @@ pub struct Caps {
     pub layout: Layout,
     /// Typed components the client draws itself (none are defined in v0).
     pub native: Vec<String>,
+    /// Which key presses the client can tell apart.
+    pub key_encoding: KeyEncoding,
+}
+
+/// Which key presses a client can tell apart, so key hints name keys that can
+/// arrive from it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KeyEncoding {
+    /// A terminal without a full key protocol: xterm-style bytes, where for
+    /// example ctrl+shift+e arrives as ctrl+e. The default for clients that do
+    /// not say.
+    #[default]
+    Legacy,
+    /// Every key and modifier arrives as pressed (the kitty keyboard protocol,
+    /// a window).
+    Full,
+    /// An encoding this version does not know; treated as legacy.
+    #[serde(other)]
+    Unknown,
 }
 
 /// A size in cells, for every client in protocol v0 (see [`Layout`]).
@@ -1300,6 +1320,10 @@ mod tests {
         assert_eq!(c.kind, CursorKind::Unknown);
         let caps: Caps = serde_json::from_str(r#"{"layout":"voxels","haptics":true}"#).unwrap();
         assert_eq!(caps.layout, Layout::Unknown);
+        let caps: Caps = serde_json::from_str(r#"{"key_encoding":"telepathy"}"#).unwrap();
+        assert_eq!(caps.key_encoding, KeyEncoding::Unknown);
+        let caps: Caps = serde_json::from_str(r#"{"key_encoding":"full"}"#).unwrap();
+        assert_eq!(caps.key_encoding, KeyEncoding::Full);
         let m: ClientMsg =
             serde_json::from_str(r#"{"type":"mouse","node":"editor","action":"hover","line":1}"#)
                 .unwrap();

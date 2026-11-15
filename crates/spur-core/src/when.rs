@@ -151,6 +151,28 @@ impl When {
     pub fn explain(&self, cx: &impl ContextLookup) -> Option<String> {
         self.root.explain(&self.src, cx)
     }
+
+    /// Both clauses: `(self) && (other)`.
+    ///
+    /// # Errors
+    ///
+    /// The combined clause nests too deeply.
+    pub fn and(&self, other: &Self) -> Result<Self, ParseError> {
+        Self::parse(&format!("({}) && ({})", self.src, other.src))
+    }
+
+    /// Both optional clauses: the one given, or both, or none.
+    ///
+    /// # Errors
+    ///
+    /// The combined clause nests too deeply.
+    pub fn both(a: Option<&Self>, b: Option<&Self>) -> Result<Option<Self>, ParseError> {
+        Ok(match (a, b) {
+            (Some(a), Some(b)) => Some(a.and(b)?),
+            (Some(w), None) | (None, Some(w)) => Some(w.clone()),
+            (None, None) => None,
+        })
+    }
 }
 
 impl fmt::Debug for When {
@@ -671,6 +693,21 @@ mod tests {
         c.set("editor.empty", "").unwrap();
         c.set("ext.enabled", vec!["git", "lsp"]).unwrap();
         c
+    }
+
+    #[test]
+    fn and_combines_and_explains_the_failing_side() {
+        let a = When::parse("editor.focus").unwrap();
+        let b = When::parse("buffer.filetype == go").unwrap();
+        let w = a.and(&b).unwrap();
+        assert_eq!(w.as_str(), "(editor.focus) && (buffer.filetype == go)");
+        assert!(!w.eval(&cx()));
+        assert!(w.explain(&cx()).unwrap().contains("buffer.filetype == go"));
+        assert!(When::both(None, None).unwrap().is_none());
+        assert_eq!(
+            When::both(None, Some(&b)).unwrap().unwrap().as_str(),
+            b.as_str()
+        );
     }
 
     fn t(src: &str) -> bool {

@@ -513,7 +513,34 @@ pub(crate) struct State {
     saved: Option<Subscription>,
     log: Option<LogSink>,
     rescue: Option<RescueSink>,
+    /// Pack actions running inside one another now (a palette row run by an
+    /// action key).
+    action_depth: u32,
 }
+
+/// A client's keymap: the session's layers, then the pack's keys for a frontend.
+/// A binding in any layer that runs a pack action gets the action's `when` and
+/// label (the pack's own were given them at load); bindings that cannot be
+/// wrapped are listed in `errors`.
+fn client_keymap(layers: &[Layer], ux: Option<&Ux>, errors: &mut Vec<String>) -> Keymap {
+    let mut keymap = Keymap::new();
+    for layer in layers {
+        let mut layer = layer.clone();
+        if let Some(ux) = ux {
+            for e in crate::ux::actions::wrap_bindings(&mut layer, |id| ux.pack.action(id)) {
+                errors.push(format!("keymap {}: {e}", layer.name));
+            }
+        }
+        keymap.push_layer(layer);
+    }
+    if let Some(ux) = ux {
+        keymap.push_layer(ux.pack.keys.clone());
+    }
+    keymap
+}
+
+/// The most pack actions that may run inside one another.
+const MAX_ACTION_DEPTH: u32 = 4;
 
 impl State {
     fn new(
@@ -592,6 +619,7 @@ impl State {
             saved,
             log: cfg.log,
             rescue: cfg.rescue,
+            action_depth: 0,
         })
     }
 
@@ -634,18 +662,21 @@ impl State {
                     ui.migrate(&pack, &mut ux.files, &mut scope);
                     next.push((*id, ui, scope));
                 }
-                let old_layer = ux.pack.keys.name.clone();
                 ux.pack = pack;
                 ux.pack_error = None;
                 ux.generation += 1;
+                let mut errors = Vec::new();
                 for (id, ui, scope) in next {
                     if let Some(c) = self.clients.get_mut(&id) {
-                        c.keymap.remove_layer(&old_layer);
-                        c.keymap.push_layer(ux.pack.keys.clone());
+                        c.keymap = client_keymap(&self.layers, Some(&*ux), &mut errors);
                         c.ui = Some(ui);
                         c.scope = scope;
                         c.dirty = true;
                     }
+                }
+                errors.dedup();
+                for e in &errors {
+                    self.log(e);
                 }
                 self.log("pack reloaded");
             }
@@ -847,6 +878,7 @@ impl State {
     fn guarded(&mut self, conn: Option<u64>, f: impl FnOnce(&mut Self)) {
         if catch_unwind(AssertUnwindSafe(|| f(self))).is_err() {
             self.core.state.focus = self.anchor;
+            self.action_depth = 0;
             self.log("caught a panic while handling a client message");
             if let Some(conn) = conn {
                 self.error(conn, PANIC_MESSAGE.into());
@@ -961,13 +993,15 @@ impl State {
         };
         let id = ClientId(conn);
         let view = self.core.state.add_view_for(self.home, Some(id));
-        let mut keymap = Keymap::new();
-        for layer in &self.layers {
-            keymap.push_layer(layer.clone());
-        }
         let frontend = kind == ClientKind::Frontend;
-        if frontend && let Some(ux) = &self.ux {
-            keymap.push_layer(ux.pack.keys.clone());
+        let mut errors = Vec::new();
+        let keymap = client_keymap(
+            &self.layers,
+            self.ux.as_ref().filter(|_| frontend),
+            &mut errors,
+        );
+        for e in &errors {
+            self.log(e);
         }
         let mut client = Client::new(id, kind, name, caps, size, view, keymap, out);
         client.shutter = shutter;
@@ -1251,7 +1285,11 @@ impl State {
             match e {
                 Effect::CheckFocus => self.check_focus(conn),
                 Effect::Quit => self.drop_client(conn),
-                Effect::RunAction(id) => self.run_action(conn, &id),
+                Effect::RunAction {
+                    id,
+                    count,
+                    register,
+                } => self.run_action(conn, &id, count, register),
             }
         }
         let Ok(r) = res else {
@@ -1274,9 +1312,21 @@ impl State {
         Some((v.doc, d.buffer.version(), v.selection.clone()))
     }
 
-    /// Runs a pack action's steps as a key press would, in the client's focused
-    /// region; a failed step shows as the status notice and stops the rest.
-    pub(crate) fn run_action(&mut self, conn: u64, id: &str) {
+    /// Runs a pack action in the client's focused region: its first case that
+    /// holds, else its own steps, each a top-level call, the count and register
+    /// going to the first. A failed step shows as the status notice and stops
+    /// the rest. Nothing runs if the action no longer applies.
+    pub(crate) fn run_action(
+        &mut self,
+        conn: u64,
+        id: &str,
+        count: Option<u32>,
+        register: Option<char>,
+    ) {
+        if self.action_depth >= MAX_ACTION_DEPTH {
+            self.log(&format!("action {id}: nested too deeply, not run"));
+            return;
+        }
         self.check_focus(conn);
         let steps = {
             let (Some(ux), Some(c)) = (self.ux.as_ref(), self.clients.get(&conn)) else {
@@ -1285,28 +1335,35 @@ impl State {
             let Some(a) = ux.pack.action(id) else {
                 return;
             };
-            let ed = &self.core.state;
-            let mode = client_ui::key_mode(Some(ux), c, ed, self.core.context());
-            a.press(
-                &c.keymap,
-                &ux.pack.keys.name,
-                &mode,
-                &Scoped(&[self.core.context(), &c.scope]),
-            )
+            a.steps_for(&Scoped(&[self.core.context(), &c.scope]))
         };
-        for step in steps.iter() {
+        // The action's when turned false between the key and now.
+        let Some(steps) = steps else {
+            return;
+        };
+        self.action_depth += 1;
+        for (i, step) in steps.iter().enumerate() {
             let name = step.command.to_string();
-            let inv = Invocation::new(step.command.clone(), spur_core::Actor::User)
+            let mut inv = Invocation::new(step.command.clone(), spur_core::Actor::User)
                 .args(step.args.clone());
+            if i == 0 {
+                if let Some(n) = count {
+                    inv = inv.count(n);
+                }
+                if let Some(r) = register {
+                    inv = inv.register(r);
+                }
+            }
             match self.run_as(conn, inv) {
-                None => return,
+                None => break,
                 Some(Err(e)) => {
                     self.set_status(conn, &name, &e.message);
-                    return;
+                    break;
                 }
                 Some(Ok(_)) => {}
             }
         }
+        self.action_depth -= 1;
     }
 
     /// Moves the client's focus to `region` (the focus check then runs as after

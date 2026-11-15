@@ -39,8 +39,12 @@ comment = "#94897a"
 "notice.mark" = { fg = "need" }
 "notice" = { fg = "t1" }
 "focus" = { fg = "accent_text", bg = "sel", bold = true }
-"key" = { fg = "t2", bg = "chip" }
+"key" = { fg = "t1" }
 "hint" = { fg = "dim" }
+"hint.sep" = { fg = "t3" }
+"pill" = { fg = "dim", bg = "chip" }
+"pill.mark" = { fg = "accent_text", bg = "chip", bold = true }
+"pill.key" = { fg = "t1", bg = "chip" }
 
 # Rail, titles and text
 "rail.item" = { fg = "dim" }

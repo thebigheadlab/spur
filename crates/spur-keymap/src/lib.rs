@@ -6,6 +6,7 @@
 
 mod key;
 mod keymap;
+mod legacy;
 
 pub use key::{Key, KeyCode, KeyParseError, Mods, format_keys, parse_keys};
 pub use keymap::{
@@ -13,6 +14,7 @@ pub use keymap::{
     Feed, Group, GroupSpec, KeyDescription, Keymap, Layer, LayerError, LayerSpec, MenuItem,
     ModeOptions, Status, Step, StepSpec,
 };
+pub use legacy::legacy_can_send;
 
 /// Name of this crate, used in diagnostics.
 pub const NAME: &str = env!("CARGO_PKG_NAME");

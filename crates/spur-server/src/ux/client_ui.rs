@@ -62,11 +62,12 @@ pub(crate) fn hint(
     };
     let mode = mode_of(ux, c, ed, region);
     a.hint(
+        action,
         &c.keymap,
-        &ux.pack.keys.name,
         &mode,
         look,
         &ux.pack.key_display,
+        c.full_keys(),
     )
 }
 
@@ -107,16 +108,17 @@ pub(crate) fn palette_rows(ux: &Ux, c: &Client, ed: &Editor, global: &Context) -
             .actions
             .iter()
             .filter(|(_, a)| a.title.is_some() && a.modes.iter().any(|m| **m == *mode))
-            .filter(|(_, a)| a.when.as_ref().is_none_or(|w| w.eval(&look)))
+            .filter(|(_, a)| a.steps_for(&look).is_some())
             .map(|(id, a)| ActionRow {
                 id: id.clone(),
                 title: a.title.clone().unwrap_or_default(),
                 key: a.hint(
+                    id,
                     &c.keymap,
-                    &ux.pack.keys.name,
                     &mode,
                     &look,
                     &ux.pack.key_display,
+                    c.full_keys(),
                 ),
             })
             .collect()

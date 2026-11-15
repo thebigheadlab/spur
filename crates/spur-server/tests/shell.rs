@@ -2,13 +2,14 @@
 //! keeps what a terminal client would (theme, tree, focus, lists, surface).
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde_json::{Value, json};
 use spur_rpc::{
-    Caps, ClientEnd, ClientKind, ClientMsg, ItemKind, ListView, MouseAction, Node, Overlay, Reply,
-    ServerMsg, Size, SurfaceSize, SurfaceView, in_process,
+    Caps, ClientEnd, ClientKind, ClientMsg, ItemKind, KeyEncoding, ListView, MouseAction, Node,
+    Overlay, Reply, ServerMsg, Size, SurfaceSize, SurfaceView, in_process,
 };
 use spur_server::{PackSource, Session, SessionConfig};
 
@@ -67,6 +68,10 @@ struct Client {
 
 impl Client {
     fn attach(s: &Session, cols: u32, rows: u32) -> Self {
+        Self::attach_with(s, cols, rows, KeyEncoding::Full)
+    }
+
+    fn attach_with(s: &Session, cols: u32, rows: u32, keys: KeyEncoding) -> Self {
         let (end, server) = in_process();
         s.attach(server).unwrap();
         let mut c = Self {
@@ -87,7 +92,10 @@ impl Client {
             protocols: vec![0],
             kind: ClientKind::Frontend,
             name: "t".into(),
-            caps: Caps::default(),
+            caps: Caps {
+                key_encoding: keys,
+                ..Caps::default()
+            },
             size: Size { cols, rows },
         });
         c.sync();
@@ -766,6 +774,17 @@ fn ui_commands_check_their_args_and_callers() {
         Reply::Unknown => "unknown".into(),
     };
     assert_eq!(code(c.command("ui.nope", json!({}))), "unknown_command");
+    // ui.action.run names a known action; it runs after the call.
+    assert_eq!(
+        code(c.command("ui.action.run", json!({ "id": "nope" }))),
+        "bad_args"
+    );
+    assert!(matches!(
+        c.command("ui.action.run", json!({ "id": "toggle_sidebar" })),
+        Reply::Ok(_)
+    ));
+    assert!(!c.shows("sidebar"), "the shown sidebar hid");
+    c.keys("<C-b>");
     assert_eq!(
         code(c.command("ui.set", json!({ "key": "ui.sidebar", "value": "nope" }))),
         "bad_args"
@@ -802,7 +821,10 @@ fn ui_commands_check_their_args_and_callers() {
         protocols: vec![0],
         kind: ClientKind::Tool,
         name: "tool".into(),
-        caps: Caps::default(),
+        caps: Caps {
+            key_encoding: KeyEncoding::Full,
+            ..Caps::default()
+        },
         size: Size { cols: 0, rows: 0 },
     })
     .unwrap();
@@ -1453,4 +1475,153 @@ fn paste_goes_to_the_palette_query_on_one_line() {
     assert_eq!(c.query(), "src main");
     c.keys("<Esc>");
     assert_eq!(c.text(), "one\ntwo\n", "nothing reached the document");
+}
+
+/// The shell actions' keys and palette rows in every focus, width and open state,
+/// against a recorded table (`SPUR_BLESS=1` rewrites it).
+#[test]
+fn shell_actions_match_the_recorded_matrix() {
+    let root = workspace("action-matrix");
+    let s = session_in(&root, &["notes.txt"]);
+    let mut c = Client::attach(&s, 160, 45);
+    c.send(ClientMsg::Subscribe {
+        filters: vec!["ui.changed".into()],
+    });
+    c.sync();
+    let keys = [
+        "<C-b>", "<C-A-b>", "<C-k>a", "<C-S-e>", "<A-1>", "<C-k>e", "<C-S-j>", "<A-2>", "<C-k>j",
+        "<C-S-f>", "<A-3>", "<C-k>f", "<C-S-g>", "<A-4>", "<C-k>g",
+    ];
+    let rows = [
+        "toggle_sidebar",
+        "toggle_agent",
+        "agent_show",
+        "sidebar_files",
+        "sidebar_sessions",
+        "sidebar_search",
+        "sidebar_git",
+    ];
+    let mut state: BTreeMap<String, String> = BTreeMap::new();
+    let track = |state: &mut BTreeMap<String, String>, msgs: &[ServerMsg]| {
+        for m in msgs {
+            if let ServerMsg::Event { name, payload, .. } = m
+                && name == "ui.changed"
+                && let Some(k) = payload["key"].as_str()
+            {
+                state.insert(k.to_owned(), payload["value"].to_string());
+            }
+        }
+    };
+    let show = |state: &BTreeMap<String, String>, focus: &str| {
+        format!(
+            "focus={focus} sidebar={} sidebar_open={} agent_open={}",
+            state["ui.sidebar"], state["ui.sidebar_open"], state["ui.agent_open"]
+        )
+    };
+    let mut out = String::new();
+    // Each side of the widths where the columns stop fitting (100 and 144).
+    for cols in [99, 100, 143, 144] {
+        c.resize(cols, 45);
+        for focus in ["editor", "sidebar", "agent"] {
+            for sb in [false, true] {
+                for ag in [false, true] {
+                    for view in ["files", "sessions", "search", "git"] {
+                        let probes = keys
+                            .iter()
+                            .map(|k| (true, *k))
+                            .chain(rows.iter().map(|r| (false, *r)));
+                        for (is_key, what) in probes {
+                            for (k, v) in [
+                                ("ui.sidebar", json!(view)),
+                                ("ui.sidebar_open", json!(sb)),
+                                ("ui.agent_open", json!(ag)),
+                            ] {
+                                c.command("ui.set", json!({ "key": k, "value": v }));
+                            }
+                            c.command("ui.focus", json!({ "region": focus }));
+                            c.sync();
+                            let log = std::mem::take(&mut c.log);
+                            track(&mut state, &log);
+                            let before = show(&state, c.focus());
+                            let mut ran = "";
+                            let msgs = if is_key {
+                                c.keys(what)
+                            } else {
+                                c.keys("<C-Space>>");
+                                let mut m = c.press("palette_list", Some(&format!("a:{what}")));
+                                if !c.overlays.is_empty() {
+                                    m.extend(c.keys("<Esc>"));
+                                    ran = " (not listed)";
+                                }
+                                m
+                            };
+                            track(&mut state, &msgs);
+                            let kind = if is_key { "key" } else { "row" };
+                            let _ = writeln!(
+                                out,
+                                "{cols} {before} | {kind} {what} -> {}{ran}",
+                                show(&state, c.focus())
+                            );
+                            c.log.clear();
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/action_matrix.txt");
+    if std::env::var_os("SPUR_BLESS").is_some() {
+        std::fs::write(&path, &out).unwrap();
+        return;
+    }
+    let want = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("{}: {e} (run with SPUR_BLESS=1)", path.display()));
+    for (i, (g, w)) in out.lines().zip(want.lines()).enumerate() {
+        assert_eq!(g, w, "line {}", i + 1);
+    }
+    assert_eq!(out.lines().count(), want.lines().count());
+}
+
+#[test]
+fn hints_name_keys_a_legacy_terminal_can_send() {
+    let root = workspace("legacy-hints");
+    let s = session_in(&root, &["notes.txt"]);
+    let mut full = Client::attach(&s, 160, 45);
+    let mut old = Client::attach_with(&s, 160, 45, KeyEncoding::Legacy);
+    // The top bar's pill names ctrl+space for both.
+    for c in [&full, &old] {
+        assert_eq!(c.node("pill_key").text.as_deref(), Some(" ctrl+space "));
+    }
+    // The palette's rows too: the full key, or the first backup that arrives.
+    let key = |c: &mut Client, action: &str| {
+        c.keys("<C-Space>>");
+        let row = c
+            .palette()
+            .items
+            .iter()
+            .find(|i| i.id == format!("a:{action}"))
+            .cloned();
+        c.keys("<Esc>");
+        row.and_then(|r| r.key).unwrap_or_default()
+    };
+    for (action, full_key, legacy) in [
+        ("redo", "ctrl+shift+z", "ctrl+y"),
+        ("sidebar_files", "ctrl+shift+e", "alt+1"),
+        ("sidebar_sessions", "ctrl+shift+j", "alt+2"),
+        ("sidebar_search", "ctrl+shift+f", "alt+3"),
+        ("sidebar_git", "ctrl+shift+g", "alt+4"),
+        ("agent_show", "ctrl+k a", "ctrl+k a"),
+        ("toggle_agent", "ctrl+alt+b", "ctrl+alt+b"),
+        ("toggle_sidebar", "ctrl+b", "ctrl+b"),
+    ] {
+        assert_eq!(key(&mut full, action), full_key, "{action}");
+        assert_eq!(key(&mut old, action), legacy, "{action}");
+    }
+    // A click on the pill opens the palette.
+    full.press("pill", None);
+    assert_eq!(full.overlays.len(), 1);
+    full.keys("<Esc>");
+    // A legacy client's alt+1 still runs the action.
+    old.keys("<A-1>");
+    assert_eq!(old.focus(), "sidebar");
 }

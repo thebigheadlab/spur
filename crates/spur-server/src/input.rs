@@ -181,7 +181,7 @@ impl State {
                 let dismiss =
                     open.and_then(|o| self.ux.as_ref()?.pack.overlays.get(&o)?.on_dismiss.clone());
                 if let Some(a) = dismiss {
-                    self.run_action(conn, &a);
+                    self.run_action(conn, &a, None, None);
                 }
                 self.input_done(conn);
                 self.check_focus(conn);

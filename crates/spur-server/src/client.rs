@@ -81,6 +81,11 @@ pub enum SendFail {
 }
 
 impl Client {
+    /// True if every key and modifier arrives from this client as pressed.
+    pub(crate) fn full_keys(&self) -> bool {
+        self.caps.key_encoding == spur_rpc::KeyEncoding::Full
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: ClientId,

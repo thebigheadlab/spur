@@ -25,8 +25,8 @@ use std::thread::ThreadId;
 
 use crossterm::event::{Event, MouseButton, MouseEventKind};
 use spur_rpc::{
-    Caps, ClientEnd, ClientKind, ClientMsg, Layout, MouseAction, PROTOCOL_VERSION, ServerMsg, Size,
-    SurfaceSize,
+    Caps, ClientEnd, ClientKind, ClientMsg, KeyEncoding, Layout, MouseAction, PROTOCOL_VERSION,
+    ServerMsg, Size, SurfaceSize,
 };
 
 use crate::color::Palette;
@@ -220,6 +220,11 @@ impl Runner {
                 truecolor,
                 mouse: true,
                 layout: Layout::Cells,
+                key_encoding: if term::full_keys() {
+                    KeyEncoding::Full
+                } else {
+                    KeyEncoding::Legacy
+                },
                 ..Caps::default()
             },
             size: Size {
@@ -330,7 +335,7 @@ impl App {
     fn term(&mut self, e: Event, msgs: &mut Vec<ClientMsg>) {
         match e {
             Event::Key(k) => {
-                if let Some(n) = input::notation(&k) {
+                if let Some(n) = input::notation(&k, term::full_keys()) {
                     self.keys.push_str(&n);
                 }
             }

@@ -6,7 +6,9 @@ use std::collections::HashMap;
 use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};
 
-use spur_rpc::{Caps, ClientEnd, ClientKind, ClientMsg, ListView, ServerMsg, Size, SurfaceView};
+use spur_rpc::{
+    Caps, ClientEnd, ClientKind, ClientMsg, KeyEncoding, ListView, ServerMsg, Size, SurfaceView,
+};
 use spur_server::Session;
 
 /// Insert-mode typing, arrows, Home, Enter, Backspace, save, undo and redo.
@@ -100,7 +102,10 @@ impl Client {
                 protocols: vec![spur_rpc::PROTOCOL_VERSION],
                 kind: ClientKind::Frontend,
                 name: name.into(),
-                caps: Caps::default(),
+                caps: Caps {
+                    key_encoding: KeyEncoding::Full,
+                    ..Caps::default()
+                },
                 size,
             })
             .expect("hello");

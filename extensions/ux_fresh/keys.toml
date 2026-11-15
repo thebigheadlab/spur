@@ -1,7 +1,8 @@
 # ux_fresh default keys (locked keys sheet, limited to commands that exist so far).
 # Format: spur-keymap layer. Keys that run a named action are listed with the action
-# in actions.toml and bound before this file, so a binding here wins over them for
-# the same keys when its `when` holds: that is how a key's special cases are added.
+# in actions.toml (an action's special cases are its own [[case]] entries). This
+# file holds the rest: editing keys, list keys and the mode fallbacks. A binding
+# here may still say `action = "<id>"` to run an action from another key.
 #
 # Modes: "insert" is the code view's mode; "sidebar", "agent" and "palette" are the
 # modes of those focused regions (pack.toml [regions]).
@@ -81,132 +82,6 @@ mode = "insert"
 keys = "<Tab>"
 command = "editor.insert_text"
 args = { text = "    " }
-
-
-# --- Shell: special cases of the action keys (actions.toml) ---
-
-# ctrl+b: shows and focuses the sidebar (the action); hides it while shown, and
-# shows it without moving focus when it fits but is closed.
-[[bind]]
-mode = "insert sidebar agent"
-keys = "<C-b>"
-when = "cond.sidebar_fits && !ui.sidebar_open"
-command = "ui.set"
-args = { key = "ui.sidebar_open", value = true }
-
-[[bind]]
-mode = "insert sidebar agent"
-keys = "<C-b>"
-when = "cond.sidebar_shown"
-command = "ui.set"
-args = { key = "ui.sidebar_open", value = false }
-
-# ctrl+alt+b: the same for the agent column.
-[[bind]]
-mode = "insert sidebar agent"
-keys = "<C-A-b>"
-when = "cond.agent_fits && !ui.agent_open"
-command = "ui.set"
-args = { key = "ui.agent_open", value = true }
-
-[[bind]]
-mode = "insert sidebar agent"
-keys = "<C-A-b>"
-when = "cond.agent_shown"
-command = "ui.set"
-args = { key = "ui.agent_open", value = false }
-
-# A view's keys again while it has focus return to the code.
-[[bind]]
-mode = "insert sidebar agent"
-keys = "<C-k>a"
-when = "ui.focus == agent"
-command = "ui.focus"
-args = { region = "editor" }
-
-[[bind]]
-mode = "insert sidebar agent"
-keys = "<C-S-e>"
-when = "ui.focus == sidebar && ui.sidebar == files"
-command = "ui.focus"
-args = { region = "editor" }
-
-[[bind]]
-mode = "insert sidebar agent"
-keys = "<A-1>"
-when = "ui.focus == sidebar && ui.sidebar == files"
-command = "ui.focus"
-args = { region = "editor" }
-
-[[bind]]
-mode = "insert sidebar agent"
-keys = "<C-k>e"
-when = "ui.focus == sidebar && ui.sidebar == files"
-command = "ui.focus"
-args = { region = "editor" }
-
-[[bind]]
-mode = "insert sidebar agent"
-keys = "<C-S-j>"
-when = "ui.focus == sidebar && ui.sidebar == sessions"
-command = "ui.focus"
-args = { region = "editor" }
-
-[[bind]]
-mode = "insert sidebar agent"
-keys = "<A-2>"
-when = "ui.focus == sidebar && ui.sidebar == sessions"
-command = "ui.focus"
-args = { region = "editor" }
-
-[[bind]]
-mode = "insert sidebar agent"
-keys = "<C-k>j"
-when = "ui.focus == sidebar && ui.sidebar == sessions"
-command = "ui.focus"
-args = { region = "editor" }
-
-[[bind]]
-mode = "insert sidebar agent"
-keys = "<C-S-f>"
-when = "ui.focus == sidebar && ui.sidebar == search"
-command = "ui.focus"
-args = { region = "editor" }
-
-[[bind]]
-mode = "insert sidebar agent"
-keys = "<A-3>"
-when = "ui.focus == sidebar && ui.sidebar == search"
-command = "ui.focus"
-args = { region = "editor" }
-
-[[bind]]
-mode = "insert sidebar agent"
-keys = "<C-k>f"
-when = "ui.focus == sidebar && ui.sidebar == search"
-command = "ui.focus"
-args = { region = "editor" }
-
-[[bind]]
-mode = "insert sidebar agent"
-keys = "<C-S-g>"
-when = "ui.focus == sidebar && ui.sidebar == git"
-command = "ui.focus"
-args = { region = "editor" }
-
-[[bind]]
-mode = "insert sidebar agent"
-keys = "<A-4>"
-when = "ui.focus == sidebar && ui.sidebar == git"
-command = "ui.focus"
-args = { region = "editor" }
-
-[[bind]]
-mode = "insert sidebar agent"
-keys = "<C-k>g"
-when = "ui.focus == sidebar && ui.sidebar == git"
-command = "ui.focus"
-args = { region = "editor" }
 
 
 # --- Sidebar ---

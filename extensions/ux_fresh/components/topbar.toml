@@ -46,230 +46,229 @@ text = "{ui.notice}"
 style = "notice"
 when = "ui.notice"
 
-# One group per place focus can be, then the way back to the code, then quit.
+# Command pill: the focused panel's name, at most two keys of its own, and a pill
+# that looks like the palette's field and opens it (by key or by a click).
+
 [node.keys]
 kind = "row"
 width = "fit"
-gap = 1
+gap = 2
 when = "!ui.notice"
-children = ["keys_code", "keys_files", "keys_sidebar", "keys_agent", "keys_palette", "keys_back", "k_quit", "h_quit"]
-
-# Code.
-[node.keys_code]
-kind = "row"
-width = "fit"
-gap = 1
-when = "ui.focus == editor"
-children = ["at_code", "keys_save", "keys_find", "k_files", "h_files", "k_agent", "h_agent"]
+children = ["keys_code", "keys_files", "keys_sidebar", "keys_agent", "keys_palette", "pill"]
 
 [node.at_code]
 kind = "text"
 text = " CODE "
 style = "focus"
 
-# Left out below 100 columns, where the row would push the workspace name out.
-[node.keys_save]
+[node.keys_code]
 kind = "row"
 width = "fit"
 gap = 1
-when = "client.cols >= 100"
-children = ["k_save", "h_save"]
-
-# The palette, where there is room for it.
-[node.keys_find]
-kind = "row"
-width = "fit"
-gap = 1
-when = "client.cols >= 120"
-children = ["k_palette", "h_palette"]
-
-[node.k_palette]
-kind = "text"
-text = " {key:palette_all} "
-style = "key"
-
-[node.h_palette]
-kind = "text"
-text = "go to "
-style = "hint"
-
-[node.k_save]
-kind = "text"
-text = " {key:save} "
-style = "key"
-
-[node.h_save]
-kind = "text"
-text = "save "
-style = "hint"
-
-[node.k_files]
-kind = "text"
-text = " {key:sidebar_files} "
-style = "key"
-
-[node.h_files]
-kind = "text"
-text = "files "
-style = "hint"
-
-[node.k_agent]
-kind = "text"
-text = " {key:agent_show} "
-style = "key"
-
-[node.h_agent]
-kind = "text"
-text = "agent "
-style = "hint"
-
-# The Files list.
-[node.keys_files]
-kind = "row"
-width = "fit"
-gap = 1
-when = "ui.focus == sidebar && ui.sidebar == files"
-children = ["at_files", "k_move", "h_move", "k_open", "h_open"]
+when = "ui.focus == editor"
+children = ["at_code"]
 
 [node.at_files]
 kind = "text"
 text = " FILES "
 style = "focus"
 
-[node.k_move]
-kind = "text"
-text = " {key:list_up}/{key:list_down} "
-style = "key"
-
-[node.h_move]
-kind = "text"
-text = "move "
-style = "hint"
-
-[node.k_open]
-kind = "text"
-text = " {key:list_open} "
-style = "key"
-
-[node.h_open]
-kind = "text"
-text = "open "
-style = "hint"
-
-# The other sidebar views have no keys of their own yet; their card title names them.
-# The one key shown is the way back to Files.
-[node.keys_sidebar]
+[node.keys_files]
 kind = "row"
 width = "fit"
 gap = 1
-when = "ui.focus == sidebar && ui.sidebar != files"
-children = ["at_sidebar", "k_to_files", "h_to_files"]
+when = "ui.focus == sidebar && ui.sidebar == files"
+children = ["at_files", "p_files_open", "p_files_esc"]
+
+[node.k_files_open]
+kind = "text"
+text = "{key:list_open}"
+style = "key"
+
+[node.h_files_open]
+kind = "text"
+text = "open"
+style = "hint"
+
+[node.p_files_open]
+kind = "row"
+width = "fit"
+gap = 1
+children = ["k_files_open", "h_files_open"]
+
+[node.s_files_esc]
+kind = "text"
+text = "·"
+style = "hint.sep"
+
+[node.k_files_esc]
+kind = "text"
+text = "{key:back_to_code}"
+style = "key"
+
+[node.h_files_esc]
+kind = "text"
+text = "code"
+style = "hint"
+
+[node.p_files_esc]
+kind = "row"
+width = "fit"
+gap = 1
+children = ["s_files_esc", "k_files_esc", "h_files_esc"]
 
 [node.at_sidebar]
 kind = "text"
 text = " SIDEBAR "
 style = "focus"
 
-[node.k_to_files]
-kind = "text"
-text = " {key:sidebar_files} "
-style = "key"
-
-[node.h_to_files]
-kind = "text"
-text = "files "
-style = "hint"
-
-# Agent column.
-[node.keys_agent]
+[node.keys_sidebar]
 kind = "row"
 width = "fit"
 gap = 1
-when = "ui.focus == agent"
-children = ["at_agent", "k_tabs", "h_tabs"]
+when = "ui.focus == sidebar && ui.sidebar != files"
+children = ["at_sidebar", "p_sidebar_esc"]
+
+[node.k_sidebar_esc]
+kind = "text"
+text = "{key:back_to_code}"
+style = "key"
+
+[node.h_sidebar_esc]
+kind = "text"
+text = "code"
+style = "hint"
+
+[node.p_sidebar_esc]
+kind = "row"
+width = "fit"
+gap = 1
+children = ["k_sidebar_esc", "h_sidebar_esc"]
 
 [node.at_agent]
 kind = "text"
 text = " AGENT "
 style = "focus"
 
-[node.k_tabs]
-kind = "text"
-text = " {key:agent_tab_prev}/{key:agent_tab_next} "
-style = "key"
-
-[node.h_tabs]
-kind = "text"
-text = "tabs "
-style = "hint"
-
-# The palette.
-[node.keys_palette]
+[node.keys_agent]
 kind = "row"
 width = "fit"
 gap = 1
-when = "ui.focus == palette"
-children = ["at_palette", "k_pmove", "h_pmove", "k_prun", "h_prun", "k_pclose", "h_pclose"]
+when = "ui.focus == agent"
+children = ["at_agent", "p_agent_tabs", "p_agent_esc"]
+
+[node.k_agent_tabs]
+kind = "text"
+text = "{key:agent_tab_prev}/{key:agent_tab_next}"
+style = "key"
+
+[node.h_agent_tabs]
+kind = "text"
+text = "tabs"
+style = "hint"
+
+[node.p_agent_tabs]
+kind = "row"
+width = "fit"
+gap = 1
+when = "client.cols >= 100"
+children = ["k_agent_tabs", "h_agent_tabs"]
+
+[node.s_agent_esc]
+kind = "text"
+text = "·"
+style = "hint.sep"
+
+[node.k_agent_esc]
+kind = "text"
+text = "{key:back_to_code}"
+style = "key"
+
+[node.h_agent_esc]
+kind = "text"
+text = "code"
+style = "hint"
+
+[node.p_agent_esc]
+kind = "row"
+width = "fit"
+gap = 1
+children = ["s_agent_esc", "k_agent_esc", "h_agent_esc"]
 
 [node.at_palette]
 kind = "text"
 text = " PALETTE "
 style = "focus"
 
-[node.k_pmove]
-kind = "text"
-text = " {key:list_up}/{key:list_down} "
-style = "key"
-
-[node.h_pmove]
-kind = "text"
-text = "move "
-style = "hint"
-
-[node.k_prun]
-kind = "text"
-text = " {key:list_open} "
-style = "key"
-
-[node.h_prun]
-kind = "text"
-text = "run "
-style = "hint"
-
-[node.k_pclose]
-kind = "text"
-text = " {key:palette_close} "
-style = "key"
-
-[node.h_pclose]
-kind = "text"
-text = "close "
-style = "hint"
-
-# Sidebar and agent column: back to the code.
-[node.keys_back]
+[node.keys_palette]
 kind = "row"
 width = "fit"
 gap = 1
-when = "ui.focus != editor && ui.focus != palette"
-children = ["k_esc", "h_esc"]
+when = "ui.focus == palette"
+children = ["at_palette", "p_palette_run", "p_palette_close"]
 
-[node.k_esc]
+[node.k_palette_run]
 kind = "text"
-text = " {key:back_to_code} "
+text = "{key:list_open}"
 style = "key"
 
-[node.h_esc]
+[node.h_palette_run]
 kind = "text"
-text = "code "
+text = "run"
 style = "hint"
 
-[node.k_quit]
+[node.p_palette_run]
+kind = "row"
+width = "fit"
+gap = 1
+children = ["k_palette_run", "h_palette_run"]
+
+[node.s_palette_close]
 kind = "text"
-text = " {key:quit} "
+text = "·"
+style = "hint.sep"
+
+[node.k_palette_close]
+kind = "text"
+text = "{key:palette_close}"
 style = "key"
 
-[node.h_quit]
+[node.h_palette_close]
 kind = "text"
-text = "quit"
+text = "close"
 style = "hint"
+
+[node.p_palette_close]
+kind = "row"
+width = "fit"
+gap = 1
+children = ["s_palette_close", "k_palette_close", "h_palette_close"]
+
+[node.pill]
+kind = "row"
+width = "fit"
+gap = 0
+when = "ui.focus != palette"
+children = ["pill_l", "pill_mark", "pill_text", "pill_key"]
+on_click = [{ action = "palette_all" }]
+
+[node.pill_l]
+kind = "text"
+text = " "
+style = "pill"
+
+[node.pill_mark]
+kind = "icon"
+icon = "prompt"
+style = "pill.mark"
+
+[node.pill_text]
+kind = "text"
+text = " Go to file or action   "
+style = "pill"
+when = "client.cols >= 120"
+
+[node.pill_key]
+kind = "text"
+text = " {key:palette_all} "
+style = "pill.key"
