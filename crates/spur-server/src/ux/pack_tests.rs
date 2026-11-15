@@ -496,7 +496,7 @@ fn key_hints_come_from_actions() {
             let hint = a
                 .modes
                 .iter()
-                .find_map(|m| a.hint(&k[4..], &keymap, m, &look, &pack.key_display));
+                .find_map(|m| a.hint(&k[4..], &keymap, m, &look, &pack.key_display, true));
             assert!(
                 hint.is_some_and(|h| !h.is_empty()),
                 "node.{id}: {k} prints no hint"

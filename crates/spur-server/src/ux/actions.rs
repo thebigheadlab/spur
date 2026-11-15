@@ -6,7 +6,9 @@ use std::sync::Arc;
 
 use serde_json::json;
 use spur_core::{CommandId, ContextLookup, When};
-use spur_keymap::{Action as KeyAction, Binding, Key, KeyCode, Keymap, Layer, Mods, Step};
+use spur_keymap::{
+    Action as KeyAction, Binding, Key, KeyCode, Keymap, Layer, Mods, Step, legacy_can_send,
+};
 
 /// The command every action key runs: `ui.action.run {id}`.
 pub const RUN_ACTION: &str = "ui.action.run";
@@ -113,19 +115,23 @@ impl Action {
     }
 
     /// Its first key that, pressed now in `mode`, runs this action (the binding
-    /// chosen for it is `ui.action.run` of this action, from any layer).
+    /// chosen for it is `ui.action.run` of this action, from any layer) and can
+    /// arrive from the client (without full keys, every key of the sequence
+    /// must be one a legacy terminal sends).
     fn live_key(
         &self,
         id: &str,
         keymap: &Keymap,
         mode: &str,
         look: &impl ContextLookup,
+        full_keys: bool,
     ) -> Option<&ActionKey> {
         self.keys.iter().find(|k| {
-            matches!(
-                keymap.resolve_key(mode, &k.keys, look),
-                Some((_, KeyAction::Run(s))) if run_target(s) == Some(id)
-            )
+            (full_keys || k.keys.iter().all(legacy_can_send))
+                && matches!(
+                    keymap.resolve_key(mode, &k.keys, look),
+                    Some((_, KeyAction::Run(s))) if run_target(s) == Some(id)
+                )
         })
     }
 
@@ -137,8 +143,9 @@ impl Action {
         mode: &str,
         look: &impl ContextLookup,
         display: &KeyDisplay,
+        full_keys: bool,
     ) -> Option<String> {
-        self.live_key(id, keymap, mode, look)
+        self.live_key(id, keymap, mode, look, full_keys)
             .map(|k| display.format(&k.keys))
     }
 }
@@ -312,10 +319,10 @@ mod tests {
         let cx = spur_core::Context::new();
         let d = KeyDisplay::default();
         assert_eq!(
-            a.hint("show", &km, "insert", &cx, &d).as_deref(),
+            a.hint("show", &km, "insert", &cx, &d, true).as_deref(),
             Some("ctrl+a")
         );
-        assert_eq!(a.hint("other", &km, "insert", &cx, &d), None);
+        assert_eq!(a.hint("other", &km, "insert", &cx, &d, true), None);
     }
 
     #[test]

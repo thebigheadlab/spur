@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 use spur_rpc::{
-    Caps, ClientEnd, ClientKind, ClientMsg, ItemKind, ListView, MouseAction, Node, Overlay, Reply,
-    ServerMsg, Size, SurfaceSize, SurfaceView, in_process,
+    Caps, ClientEnd, ClientKind, ClientMsg, ItemKind, KeyEncoding, ListView, MouseAction, Node,
+    Overlay, Reply, ServerMsg, Size, SurfaceSize, SurfaceView, in_process,
 };
 use spur_server::{PackSource, Session, SessionConfig};
 
@@ -68,6 +68,10 @@ struct Client {
 
 impl Client {
     fn attach(s: &Session, cols: u32, rows: u32) -> Self {
+        Self::attach_with(s, cols, rows, KeyEncoding::Full)
+    }
+
+    fn attach_with(s: &Session, cols: u32, rows: u32, keys: KeyEncoding) -> Self {
         let (end, server) = in_process();
         s.attach(server).unwrap();
         let mut c = Self {
@@ -88,7 +92,10 @@ impl Client {
             protocols: vec![0],
             kind: ClientKind::Frontend,
             name: "t".into(),
-            caps: Caps::default(),
+            caps: Caps {
+                key_encoding: keys,
+                ..Caps::default()
+            },
             size: Size { cols, rows },
         });
         c.sync();
@@ -803,7 +810,10 @@ fn ui_commands_check_their_args_and_callers() {
         protocols: vec![0],
         kind: ClientKind::Tool,
         name: "tool".into(),
-        caps: Caps::default(),
+        caps: Caps {
+            key_encoding: KeyEncoding::Full,
+            ..Caps::default()
+        },
         size: Size { cols: 0, rows: 0 },
     })
     .unwrap();
@@ -1558,4 +1568,26 @@ fn shell_actions_match_the_recorded_matrix() {
         assert_eq!(g, w, "line {}", i + 1);
     }
     assert_eq!(out.lines().count(), want.lines().count());
+}
+
+#[test]
+fn hints_name_keys_a_legacy_terminal_can_send() {
+    let root = workspace("legacy-hints");
+    let s = session_in(&root, &["notes.txt"]);
+    let mut full = Client::attach(&s, 160, 45);
+    let mut old = Client::attach_with(&s, 160, 45, KeyEncoding::Legacy);
+    assert_eq!(full.node("k_files").text.as_deref(), Some(" ctrl+shift+e "));
+    assert_eq!(old.node("k_files").text.as_deref(), Some(" alt+1 "));
+    // The palette's rows too: redo is ctrl+shift+z, or ctrl+y.
+    let key = |c: &mut Client| {
+        c.keys("<C-Space>>redo");
+        let row = c.palette().items.iter().find(|i| i.id == "a:redo").cloned();
+        c.keys("<Esc>");
+        row.and_then(|r| r.key)
+    };
+    assert_eq!(key(&mut full).as_deref(), Some("ctrl+shift+z"));
+    assert_eq!(key(&mut old).as_deref(), Some("ctrl+y"));
+    // A legacy client's alt+1 still runs the action.
+    old.keys("<A-1>");
+    assert_eq!(old.focus(), "sidebar");
 }

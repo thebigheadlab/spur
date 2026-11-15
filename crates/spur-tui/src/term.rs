@@ -46,6 +46,12 @@ pub fn setup() -> io::Result<()> {
     Ok(())
 }
 
+/// True if the terminal reports every key in full: the kitty keyboard protocol
+/// is on, or the terminal is a Windows console (crossterm reads its key events).
+pub fn full_keys() -> bool {
+    cfg!(windows) || KITTY.load(Ordering::SeqCst)
+}
+
 /// Puts the terminal back. Idempotent, and safe from a panic hook.
 pub fn restore() {
     if !ACTIVE.swap(false, Ordering::SeqCst) {

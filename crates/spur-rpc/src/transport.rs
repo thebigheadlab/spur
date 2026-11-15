@@ -422,14 +422,17 @@ pub fn read_frame<R: Read, T: DeserializeOwned>(reader: R) -> io::Result<Option<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{Caps, ClientKind, Size};
+    use crate::protocol::{Caps, ClientKind, KeyEncoding, Size};
 
     fn hello() -> ClientMsg {
         ClientMsg::Hello {
             protocols: vec![0],
             kind: ClientKind::Frontend,
             name: "t".into(),
-            caps: Caps::default(),
+            caps: Caps {
+                key_encoding: KeyEncoding::Full,
+                ..Caps::default()
+            },
             size: Size { cols: 80, rows: 24 },
         }
     }

@@ -46,7 +46,7 @@
 //!
 //! ```text
 //! → {"type":"hello","protocols":[0],"kind":"frontend","name":"tui",
-//!    "caps":{"truecolor":true,"mouse":true},"size":{"cols":80,"rows":24}}
+//!    "caps":{"truecolor":true,"mouse":true,"key_encoding":"full"},"size":{"cols":80,"rows":24}}
 //! ← {"type":"welcome","protocol":0,"server":"0.1.0","client":1,"session":"main","features":[]}
 //! ← {"type":"ui","root":{"id":"root","kind":"column","width":{"type":"fill","weight":1},
 //!    "height":{"type":"fill","weight":1},"children":[{"id":"editor","kind":"surface",
@@ -173,9 +173,10 @@ mod protocol;
 mod transport;
 
 pub use protocol::{
-    BadRows, Caps, ClientKind, ClientMsg, Cursor, CursorKind, Dim, Item, ItemKind, Layout, Line,
-    ListView, MouseAction, Node, NodeKind, Overlay, PROTOCOL_VERSION, Pos, Reply, Rows, Sel,
-    ServerMsg, Size, Span, SurfaceSize, SurfaceView, Token, WireError, peek_hello, tokens,
+    BadRows, Caps, ClientKind, ClientMsg, Cursor, CursorKind, Dim, Item, ItemKind, KeyEncoding,
+    Layout, Line, ListView, MouseAction, Node, NodeKind, Overlay, PROTOCOL_VERSION, Pos, Reply,
+    Rows, Sel, ServerMsg, Size, Span, SurfaceSize, SurfaceView, Token, WireError, peek_hello,
+    tokens,
 };
 pub use transport::{
     ClientEnd, Closed, Endpoint, FrameReader, FrameWriter, MAX_FRAME, QUEUE, ServerEnd, in_process,

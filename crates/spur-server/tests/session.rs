@@ -6,8 +6,8 @@ use serde_json::{Value, json};
 use spur_core::editor::Editor;
 use spur_core::{Actor, CommandId, CommandMeta, Core};
 use spur_rpc::{
-    Caps, ClientEnd, ClientKind, ClientMsg, CursorKind, MouseAction, Reply, ServerMsg, Size,
-    SurfaceView, in_process,
+    Caps, ClientEnd, ClientKind, ClientMsg, CursorKind, KeyEncoding, MouseAction, Reply, ServerMsg,
+    Size, SurfaceView, in_process,
 };
 use spur_server::{Session, SessionConfig};
 
@@ -135,7 +135,10 @@ impl Client {
             protocols: vec![0],
             kind,
             name: "t".into(),
-            caps: Caps::default(),
+            caps: Caps {
+                key_encoding: KeyEncoding::Full,
+                ..Caps::default()
+            },
             size: Size { cols: 80, rows: 10 },
         });
         self.sync();
@@ -270,7 +273,10 @@ fn messages_before_hello_or_a_second_hello_are_refused() {
         protocols: vec![0],
         kind: ClientKind::Frontend,
         name: String::new(),
-        caps: Caps::default(),
+        caps: Caps {
+            key_encoding: KeyEncoding::Full,
+            ..Caps::default()
+        },
         size: Size::default(),
     });
     let mut got = None;

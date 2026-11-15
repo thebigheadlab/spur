@@ -118,7 +118,9 @@ when = "ui.focus == agent"
 command = "ui.focus"
 args = { region = "editor" }
 
-# The sidebar views. The ctrl+k chords come first: every terminal sends them.
+# The sidebar views. Full keys first (ctrl+shift needs the kitty keyboard
+# protocol), then alt+digit and the ctrl+k chord, which every terminal sends:
+# hints show the first key that can arrive from the client.
 [actions.sidebar_files]
 title = "Show Files"
 run = [
@@ -127,7 +129,7 @@ run = [
   { command = "ui.focus", args = { region = "sidebar" } },
 ]
 modes = ["insert", "sidebar", "agent"]
-keys = ["<C-k>e", "<C-S-e>", "<A-1>"]
+keys = ["<C-S-e>", "<A-1>", "<C-k>e"]
 
 # A view's keys again while it has focus: back to the code.
 [[actions.sidebar_files.case]]
@@ -143,7 +145,7 @@ run = [
   { command = "ui.focus", args = { region = "sidebar" } },
 ]
 modes = ["insert", "sidebar", "agent"]
-keys = ["<C-k>j", "<C-S-j>", "<A-2>"]
+keys = ["<C-S-j>", "<A-2>", "<C-k>j"]
 
 [[actions.sidebar_sessions.case]]
 when = "ui.focus == sidebar && ui.sidebar == sessions"
@@ -158,7 +160,7 @@ run = [
   { command = "ui.focus", args = { region = "sidebar" } },
 ]
 modes = ["insert", "sidebar", "agent"]
-keys = ["<C-k>f", "<C-S-f>", "<A-3>"]
+keys = ["<C-S-f>", "<A-3>", "<C-k>f"]
 
 [[actions.sidebar_search.case]]
 when = "ui.focus == sidebar && ui.sidebar == search"
@@ -173,7 +175,7 @@ run = [
   { command = "ui.focus", args = { region = "sidebar" } },
 ]
 modes = ["insert", "sidebar", "agent"]
-keys = ["<C-k>g", "<C-S-g>", "<A-4>"]
+keys = ["<C-S-g>", "<A-4>", "<C-k>g"]
 
 [[actions.sidebar_git.case]]
 when = "ui.focus == sidebar && ui.sidebar == git"

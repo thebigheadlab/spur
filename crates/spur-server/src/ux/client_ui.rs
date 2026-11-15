@@ -61,7 +61,14 @@ pub(crate) fn hint(
         ux.pack.region_of(node).unwrap_or(focus)
     };
     let mode = mode_of(ux, c, ed, region);
-    a.hint(action, &c.keymap, &mode, look, &ux.pack.key_display)
+    a.hint(
+        action,
+        &c.keymap,
+        &mode,
+        look,
+        &ux.pack.key_display,
+        c.full_keys(),
+    )
 }
 
 /// The palette's query.
@@ -105,7 +112,14 @@ pub(crate) fn palette_rows(ux: &Ux, c: &Client, ed: &Editor, global: &Context) -
             .map(|(id, a)| ActionRow {
                 id: id.clone(),
                 title: a.title.clone().unwrap_or_default(),
-                key: a.hint(id, &c.keymap, &mode, &look, &ux.pack.key_display),
+                key: a.hint(
+                    id,
+                    &c.keymap,
+                    &mode,
+                    &look,
+                    &ux.pack.key_display,
+                    c.full_keys(),
+                ),
             })
             .collect()
     } else {

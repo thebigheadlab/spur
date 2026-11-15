@@ -1,4 +1,4 @@
-  ◆ demo               CODE   ctrl+k e  files   ctrl+k a  agent   ctrl+q  quit
+  ◆ demo           CODE   ctrl+shift+e  files   ctrl+k a  agent   ctrl+q  quit
      ╭────────────────────────────────────────────────────────────────────────╮
   ≡  │  main.rs                                                         Rust  │
      │                                                                        │

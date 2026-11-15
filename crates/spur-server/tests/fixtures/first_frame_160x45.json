@@ -349,7 +349,7 @@
                       "id": "k_files",
                       "kind": "text",
                       "style": "key",
-                      "text": " ctrl+k e ",
+                      "text": " ctrl+shift+e ",
                       "width": {
                         "type": "fit"
                       }
