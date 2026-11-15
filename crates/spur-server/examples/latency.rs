@@ -51,6 +51,8 @@ mod bench {
         Save,
         /// The same without the pack: the save's own cost (it syncs the file).
         BareSave,
+        /// ctrl+b over and over: the sidebar action's cases (hide, show).
+        Toggle,
     }
 
     pub fn run() {
@@ -110,6 +112,13 @@ mod bench {
                 Kind::BareSave,
             ),
             ("save 160x45, 1 client", (160, 45), &small, 1, Kind::Save),
+            (
+                "ctrl+b 300x100, 1 client",
+                (300, 100),
+                &big,
+                1,
+                Kind::Toggle,
+            ),
         ] {
             if !name.contains(only.as_str()) {
                 continue;
@@ -344,7 +353,7 @@ mod bench {
             // Start in the middle of the file so frames are full.
             Kind::Bare | Kind::Typing => c.keys(&"<Down>".repeat(40)),
             Kind::Tree => c.keys("<C-S-e>"),
-            Kind::Save | Kind::BareSave => {}
+            Kind::Save | Kind::BareSave | Kind::Toggle => {}
         }
         let start = session.stats().len();
         let mut round = Vec::with_capacity(keys);
@@ -358,6 +367,7 @@ mod bench {
                 },
                 Kind::Tree if i % 80 < 40 => "<Down>",
                 Kind::Tree => "<Up>",
+                Kind::Toggle => "<C-b>",
                 Kind::Save | Kind::BareSave => {
                     c.keys("a");
                     "<C-s>"

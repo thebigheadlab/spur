@@ -4,7 +4,7 @@
 - Date: 2026-11-14
 - Builds on: ADR 0005 (commands, events, context), ADR 0006 (editor server and protocol v0), ADR 0007 (UX packs and the terminal client). Plan: epic #1, slice 3.
 
-Slice 3 ships in three parts: 3a the palette, 3b keys, 3c settings. Each part adds its own section here.
+Slice 3 ships in parts: 3a the palette, 3b keys (3b-1 actions and keys, 3b-2 editing commands, 3b-3 find), 3c settings. Each part adds its own section here.
 
 ## Context
 
@@ -24,7 +24,7 @@ A focus change made by any `ui.*` command (including the palette opening and clo
 
 ### Pack actions
 
-`[actions.<id>]`, in `pack.toml` or `actions.toml`, names a step list with a title, a `when`, the key modes it is bound in (default `insert`) and its keys (strings, or `{ keys, when }` for a key with its own condition). The loader expands each action into keymap bindings, placed before `keys.toml`'s own so a later binding in `keys.toml` (a special case for one region) wins. `keys.toml` bindings and `on_click` entries may say `action = "<id>"` instead of repeating steps; a click on an action applies only while the action's `when` holds. A combined condition that does not parse is a load error.
+`[actions.<id>]`, in `pack.toml` or `actions.toml`, names a step list with a title, a `when`, the key modes it is bound in (default `insert`) and its keys (strings, or `{ keys, when }` for a key with its own condition). The loader expands each action into keymap bindings, placed before `keys.toml`'s own so a later binding in `keys.toml` (a special case for one region) wins. `keys.toml` bindings and `on_click` entries may say `action = "<id>"` instead of repeating steps; a click on an action applies only while the action's `when` holds. A combined condition that does not parse is a load error. (3b-1 replaces the special cases with an action's own cases and binds every key to `ui.action.run`.)
 
 This pays two ADR 0007 debts: a binding names one action instead of repeating its steps, and key hints come from the keymap.
 
@@ -32,7 +32,7 @@ This pays two ADR 0007 debts: a binding names one action instead of repeating it
 
 A text template may contain `{key:<action>}`. It prints the action's *live key*: its first key that, pressed now in the mode the node is read in, runs this action's steps or a binding from the pack's own layer (the pack's special cases for that key count as the action), and is not masked by another layer. The mode is that of the node's region, or of the focused region for nodes outside regions and in overlays. Keys print through `[keys.display]` (modifier prefixes and key names), so the words stay in the pack.
 
-A palette row for an action, and an overlay's `on_dismiss` action, run what a press of the live key would run, or the action's own steps if no key is live. The palette therefore runs what its hint shows.
+A palette row for an action, and an overlay's `on_dismiss` action, run what a press of the live key would run, or the action's own steps if no key is live. The palette therefore runs what its hint shows. (3b-1: hints count only bindings that run the action, and rows run the action itself.)
 
 ### Overlays and inputs
 
@@ -88,9 +88,45 @@ The typing budget is relative: interleaved runs against `main` on the same machi
 - `ui.*` calls are audited, can be intercepted by middleware and publish events.
 - A second client implements overlays (dim, rect, padding hit), inputs (placeholder, cursor, scroll) and section rows; it evaluates nothing.
 - Recorded debt:
-  - An action's behaviour can be split between its own steps and `keys.toml` special cases for one key; actions should hold their own ordered cases so keys, palette rows, clicks and dismiss share one resolver.
+  - ~~An action's behaviour can be split between its own steps and `keys.toml` special cases for one key.~~ Paid in 3b-1.
   - Palette, Files tree and (soon) settings lists branch on the list id in several places; a list reference type should own move, scroll, select, window and activate before 3c.
   - Cursor positions and match ranges are grapheme indices; a web client may segment differently. Server-owned inputs have no composition (IME) model, and key display is per pack, not per client (macOS needs cmd).
   - Rendering writes `palette.note` and records recent documents; both belong where state changes.
   - Every palette frame evaluates the whole tree; a frame where only lists and inputs changed could reuse it.
   - Each client has its own `nucleo` instance and threads; revisit with many clients.
+
+## 3b-1: actions and keys
+
+### Actions hold their own cases
+
+An action has its own steps and, optionally, ordered `[[actions.<id>.case]]` entries, each with a required `when` and its own steps. What an action runs now is its first case whose `when` holds, else its own steps; nothing if the action's own `when` is false. Cases are first-wins; `keys.toml` bindings and `on_click` lists stay last-wins. An action's or case's steps may not call `ui.action.run`, and an action key may not capture `<char>`.
+
+This pays the 3a debt: `ux_fresh`'s `keys.toml` loses its 17 special-case bindings (ctrl+b hides a shown sidebar, a view's key again goes back to the code); they are cases of `toggle_sidebar`, `toggle_agent`, `agent_show` and the four sidebar views. A recorded matrix (15 keys and the 7 palette rows, in each focus, at 80, 120 and 160 columns, with each column open or closed) gives the same results before and after.
+
+### One resolver: `ui.action.run`
+
+Every action key is an ordinary binding with one step, `ui.action.run {id}`. So are `keys.toml` and `on_click` entries that say `action = "<id>"`. The command checks the id and returns an effect; the session then resolves the action's case against the client's scope and runs its steps, each as a top-level call, the count and register going to the first step. Palette rows and overlay `on_dismiss` run the same way. Each step is its own undo step: an editing action that must undo as one is one command.
+
+When a client's keymap is assembled, every binding in any layer whose steps are exactly `ui.action.run {id}` gets the action's `when` beside its own and the action's title as its label. A key therefore falls through to a lower binding or the mode's fallback when the action does not apply, and which-key shows the title. Actions run inside one another at most 4 deep (Enter on a palette row is an action running an action).
+
+`Action::press` and the rule that any binding of the pack's own layer counts as the action are gone. A key's hint is now its first key whose chosen binding runs `ui.action.run` of that very action. A palette row runs the action it names, not whatever a key bound to it would run.
+
+The keymap's dispatch is unchanged: no named-action variant, at the cost of one extra audited call per action key.
+
+### Keys a legacy terminal can send
+
+`hello.caps.key_encoding` is `full` (every key and modifier arrives as pressed: the kitty keyboard protocol, a window) or `legacy` (xterm-style bytes; the default, and what an unknown value means). The terminal client sends `full` when it turned the kitty protocol on, and always on Windows, where crossterm reads key events directly.
+
+For a legacy client, hints skip keys that cannot arrive as themselves, per `spur_keymap::legacy_can_send`: ctrl only on a to z (not i, m; not h, j on purpose), space, `/` and 4 to 6; no ctrl+shift on letters, no shift on other chars, no modifiers on Enter, Tab, Backspace and Esc except shift+Tab, no alt+`[` or alt+`O`, no super, F1 to F12 only. Every key of a chord must pass. The rule models xterm-style terminals as crossterm reads them; another client sends `full` or gets its own value. A test builds the bytes such a terminal sends for every key with every mix of ctrl, alt and shift, reads them as crossterm 0.29 does (a copy of its private parser), and checks the rule says a key arrives exactly when it comes back as itself.
+
+The terminal client reads ctrl+7 as ctrl+/ without full keys (both are byte 0x1F). `ux_fresh` lists the full key first and backups after it (ctrl+shift+e, then alt+1, then ctrl+k e; ctrl+shift+z, then ctrl+y), so a legacy terminal's hint names a backup.
+
+### Deviations from the plan
+
+- The one-time "some shortcuts need a newer terminal" notice is not built: the top bar hides key hints while a notice shows, and the hints already name keys that work.
+- Esc after a pending chord prefix (needed once Esc is bound in the code) moves to 3b-2 with its first user.
+- Per-client key display (macOS) waits for the desktop client; the list reference type waits for 3c.
+
+### Latency
+
+New row, interleaved with `main` on the same machine (3 runs each, 3,000 keys): ctrl+b at 300x100 (the sidebar's hide and show cases), p50 round trip 0.31 to 0.33 ms on this branch against 0.32 to 0.35 ms on `main`, server time about 0.10 ms for both. Typing at 300x100 stays at parity (0.30 to 0.36 ms against 0.33 to 0.35 ms).
