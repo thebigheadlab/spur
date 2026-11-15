@@ -2309,20 +2309,16 @@ impl<'k> Loader<'k> {
                     continue;
                 };
                 c.steps = a.steps.to_vec();
-                c.when = match (&a.when, &c.when) {
-                    (Some(x), Some(y)) => match When::parse(&format!("({x}) && ({y})")) {
-                        Ok(w) => Some(w),
-                        Err(e) => {
-                            self.push(perr(
-                                &format!("node.{id}.on_click"),
-                                None,
-                                format!("its when and the action's when: {e}"),
-                            ));
-                            continue;
-                        }
-                    },
-                    (Some(x), None) => Some(x.clone()),
-                    (None, y) => y.clone(),
+                c.when = match When::both(a.when.as_ref(), c.when.as_ref()) {
+                    Ok(w) => w,
+                    Err(e) => {
+                        self.push(perr(
+                            &format!("node.{id}.on_click"),
+                            None,
+                            format!("its when and the action's when: {e}"),
+                        ));
+                        continue;
+                    }
                 };
             }
         }

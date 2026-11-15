@@ -41,14 +41,8 @@ impl Action {
     pub fn bindings(&self) -> Result<Vec<Binding>, String> {
         let mut out = Vec::new();
         for k in &self.keys {
-            let when = match (&self.when, &k.when) {
-                (Some(a), Some(b)) => Some(
-                    When::parse(&format!("({a}) && ({b})"))
-                        .map_err(|e| format!("its when and its key's when: {e}"))?,
-                ),
-                (Some(a), None) => Some(a.clone()),
-                (None, b) => b.clone(),
-            };
+            let when = When::both(self.when.as_ref(), k.when.as_ref())
+                .map_err(|e| format!("its when and its key's when: {e}"))?;
             for m in &self.modes {
                 out.push(Binding {
                     mode: m.as_str().into(),
