@@ -66,6 +66,10 @@ pub const UI_COMMANDS: &[(&str, &str)] = &[
     ),
     ("ui.input.clear", "Empty the focused input."),
     ("ui.input.focus", "Focus an input of the focused region."),
+    (
+        "ui.action.run",
+        "Run a pack action: its first case that applies, else its own steps.",
+    ),
 ];
 
 /// Session work a `ui.*` command asks for; applied by `run_as` after the call.
@@ -76,8 +80,13 @@ pub(crate) enum Effect {
     CheckFocus,
     /// Drop the client (after a confirmed quit).
     Quit,
-    /// Run a pack action as a key press in the focused region (a palette row).
-    RunAction(String),
+    /// Run a pack action in the focused region (an action key, a palette row),
+    /// the count and register going to its first step.
+    RunAction {
+        id: String,
+        count: Option<u32>,
+        register: Option<char>,
+    },
 }
 
 /// A client's UI side of one call.
@@ -158,6 +167,17 @@ impl ClientHost<Editor> for UiHost<'_> {
                     events::UI_CHANGED,
                     json!({ "client": self.client.id.0, "key": key, "value": value }),
                 );
+            }
+            "ui.action.run" => {
+                let action = arg_str(args, "id")?;
+                if self.ux.pack.action(action).is_none() {
+                    return Err(CommandError::bad_args(format!("no action {action:?}")));
+                }
+                self.effects.push(Effect::RunAction {
+                    id: action.to_owned(),
+                    count: cx.count(),
+                    register: cx.register(),
+                });
             }
             "ui.focus" => {
                 let region = arg_str(args, "region")?;
@@ -483,7 +503,11 @@ impl UiHost<'_> {
                     set_status(ux, c, "view.move_to", &e.message);
                 }
             }
-            Run::Action(id) => self.effects.push(Effect::RunAction(id)),
+            Run::Action(id) => self.effects.push(Effect::RunAction {
+                id,
+                count: None,
+                register: None,
+            }),
         }
     }
 

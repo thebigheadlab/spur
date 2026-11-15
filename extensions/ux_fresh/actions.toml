@@ -1,8 +1,13 @@
 # ux_fresh actions: named steps with keys. A titled action shows in the palette
 # (ctrl+space, then > for actions) with its key. Keys listed here are bound in
-# the action's modes (default "insert", the code); keys.toml adds the special
-# cases (a later binding there wins when its `when` holds). The first key that
-# applies is the one hints show.
+# the action's modes (default "insert", the code). The first key that applies is
+# the one hints show.
+#
+# An action may have cases, [[actions.<id>.case]], each with a `when` and its own
+# steps: the FIRST case whose `when` holds runs instead of the action's steps.
+# Keys, palette rows and clicks all run the same case. (In keys.toml and in
+# on_click lists it is the other way round: the LAST entry whose `when` holds
+# wins.)
 
 # --- Palette ---
 
@@ -66,6 +71,18 @@ run = [
 modes = ["insert", "sidebar", "agent"]
 keys = ["<C-b>"]
 
+# ctrl+b: hides a shown sidebar; shows it without moving focus when it fits but
+# is closed; otherwise (narrow terminals) shows and focuses it.
+[[actions.toggle_sidebar.case]]
+when = "cond.sidebar_shown"
+command = "ui.set"
+args = { key = "ui.sidebar_open", value = false }
+
+[[actions.toggle_sidebar.case]]
+when = "cond.sidebar_fits && !ui.sidebar_open"
+command = "ui.set"
+args = { key = "ui.sidebar_open", value = true }
+
 [actions.toggle_agent]
 title = "Toggle agent column"
 run = [
@@ -75,6 +92,17 @@ run = [
 modes = ["insert", "sidebar", "agent"]
 keys = ["<C-A-b>"]
 
+# ctrl+alt+b: the same for the agent column.
+[[actions.toggle_agent.case]]
+when = "cond.agent_shown"
+command = "ui.set"
+args = { key = "ui.agent_open", value = false }
+
+[[actions.toggle_agent.case]]
+when = "cond.agent_fits && !ui.agent_open"
+command = "ui.set"
+args = { key = "ui.agent_open", value = true }
+
 [actions.agent_show]
 title = "Show agent"
 run = [
@@ -83,6 +111,12 @@ run = [
 ]
 modes = ["insert", "sidebar", "agent"]
 keys = ["<C-k>a"]
+
+# Again while the agent has focus: back to the code.
+[[actions.agent_show.case]]
+when = "ui.focus == agent"
+command = "ui.focus"
+args = { region = "editor" }
 
 # The sidebar views. The ctrl+k chords come first: every terminal sends them.
 [actions.sidebar_files]
@@ -95,6 +129,12 @@ run = [
 modes = ["insert", "sidebar", "agent"]
 keys = ["<C-k>e", "<C-S-e>", "<A-1>"]
 
+# A view's keys again while it has focus: back to the code.
+[[actions.sidebar_files.case]]
+when = "ui.focus == sidebar && ui.sidebar == files"
+command = "ui.focus"
+args = { region = "editor" }
+
 [actions.sidebar_sessions]
 title = "Show Sessions"
 run = [
@@ -104,6 +144,11 @@ run = [
 ]
 modes = ["insert", "sidebar", "agent"]
 keys = ["<C-k>j", "<C-S-j>", "<A-2>"]
+
+[[actions.sidebar_sessions.case]]
+when = "ui.focus == sidebar && ui.sidebar == sessions"
+command = "ui.focus"
+args = { region = "editor" }
 
 [actions.sidebar_search]
 title = "Show Search"
@@ -115,6 +160,11 @@ run = [
 modes = ["insert", "sidebar", "agent"]
 keys = ["<C-k>f", "<C-S-f>", "<A-3>"]
 
+[[actions.sidebar_search.case]]
+when = "ui.focus == sidebar && ui.sidebar == search"
+command = "ui.focus"
+args = { region = "editor" }
+
 [actions.sidebar_git]
 title = "Show Git"
 run = [
@@ -124,6 +174,11 @@ run = [
 ]
 modes = ["insert", "sidebar", "agent"]
 keys = ["<C-k>g", "<C-S-g>", "<A-4>"]
+
+[[actions.sidebar_git.case]]
+when = "ui.focus == sidebar && ui.sidebar == git"
+command = "ui.focus"
+args = { region = "editor" }
 
 [actions.quit]
 title = "Quit"

@@ -11,13 +11,13 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use spur_core::editor::VIEW_KEYS;
 use spur_core::{CommandId, Source, When, check_name};
-use spur_keymap::{Layer, LayerSpec, Step, parse_keys};
+use spur_keymap::{KeyCode, Layer, LayerSpec, Step, parse_keys};
 use spur_rpc::{Dim, NodeKind, Token, tokens};
 use toml::Spanned;
 use toml::de::{DeTable, DeValue, ValueDeserializer};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use super::actions::{Action, ActionKey, KeyDisplay};
+use super::actions::{Action, ActionKey, Case, KeyDisplay, RUN_ACTION, run_step, wrap_bindings};
 use crate::lang;
 
 /// Pack format version this server reads.
@@ -726,6 +726,18 @@ struct ActionToml {
     modes: Option<Vec<String>>,
     #[serde(default)]
     keys: Vec<ActionKeyToml>,
+    #[serde(default)]
+    case: Vec<CaseToml>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CaseToml {
+    when: String,
+    command: Option<String>,
+    args: Option<Value>,
+    #[serde(default)]
+    run: Vec<StepToml>,
 }
 
 #[derive(serde::Deserialize)]
@@ -1572,6 +1584,13 @@ impl<'k> Loader<'k> {
             let Some(steps) = self.steps(src, v.span(), &path, a.command, a.args, a.run) else {
                 continue;
             };
+            let ok = self.no_action_run(src, v.span(), &path, &steps);
+            let Some(cases) = self.cases(src, v.span(), &path, a.case) else {
+                continue;
+            };
+            if !ok {
+                continue;
+            }
             let when = match a.when.as_deref().map(When::parse) {
                 Some(Ok(w)) => Some(w),
                 Some(Err(e)) => {
@@ -1592,6 +1611,14 @@ impl<'k> Loader<'k> {
                     ActionKeyToml::With { keys, when } => (keys, when),
                 };
                 let parsed = match parse_keys(&notation) {
+                    Ok(p) if p.iter().any(|k| k.code == KeyCode::AnyChar) => {
+                        self.push(src.err(
+                            Some(v.span()),
+                            &kpath,
+                            "an action key cannot capture <char>",
+                        ));
+                        continue;
+                    }
                     Ok(p) if !p.is_empty() => p,
                     Ok(_) => {
                         self.push(src.err(Some(v.span()), &kpath, "no keys"));
@@ -1625,12 +1652,68 @@ impl<'k> Loader<'k> {
                 Action {
                     title: a.title,
                     steps: steps.into(),
+                    cases,
                     when,
                     modes: a.modes.unwrap_or_else(|| vec!["insert".to_owned()]),
                     keys,
                 },
             ));
         }
+    }
+
+    /// An action's `[[case]]` entries, or `None` after reporting a bad one.
+    fn cases(
+        &mut self,
+        src: &Src<'_>,
+        span: Range<usize>,
+        path: &str,
+        raw: Vec<CaseToml>,
+    ) -> Option<Vec<Case>> {
+        let mut cases = Vec::new();
+        let mut bad = false;
+        for (i, c) in raw.into_iter().enumerate() {
+            let cpath = format!("{path}.case[{i}]");
+            let when = match When::parse(&c.when) {
+                Ok(w) => w,
+                Err(e) => {
+                    self.push(src.err(
+                        Some(span.clone()),
+                        &format!("{cpath}.when"),
+                        format!("bad clause: {e}"),
+                    ));
+                    bad = true;
+                    continue;
+                }
+            };
+            match self.steps(src, span.clone(), &cpath, c.command, c.args, c.run) {
+                Some(s) if self.no_action_run(src, span.clone(), &cpath, &s) => cases.push(Case {
+                    when,
+                    steps: s.into(),
+                }),
+                _ => bad = true,
+            }
+        }
+        (!bad).then_some(cases)
+    }
+
+    /// True unless `steps` name `ui.action.run` (an action's steps cannot run
+    /// another action).
+    fn no_action_run(
+        &mut self,
+        src: &Src<'_>,
+        span: Range<usize>,
+        path: &str,
+        steps: &[Step],
+    ) -> bool {
+        if steps.iter().any(|s| s.command.as_str() == RUN_ACTION) {
+            self.push(src.err(
+                Some(span),
+                path,
+                format!("{RUN_ACTION} cannot be a step of an action"),
+            ));
+            return false;
+        }
+        true
     }
 
     /// `command` (+ `args`) or `run`, checked against the known commands.
@@ -1704,6 +1787,7 @@ impl<'k> Loader<'k> {
             let whens = a
                 .when
                 .iter()
+                .chain(a.cases.iter().map(|c| &c.when))
                 .chain(a.keys.iter().filter_map(|k| k.when.as_ref()));
             for w in whens {
                 for k in w.keys() {
@@ -2297,7 +2381,7 @@ impl<'k> Loader<'k> {
             .map(|(k, n)| (k.clone(), (n.file.clone(), n.line)))
             .collect();
         pack.nodes = raw.into_iter().map(|(k, n)| (k, n.spec)).collect();
-        // Clicks naming an action run its steps, when the action applies.
+        // Clicks naming an action run it (ui.action.run), when the action applies.
         let actions = pack.actions.clone();
         for (id, n) in &mut pack.nodes {
             for c in &mut n.on_click {
@@ -2308,7 +2392,7 @@ impl<'k> Loader<'k> {
                 else {
                     continue;
                 };
-                c.steps = a.steps.to_vec();
+                c.steps = vec![run_step(c.action.as_deref().unwrap_or_default())];
                 c.when = match When::both(a.when.as_ref(), c.when.as_ref()) {
                     Ok(w) => w,
                     Err(e) => {
@@ -2428,7 +2512,7 @@ impl<'k> Loader<'k> {
     fn keys_file(&mut self, text: &str, pack: &mut Pack, keys: &BTreeSet<String>) {
         let src = Src::new("keys.toml", text);
         let name = format!("ux:{}", pack.id);
-        let spec = match expand_actions(text, pack) {
+        let spec = match expand_actions(text) {
             Ok(s) => s,
             Err(e) => {
                 self.push(src.err(None, "", e));
@@ -2443,10 +2527,13 @@ impl<'k> Loader<'k> {
             spec,
         ) {
             Ok(mut layer) => {
+                if let Err(e) = wrap_bindings(&mut layer, |id| pack.action(id)) {
+                    self.push(src.err(None, "", e));
+                }
                 // Action keys first: a later binding in keys.toml wins over them.
                 let mut expanded = Vec::new();
                 for (id, a) in &pack.actions {
-                    match a.bindings() {
+                    match a.bindings(id) {
                         Ok(b) => expanded.extend(b),
                         Err(e) => {
                             let (file, line) = self.action_at.get(id).cloned().unwrap_or_default();
@@ -2562,8 +2649,8 @@ impl<'k> Loader<'k> {
     }
 }
 
-/// Reads keys.toml, turning `action = "<id>"` bindings into the action's steps.
-fn expand_actions(text: &str, pack: &Pack) -> Result<LayerSpec, String> {
+/// Reads keys.toml, turning `action = "<id>"` bindings into `ui.action.run {id}`.
+fn expand_actions(text: &str) -> Result<LayerSpec, String> {
     let mut doc: toml::Table = toml::from_str(text).map_err(|e| e.message().to_owned())?;
     if let Some(toml::Value::Array(binds)) = doc.get_mut("bind") {
         for (i, b) in binds.iter_mut().enumerate() {
@@ -2581,25 +2668,11 @@ fn expand_actions(text: &str, pack: &Pack) -> Result<LayerSpec, String> {
                     "bind[{i}]: give action, command (with optional args) or run"
                 ));
             }
-            let Some(action) = pack.action(id) else {
-                // Reported with its line by the caller.
-                t.insert("run".into(), toml::Value::Array(Vec::new()));
-                continue;
-            };
-            let mut run = Vec::new();
-            for step in action.steps.iter() {
-                let mut st = toml::Table::new();
-                st.insert(
-                    "command".into(),
-                    toml::Value::String(step.command.to_string()),
-                );
-                if !step.args.is_null() {
-                    let v = toml::Value::try_from(&*step.args).map_err(|e| e.to_string())?;
-                    st.insert("args".into(), v);
-                }
-                run.push(toml::Value::Table(st));
-            }
-            t.insert("run".into(), toml::Value::Array(run));
+            // An unknown id is reported with its line by the caller.
+            t.insert("command".into(), toml::Value::String(RUN_ACTION.into()));
+            let mut args = toml::Table::new();
+            args.insert("id".into(), toml::Value::String(id.to_owned()));
+            t.insert("args".into(), toml::Value::Table(args));
         }
     }
     serde::Deserialize::deserialize(toml::Value::Table(doc))

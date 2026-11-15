@@ -24,7 +24,7 @@ sidebar_shown = "ui.sidebar_open && ((client.cols >= 100 && (client.cols >= 144 
 # The agent column shows when open and there is room beside an open sidebar
 # (144 cols), or whenever it has focus.
 agent_shown = "ui.agent_open && (client.cols >= 144 || ui.focus == agent)"
-# Whether each fits where focus is now, for keys.toml (conditions cannot read each
+# Whether each fits where focus is now, for the actions' cases (conditions cannot read each
 # other, so the numbers above repeat here; keep them in step).
 sidebar_fits = "client.cols >= 100 && (client.cols >= 144 || ui.focus != agent)"
 agent_fits = "client.cols >= 144"

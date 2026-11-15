@@ -191,12 +191,16 @@ fn references_are_checked() {
         "node.palette_query.source: unknown source \"palete\" (palette)",
     );
     let e = broken("keys.toml", |t| {
+        t.replace("keys = \"<Tab>\"", "keys = \"<Tab>\"\nwhen = \"ui.sidebr\"")
+    });
+    has(&e, "(<Tab>): unknown key ui.sidebr");
+    let e = broken("actions.toml", |t| {
         t.replace(
             "when = \"cond.sidebar_shown\"",
             "when = \"cond.sidebar_show\"",
         )
     });
-    has(&e, "(<C-b>): unknown key cond.sidebar_show");
+    has(&e, "actions.toggle_sidebar: unknown key cond.sidebar_show");
     let e = broken("keys.toml", |t| {
         t.replace(
             "fallback = \"editor.insert_text\"",
@@ -204,6 +208,40 @@ fn references_are_checked() {
         )
     });
     has(&e, "mode.insert.fallback: unknown command");
+}
+
+#[test]
+fn action_cases_and_steps_are_checked() {
+    // A case needs a when and steps; an action's steps cannot run an action;
+    // an action key cannot capture a char.
+    let e = broken("actions.toml", |t| {
+        t.replace("when = \"cond.sidebar_shown\"\n", "")
+    });
+    has(&e, "actions.toggle_sidebar");
+    let e = broken("actions.toml", |t| {
+        t.replace(
+            "when = \"cond.sidebar_shown\"\ncommand = \"ui.set\"\nargs = { key = \"ui.sidebar_open\", value = false }",
+            "when = \"cond.sidebar_shown\"",
+        )
+    });
+    has(&e, "actions.toggle_sidebar.case[0]: give either command");
+    let e = broken("actions.toml", |t| {
+        t.replace(
+            "command = \"editor.undo\"",
+            "command = \"ui.action.run\"\nargs = { id = \"redo\" }",
+        )
+    });
+    has(
+        &e,
+        "actions.undo: ui.action.run cannot be a step of an action",
+    );
+    let e = broken("actions.toml", |t| {
+        t.replace("keys = [\"<C-z>\"]", "keys = [\"<C-z><char>\"]")
+    });
+    has(
+        &e,
+        "actions.undo.keys[0]: an action key cannot capture <char>",
+    );
 }
 
 #[test]
@@ -458,7 +496,7 @@ fn key_hints_come_from_actions() {
             let hint = a
                 .modes
                 .iter()
-                .find_map(|m| a.hint(&keymap, &pack.keys.name, m, &look, &pack.key_display));
+                .find_map(|m| a.hint(&k[4..], &keymap, m, &look, &pack.key_display));
             assert!(
                 hint.is_some_and(|h| !h.is_empty()),
                 "node.{id}: {k} prints no hint"
