@@ -774,6 +774,17 @@ fn ui_commands_check_their_args_and_callers() {
         Reply::Unknown => "unknown".into(),
     };
     assert_eq!(code(c.command("ui.nope", json!({}))), "unknown_command");
+    // ui.action.run names a known action; it runs after the call.
+    assert_eq!(
+        code(c.command("ui.action.run", json!({ "id": "nope" }))),
+        "bad_args"
+    );
+    assert!(matches!(
+        c.command("ui.action.run", json!({ "id": "toggle_sidebar" })),
+        Reply::Ok(_)
+    ));
+    assert!(!c.shows("sidebar"), "the shown sidebar hid");
+    c.keys("<C-b>");
     assert_eq!(
         code(c.command("ui.set", json!({ "key": "ui.sidebar", "value": "nope" }))),
         "bad_args"
@@ -1508,12 +1519,13 @@ fn shell_actions_match_the_recorded_matrix() {
         )
     };
     let mut out = String::new();
-    for cols in [80, 120, 160] {
+    // Each side of the widths where the columns stop fitting (100 and 144).
+    for cols in [99, 100, 143, 144] {
         c.resize(cols, 45);
         for focus in ["editor", "sidebar", "agent"] {
             for sb in [false, true] {
                 for ag in [false, true] {
-                    for view in ["files", "git"] {
+                    for view in ["files", "sessions", "search", "git"] {
                         let probes = keys
                             .iter()
                             .map(|k| (true, *k))
@@ -1578,15 +1590,31 @@ fn hints_name_keys_a_legacy_terminal_can_send() {
     let mut old = Client::attach_with(&s, 160, 45, KeyEncoding::Legacy);
     assert_eq!(full.node("k_files").text.as_deref(), Some(" ctrl+shift+e "));
     assert_eq!(old.node("k_files").text.as_deref(), Some(" alt+1 "));
-    // The palette's rows too: redo is ctrl+shift+z, or ctrl+y.
-    let key = |c: &mut Client| {
-        c.keys("<C-Space>>redo");
-        let row = c.palette().items.iter().find(|i| i.id == "a:redo").cloned();
+    // The palette's rows too: the full key, or the first backup that arrives.
+    let key = |c: &mut Client, action: &str| {
+        c.keys("<C-Space>>");
+        let row = c
+            .palette()
+            .items
+            .iter()
+            .find(|i| i.id == format!("a:{action}"))
+            .cloned();
         c.keys("<Esc>");
-        row.and_then(|r| r.key)
+        row.and_then(|r| r.key).unwrap_or_default()
     };
-    assert_eq!(key(&mut full).as_deref(), Some("ctrl+shift+z"));
-    assert_eq!(key(&mut old).as_deref(), Some("ctrl+y"));
+    for (action, full_key, legacy) in [
+        ("redo", "ctrl+shift+z", "ctrl+y"),
+        ("sidebar_files", "ctrl+shift+e", "alt+1"),
+        ("sidebar_sessions", "ctrl+shift+j", "alt+2"),
+        ("sidebar_search", "ctrl+shift+f", "alt+3"),
+        ("sidebar_git", "ctrl+shift+g", "alt+4"),
+        ("agent_show", "ctrl+k a", "ctrl+k a"),
+        ("toggle_agent", "ctrl+alt+b", "ctrl+alt+b"),
+        ("toggle_sidebar", "ctrl+b", "ctrl+b"),
+    ] {
+        assert_eq!(key(&mut full, action), full_key, "{action}");
+        assert_eq!(key(&mut old, action), legacy, "{action}");
+    }
     // A legacy client's alt+1 still runs the action.
     old.keys("<A-1>");
     assert_eq!(old.focus(), "sidebar");

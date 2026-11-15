@@ -1801,17 +1801,24 @@ impl<'k> Loader<'k> {
             }
         }
         for (id, o) in &pack.overlays {
-            if let Some(a) = &o.on_dismiss
-                && pack.action(a).is_none()
-            {
-                let line = self.overlay_at.get(id).copied();
-                self.push(PackError {
-                    file: "pack.toml".into(),
-                    line,
-                    path: format!("overlays.{id}.on_dismiss"),
-                    message: format!("no action {a:?}"),
-                });
-            }
+            let Some(a) = &o.on_dismiss else {
+                continue;
+            };
+            // A dismiss action that might not apply would leave the overlay open.
+            let message = match pack.action(a) {
+                None => format!("no action {a:?}"),
+                Some(x) if x.when.is_some() => {
+                    format!("action {a:?} has a when; a dismiss action must always apply")
+                }
+                Some(_) => continue,
+            };
+            let line = self.overlay_at.get(id).copied();
+            self.push(PackError {
+                file: "pack.toml".into(),
+                line,
+                path: format!("overlays.{id}.on_dismiss"),
+                message,
+            });
         }
     }
 
@@ -2382,18 +2389,19 @@ impl<'k> Loader<'k> {
             .collect();
         pack.nodes = raw.into_iter().map(|(k, n)| (k, n.spec)).collect();
         // Clicks naming an action run it (ui.action.run), when the action applies.
-        let actions = pack.actions.clone();
+        let whens: HashMap<String, Option<When>> = pack
+            .actions
+            .iter()
+            .map(|(k, a)| (k.clone(), a.when.clone()))
+            .collect();
         for (id, n) in &mut pack.nodes {
             for c in &mut n.on_click {
-                let Some((_, a)) = c
-                    .action
-                    .as_deref()
-                    .and_then(|a| actions.iter().find(|(k, _)| k == a))
+                let Some((action, when)) = c.action.as_deref().and_then(|a| whens.get_key_value(a))
                 else {
                     continue;
                 };
-                c.steps = vec![run_step(c.action.as_deref().unwrap_or_default())];
-                c.when = match When::both(a.when.as_ref(), c.when.as_ref()) {
+                c.steps = vec![run_step(action)];
+                c.when = match When::both(when.as_ref(), c.when.as_ref()) {
                     Ok(w) => w,
                     Err(e) => {
                         self.push(perr(
@@ -2527,7 +2535,7 @@ impl<'k> Loader<'k> {
             spec,
         ) {
             Ok(mut layer) => {
-                if let Err(e) = wrap_bindings(&mut layer, |id| pack.action(id)) {
+                for e in wrap_bindings(&mut layer, |id| pack.action(id)) {
                     self.push(src.err(None, "", e));
                 }
                 // Action keys first: a later binding in keys.toml wins over them.

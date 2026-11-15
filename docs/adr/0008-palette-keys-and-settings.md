@@ -101,13 +101,13 @@ The typing budget is relative: interleaved runs against `main` on the same machi
 
 An action has its own steps and, optionally, ordered `[[actions.<id>.case]]` entries, each with a required `when` and its own steps. What an action runs now is its first case whose `when` holds, else its own steps; nothing if the action's own `when` is false. Cases are first-wins; `keys.toml` bindings and `on_click` lists stay last-wins. An action's or case's steps may not call `ui.action.run`, and an action key may not capture `<char>`.
 
-This pays the 3a debt: `ux_fresh`'s `keys.toml` loses its 17 special-case bindings (ctrl+b hides a shown sidebar, a view's key again goes back to the code); they are cases of `toggle_sidebar`, `toggle_agent`, `agent_show` and the four sidebar views. A recorded matrix (15 keys and the 7 palette rows, in each focus, at 80, 120 and 160 columns, with each column open or closed) gives the same results before and after.
+This pays the 3a debt: `ux_fresh`'s `keys.toml` loses its 17 special-case bindings (ctrl+b hides a shown sidebar, a view's key again goes back to the code); they are cases of `toggle_sidebar`, `toggle_agent`, `agent_show` and the four sidebar views. A matrix recorded on `main` (15 keys and the 7 palette rows, in each focus, with each sidebar view, at 99, 100, 143 and 144 columns either side of where the columns stop fitting, with each column open or closed: 4,224 cases) gives the same results after.
 
 ### One resolver: `ui.action.run`
 
-Every action key is an ordinary binding with one step, `ui.action.run {id}`. So are `keys.toml` and `on_click` entries that say `action = "<id>"`. The command checks the id and returns an effect; the session then resolves the action's case against the client's scope and runs its steps, each as a top-level call, the count and register going to the first step. Palette rows and overlay `on_dismiss` run the same way. Each step is its own undo step: an editing action that must undo as one is one command.
+Every action key is an ordinary binding with one step, `ui.action.run {id}`. So are `keys.toml` and `on_click` entries that say `action = "<id>"`. The command checks the id and that the action applies now (else it fails), and returns an effect; the action runs after the call. The session then resolves the action's case against the client's scope and runs its steps, each as a top-level call, the count and register going to the first step. Palette rows and overlay `on_dismiss` run the same way. Each step is its own undo step: an editing action that must undo as one is one command.
 
-When a client's keymap is assembled, every binding in any layer whose steps are exactly `ui.action.run {id}` gets the action's `when` beside its own and the action's title as its label. A key therefore falls through to a lower binding or the mode's fallback when the action does not apply, and which-key shows the title. Actions run inside one another at most 4 deep (Enter on a palette row is an action running an action).
+When a client's keymap is assembled, every binding in any layer whose steps are exactly `ui.action.run {id}` gets the action's `when` beside its own and the action's title as its label. A key therefore falls through to a lower binding or the mode's fallback when the action does not apply, and which-key shows the title. Actions run inside one another at most 4 deep (Enter on a palette row is an action running an action). An overlay's `on_dismiss` action may not have a `when`, so a press outside always dismisses. A binding that runs an action may not capture `<char>`.
 
 `Action::press` and the rule that any binding of the pack's own layer counts as the action are gone. A key's hint is now its first key whose chosen binding runs `ui.action.run` of that very action. A palette row runs the action it names, not whatever a key bound to it would run.
 
@@ -117,7 +117,7 @@ The keymap's dispatch is unchanged: no named-action variant, at the cost of one 
 
 `hello.caps.key_encoding` is `full` (every key and modifier arrives as pressed: the kitty keyboard protocol, a window) or `legacy` (xterm-style bytes; the default, and what an unknown value means). The terminal client sends `full` when it turned the kitty protocol on, and always on Windows, where crossterm reads key events directly.
 
-For a legacy client, hints skip keys that cannot arrive as themselves, per `spur_keymap::legacy_can_send`: ctrl only on a to z (not i, m; not h, j on purpose), space, `/` and 4 to 6; no ctrl+shift on letters, no shift on other chars, no modifiers on Enter, Tab, Backspace and Esc except shift+Tab, no alt+`[` or alt+`O`, no super, F1 to F12 only. Every key of a chord must pass. The rule models xterm-style terminals as crossterm reads them; another client sends `full` or gets its own value. A test builds the bytes such a terminal sends for every key with every mix of ctrl, alt and shift, reads them as crossterm 0.29 does (a copy of its private parser), and checks the rule says a key arrives exactly when it comes back as itself.
+For a legacy client, hints skip keys that cannot arrive as themselves, per `spur_keymap::legacy_can_send`: ctrl only on a to z (not i, m; not h, j on purpose), space, `/` and 4 to 6; no ctrl+shift on letters, no shift on other chars, no modifiers on Enter, Tab, Backspace and Esc except shift+Tab, no alt+`[` or alt+`O`, no super, F1 to F12 only, and F3 without modifiers (a modified F3 reads as a cursor position report). Every key of a chord must pass. The rule models xterm-style terminals as crossterm reads them; another client sends `full` or gets its own value. A test builds the bytes such a terminal sends for every key with every mix of ctrl, alt and shift, reads them as crossterm 0.29 does (a copy of its private parser), and checks the rule says a key arrives exactly when it comes back as itself. Both the encoder and the parser are models, so the test checks the rule against them, not against a terminal; it runs on Unix.
 
 The terminal client reads ctrl+7 as ctrl+/ without full keys (both are byte 0x1F). `ux_fresh` lists the full key first and backups after it (ctrl+shift+e, then alt+1, then ctrl+k e; ctrl+shift+z, then ctrl+y), so a legacy terminal's hint names a backup.
 
@@ -129,4 +129,13 @@ The terminal client reads ctrl+7 as ctrl+/ without full keys (both are byte 0x1F
 
 ### Latency
 
-New row, interleaved with `main` on the same machine (3 runs each, 3,000 keys): ctrl+b at 300x100 (the sidebar's hide and show cases), p50 round trip 0.31 to 0.33 ms on this branch against 0.32 to 0.35 ms on `main`, server time about 0.10 ms for both. Typing at 300x100 stays at parity (0.30 to 0.36 ms against 0.33 to 0.35 ms).
+Every action key now makes one more audited call (`ui.action.run`). Interleaved with `main` on the same machine, 3 runs each of 3,000 keys, p50 round trip in ms (branch / main):
+
+| Scenario | Branch | `main` |
+|---|---|---|
+| ctrl+b at 300x100 (the sidebar's hide and show cases) | 0.26 to 0.36 | 0.27 to 0.31 |
+| Down and Up in the Files tree, 160x45 (list keys are actions) | 0.18 to 0.20 | 0.22 to 0.24 |
+| Typing at 300x100 | 0.30 to 0.36 | 0.27 to 0.36 |
+| Save at 160x45 (syncs the file; noisy) | 0.83 to 1.42 | 0.86 to 1.30 |
+
+All at parity within the run-to-run spread.

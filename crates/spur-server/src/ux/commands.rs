@@ -170,8 +170,16 @@ impl ClientHost<Editor> for UiHost<'_> {
             }
             "ui.action.run" => {
                 let action = arg_str(args, "id")?;
-                if self.ux.pack.action(action).is_none() {
+                let Some(a) = self.ux.pack.action(action) else {
                     return Err(CommandError::bad_args(format!("no action {action:?}")));
+                };
+                // It runs after this call; refuse now if it would run nothing.
+                if a.steps_for(&Scoped(&[cx.context, &self.client.scope]))
+                    .is_none()
+                {
+                    return Err(CommandError::failed(format!(
+                        "action {action:?} does not apply now"
+                    )));
                 }
                 self.effects.push(Effect::RunAction {
                     id: action.to_owned(),

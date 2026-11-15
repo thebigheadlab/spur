@@ -492,11 +492,12 @@ fn key_hints_come_from_actions() {
             "node.{id}: a hint is written as {{key:<action>}}"
         );
         for k in keys {
-            let a = pack.action(&k[4..]).unwrap();
+            let id = k.strip_prefix("key:").unwrap();
+            let a = pack.action(id).unwrap();
             let hint = a
                 .modes
                 .iter()
-                .find_map(|m| a.hint(&k[4..], &keymap, m, &look, &pack.key_display, true));
+                .find_map(|m| a.hint(id, &keymap, m, &look, &pack.key_display, true));
             assert!(
                 hint.is_some_and(|h| !h.is_empty()),
                 "node.{id}: {k} prints no hint"

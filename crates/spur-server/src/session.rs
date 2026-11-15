@@ -520,15 +520,16 @@ pub(crate) struct State {
 
 /// A client's keymap: the session's layers, then the pack's keys for a frontend.
 /// A binding in any layer that runs a pack action gets the action's `when` and
-/// label (the pack's own were given them at load).
-fn client_keymap(layers: &[Layer], ux: Option<&Ux>) -> Keymap {
+/// label (the pack's own were given them at load); bindings that cannot be
+/// wrapped are listed in `errors`.
+fn client_keymap(layers: &[Layer], ux: Option<&Ux>, errors: &mut Vec<String>) -> Keymap {
     let mut keymap = Keymap::new();
     for layer in layers {
         let mut layer = layer.clone();
         if let Some(ux) = ux {
-            // Too deeply nested to combine: the binding runs whenever its own
-            // `when` holds, and the action checks its own when it runs.
-            let _ = crate::ux::actions::wrap_bindings(&mut layer, |id| ux.pack.action(id));
+            for e in crate::ux::actions::wrap_bindings(&mut layer, |id| ux.pack.action(id)) {
+                errors.push(format!("keymap {}: {e}", layer.name));
+            }
         }
         keymap.push_layer(layer);
     }
@@ -664,13 +665,18 @@ impl State {
                 ux.pack = pack;
                 ux.pack_error = None;
                 ux.generation += 1;
+                let mut errors = Vec::new();
                 for (id, ui, scope) in next {
                     if let Some(c) = self.clients.get_mut(&id) {
-                        c.keymap = client_keymap(&self.layers, Some(&*ux));
+                        c.keymap = client_keymap(&self.layers, Some(&*ux), &mut errors);
                         c.ui = Some(ui);
                         c.scope = scope;
                         c.dirty = true;
                     }
+                }
+                errors.dedup();
+                for e in &errors {
+                    self.log(e);
                 }
                 self.log("pack reloaded");
             }
@@ -872,6 +878,7 @@ impl State {
     fn guarded(&mut self, conn: Option<u64>, f: impl FnOnce(&mut Self)) {
         if catch_unwind(AssertUnwindSafe(|| f(self))).is_err() {
             self.core.state.focus = self.anchor;
+            self.action_depth = 0;
             self.log("caught a panic while handling a client message");
             if let Some(conn) = conn {
                 self.error(conn, PANIC_MESSAGE.into());
@@ -987,7 +994,15 @@ impl State {
         let id = ClientId(conn);
         let view = self.core.state.add_view_for(self.home, Some(id));
         let frontend = kind == ClientKind::Frontend;
-        let keymap = client_keymap(&self.layers, self.ux.as_ref().filter(|_| frontend));
+        let mut errors = Vec::new();
+        let keymap = client_keymap(
+            &self.layers,
+            self.ux.as_ref().filter(|_| frontend),
+            &mut errors,
+        );
+        for e in &errors {
+            self.log(e);
+        }
         let mut client = Client::new(id, kind, name, caps, size, view, keymap, out);
         client.shutter = shutter;
         if frontend && let Some(ux) = self.ux.as_mut() {
@@ -1322,8 +1337,8 @@ impl State {
             };
             a.steps_for(&Scoped(&[self.core.context(), &c.scope]))
         };
+        // The action's when turned false between the key and now.
         let Some(steps) = steps else {
-            self.log(&format!("action {id}: does not apply now"));
             return;
         };
         self.action_depth += 1;

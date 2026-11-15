@@ -1,4 +1,5 @@
-//! Pack actions (named steps with a title, keys and a condition) and how key hints
+//! Pack actions (named steps with a title, ordered cases, keys and a condition),
+//! the one step every action key runs (`ui.action.run {id}`), and how key hints
 //! print.
 
 use std::collections::BTreeMap;
@@ -152,15 +153,15 @@ impl Action {
 
 /// Gives every binding of `layer` that runs a known action (`ui.action.run {id}`)
 /// the action's `when` beside its own and the action's label, so it falls through
-/// when the action does not apply.
-///
-/// # Errors
-///
-/// A combined condition nests too deeply: the binding's keys and the error.
+/// when the action does not apply. Returns one message per binding it could not
+/// wrap (combined condition too deeply nested; a `<char>` capture, which the
+/// action would ignore); those keep their own `when`, and the action still checks
+/// its own when it runs.
 pub fn wrap_bindings<'a>(
     layer: &mut Layer,
     action: impl Fn(&str) -> Option<&'a Action>,
-) -> Result<(), String> {
+) -> Vec<String> {
+    let mut errors = Vec::new();
     for b in &mut layer.bindings {
         let KeyAction::Run(steps) = &b.action else {
             continue;
@@ -171,17 +172,19 @@ pub fn wrap_bindings<'a>(
         let Some(a) = action(id) else {
             continue;
         };
-        b.when = When::both(a.when.as_ref(), b.when.as_ref()).map_err(|e| {
-            format!(
-                "{}: the action's when and its own: {e}",
-                spur_keymap::format_keys(&b.keys)
-            )
-        })?;
+        let keys = spur_keymap::format_keys(&b.keys);
+        if b.keys.iter().any(|k| k.code == KeyCode::AnyChar) {
+            errors.push(format!("{keys}: an action key cannot capture <char>"));
+        }
+        match When::both(a.when.as_ref(), b.when.as_ref()) {
+            Ok(w) => b.when = w,
+            Err(e) => errors.push(format!("{keys}: the action's when and its own: {e}")),
+        }
         if b.label.is_none() {
             b.label = Some(a.label(id));
         }
     }
-    Ok(())
+    errors
 }
 
 /// How hints print parsed keys: `[keys.display]`.
@@ -326,6 +329,20 @@ mod tests {
     }
 
     #[test]
+    fn legacy_hints_skip_keys_and_chords_that_cannot_arrive() {
+        let a = action(None, &["<C-S-k>a", "<C-S-e>", "<C-k>e"]);
+        let mut pack = Layer::new("pack", spur_core::Source::Core);
+        pack.bindings = a.bindings("show").unwrap();
+        let mut km = Keymap::new();
+        km.push_layer(pack);
+        let cx = spur_core::Context::new();
+        let d = KeyDisplay::default();
+        let hint = |full| a.hint("show", &km, "insert", &cx, &d, full);
+        assert_eq!(hint(true).as_deref(), Some("ctrl+shift+k a"));
+        assert_eq!(hint(false).as_deref(), Some("ctrl+k e"));
+    }
+
+    #[test]
     fn a_binding_to_an_action_falls_through_when_the_action_does_not_apply() {
         let a = action(Some("ui.on"), &[]);
         let mut low = layer(
@@ -336,8 +353,9 @@ mod tests {
             "high",
             "[[bind]]\nmode = \"insert\"\nkeys = \"<C-a>\"\ncommand = \"ui.action.run\"\nargs = { id = \"show\" }\n",
         );
-        wrap_bindings(&mut low, |_| Some(&a)).unwrap();
-        wrap_bindings(&mut high, |id| (id == "show").then_some(&a)).unwrap();
+        assert!(wrap_bindings(&mut low, |_| Some(&a)).is_empty());
+        assert!(low.bindings[0].when.is_none(), "not a binding to an action");
+        assert!(wrap_bindings(&mut high, |id| (id == "show").then_some(&a)).is_empty());
         assert_eq!(high.bindings[0].label.as_deref(), Some("Show"));
         let mut km = Keymap::new();
         km.push_layer(low);

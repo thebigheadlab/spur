@@ -13,10 +13,12 @@ use crate::key::{Key, KeyCode, Mods};
 ///   terminals send Backspace as ctrl+h, and ctrl+j is a line feed in pastes), on
 ///   space, `/` and 4 to 6. Ctrl on a capital (ctrl+shift) arrives without Shift.
 /// - Enter, Tab, Backspace and Esc arrive without modifiers only (shift+Tab
-///   excepted). Alt on them is excluded on purpose: terminals differ.
-/// - alt+`[` and alt+`O` start escape sequences.
+///   excepted). Alt on Enter, Tab and Backspace is excluded on purpose:
+///   terminals differ.
+/// - alt+`[` and alt+`O` start escape sequences; alt+Esc reads as Esc.
 /// - Named keys (arrows, Home, End, page up, page down, Insert, Delete, F1 to F12)
-///   arrive with any of Shift, Ctrl and Alt.
+///   arrive with any of Shift, Ctrl and Alt, except F3, which arrives only
+///   without them.
 pub fn legacy_can_send(key: &Key) -> bool {
     let m = key.mods;
     if m.contains(Mods::SUPER) {
@@ -36,7 +38,8 @@ pub fn legacy_can_send(key: &Key) -> bool {
             !(m.contains(Mods::ALT) && matches!(c, '[' | 'O'))
         }
         KeyCode::Tab => m.is_empty() || m == Mods::SHIFT,
-        KeyCode::Enter | KeyCode::Backspace | KeyCode::Esc => m.is_empty(),
+        // A modified F3 (`ESC [ 1 ; m R`) reads as a cursor position report.
+        KeyCode::Enter | KeyCode::Backspace | KeyCode::Esc | KeyCode::F(3) => m.is_empty(),
         KeyCode::F(n) => n <= 12,
         KeyCode::Delete
         | KeyCode::Insert

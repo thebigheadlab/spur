@@ -324,6 +324,8 @@ mod tests {
             ('D', _) => KeyCode::Left,
             ('H', _) => KeyCode::Home,
             ('F', _) => KeyCode::End,
+            // `1;mR` is a cursor position report to crossterm, not F3.
+            ('R', _) if m > 1 => return None,
             ('P'..='S', _) => KeyCode::F(end as u8 - b'P' + 1),
             ('~', "2") => KeyCode::Insert,
             ('~', "3") => KeyCode::Delete,
@@ -344,7 +346,10 @@ mod tests {
     /// For every key with every mix of ctrl, alt and shift: the hints' rule
     /// (`legacy_can_send`) says a key arrives exactly when the bytes a legacy
     /// terminal sends for it come back as that key, except keys left out on
-    /// purpose.
+    /// purpose. Both the byte encoder and the crossterm copy are models: this
+    /// checks the rule against them, not against a real terminal. Unix only
+    /// (Windows terminals report keys through the console, not as bytes).
+    #[cfg(not(windows))]
     #[test]
     fn legacy_hints_name_keys_that_arrive() {
         use spur_keymap::{Key, KeyCode as K, Mods, legacy_can_send, parse_keys};
